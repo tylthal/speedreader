@@ -1,0 +1,48 @@
+services:
+  dev:
+    build:
+      context: .
+      args:
+        USER_UID: ${HOST_UID:-1000}
+        USER_GID: ${HOST_GID:-1000}
+    image: speedreader-sandbox
+    container_name: speedreader-dev
+
+    volumes:
+      # Project source — bind mount with delegated consistency for Windows perf
+      - .:/workspace:delegated
+      # SSH keys for git push (read-only)
+      - ~/.ssh:/home/dev/.ssh:ro
+
+    # Named volumes — native Linux FS for high-churn dirs (avoids Windows I/O penalty)
+    # These shadow subdirs of the bind mount above
+      - node-modules:/workspace/node_modules
+      - pycache:/workspace/__pycache__
+      - pytest-cache:/workspace/.pytest_cache
+      - pip-cache:/home/dev/.cache/pip
+      - npm-cache:/home/dev/.npm
+      - claude-state:/home/dev/.claude
+
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GIT_AUTHOR_NAME=${GIT_AUTHOR_NAME:-}
+      - GIT_AUTHOR_EMAIL=${GIT_AUTHOR_EMAIL:-}
+      - GIT_COMMITTER_NAME=${GIT_AUTHOR_NAME:-}
+      - GIT_COMMITTER_EMAIL=${GIT_AUTHOR_EMAIL:-}
+
+    ports:
+      - "3000:3000"   # App server
+      - "5173:5173"   # Vite dev server
+
+    mem_limit: 8g
+    stdin_open: true
+    tty: true
+
+volumes:
+  node-modules:
+  pycache:
+  pytest-cache:
+  pip-cache:
+  npm-cache:
+  claude-state:

@@ -1,0 +1,50 @@
+# Git
+.git
+
+# Python
+__pycache__
+*.py[cod]
+*.egg-info
+venv/
+.venv/
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.coverage
+htmlcov/
+
+# Node
+node_modules
+dist/
+build/
+out/
+
+# Database
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Secrets
+.env
+*.pem
+credentials.json
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+
+# Logs
+*.log
+
+# Claude Code state
+.claude
+
+# Docker
+docker/.env
+
+# OS
+.DS_Store
+Thumbs.db
