@@ -19,6 +19,9 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
 # Claude Code CLI
 RUN npm install -g @anthropic-ai/claude-code
 
+# Playwright browser dependencies (for E2E tests)
+RUN npx playwright install-deps chromium 2>/dev/null || true
+
 # Python dependencies (cached layer)
 COPY requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt || true

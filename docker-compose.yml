@@ -33,7 +33,7 @@ services:
 
     ports:
       - "3000:3000"   # App server
-      - "5173:5173"   # Vite dev server
+      - "5174:5173"   # Vite dev server
 
     mem_limit: 8g
     stdin_open: true

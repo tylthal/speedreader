@@ -1,1 +1,9 @@
-# Add Python dependencies here
+fastapi
+uvicorn[standard]
+python-multipart
+ebooklib
+beautifulsoup4
+lxml
+aiosqlite
+pymupdf
+mobi

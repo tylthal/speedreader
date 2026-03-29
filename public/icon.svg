@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="64" fill="#1a1a2e"/>
+  <!-- Book shape -->
+  <path d="M128 112 C128 96 144 80 160 80 L336 80 C352 80 368 96 368 112 L368 400 C368 416 352 432 336 432 L160 432 C144 432 128 416 128 400 Z" fill="#16213e" stroke="#0f7dff" stroke-width="4"/>
+  <!-- Book spine -->
+  <line x1="200" y1="80" x2="200" y2="432" stroke="#0f7dff" stroke-width="3" opacity="0.5"/>
+  <!-- Lightning bolt -->
+  <path d="M280 160 L240 270 L270 270 L230 380 L310 240 L275 240 L310 160 Z" fill="#0f7dff"/>
+  <!-- Text lines on book -->
+  <rect x="220" y="130" width="80" height="4" rx="2" fill="#a0a0b0" opacity="0.4"/>
+  <rect x="220" y="145" width="60" height="4" rx="2" fill="#a0a0b0" opacity="0.3"/>
+</svg>

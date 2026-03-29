@@ -46,3 +46,7 @@ docker/.env
 # Secrets
 *.pem
 credentials.json
+
+# App data
+data/*.db
+data/uploads/
