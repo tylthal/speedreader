@@ -40,6 +40,25 @@
   color-scheme: light;
 }
 
+/* Bedtime theme – warm amber/red tones, zero blue light.
+   Based on sleep research: blue wavelengths (450-490nm) suppress melatonin.
+   Uses low-contrast warm palette to minimize alertness and eye strain. */
+[data-theme="bedtime"] {
+  --bg: #1a0f0a;
+  --bg-surface: #231510;
+  --text: #d4a574;
+  --text-muted: #8a6a4a;
+  --accent: #c47a2a;
+  --accent-hover: #d4923a;
+  --overlay-bg: rgba(26, 15, 10, 0.9);
+  --surface-border: rgba(196, 122, 42, 0.12);
+  --surface-hover: rgba(196, 122, 42, 0.15);
+  --surface-subtle: rgba(196, 122, 42, 0.06);
+  --progress-track: rgba(196, 122, 42, 0.15);
+  --drop-zone-border: rgba(196, 122, 42, 0.2);
+  color-scheme: dark;
+}
+
 html,
 body,
 #root {

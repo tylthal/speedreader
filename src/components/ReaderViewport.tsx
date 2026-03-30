@@ -410,6 +410,12 @@ function ActiveReader({
     onPrevChapter: handlePrevChapter,
   });
 
+  /* ---- Signal playing state globally (for fading peripheral UI like ThemeToggle) ---- */
+  useEffect(() => {
+    document.documentElement.toggleAttribute('data-playing', activeState.isPlaying);
+    return () => document.documentElement.removeAttribute('data-playing');
+  }, [activeState.isPlaying]);
+
   /* ---- Render ---- */
   return (
     <div className="reader-viewport" role="main" aria-label="Book reader" id="main-content">

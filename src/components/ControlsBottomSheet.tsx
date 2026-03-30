@@ -63,7 +63,7 @@ export default function ControlsBottomSheet({
   };
 
   return (
-    <div className="controls" role="toolbar" aria-label="Reading controls">
+    <div className={`controls${isPlaying ? ' controls--playing' : ''}`} role="toolbar" aria-label="Reading controls">
       {/* Progress bar */}
       <div className="controls__progress">
         <div
@@ -169,7 +169,7 @@ export default function ControlsBottomSheet({
         onClick={handleTogglePlay}
         aria-label={isPlaying ? 'Pause reading' : 'Play reading'}
       >
-        <span className="controls__play-bar-icon">{isPlaying ? '\u23F8' : '\u25B6'}</span>
+        <span className="controls__play-bar-icon">{isPlaying ? '\u2759\u2759' : '\u25B6\uFE0E'}</span>
         <span className="controls__play-bar-label">{isPlaying ? 'Tap to Pause' : 'Tap to Play'}</span>
       </button>
 

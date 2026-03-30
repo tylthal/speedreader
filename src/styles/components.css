@@ -310,6 +310,24 @@
   gap: 6px;
 }
 
+.controls--playing .controls__chapter-row,
+.controls--playing .controls__main-row {
+  opacity: 0.2;
+  transition: opacity 0.4s ease;
+  pointer-events: none;
+}
+
+.controls--playing .controls__play-bar {
+  opacity: 0.2;
+  transition: opacity 0.4s ease;
+}
+
+.controls__chapter-row,
+.controls__main-row,
+.controls__play-bar {
+  transition: opacity 0.3s ease;
+}
+
 .controls__progress {
   width: 100%;
   height: 3px;
@@ -1037,6 +1055,11 @@
   opacity: 0.8;
 }
 .theme-toggle:hover { opacity: 1; }
+[data-playing] .theme-toggle {
+  opacity: 0.2;
+  pointer-events: none;
+  transition: opacity 0.4s ease;
+}
 .theme-toggle__btn {
   background: none;
   border: none;

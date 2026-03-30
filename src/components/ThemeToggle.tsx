@@ -4,6 +4,7 @@ const options: { value: Theme; label: string; icon: string }[] = [
   { value: 'system', label: 'System theme', icon: '\u2699' },   // gear
   { value: 'light', label: 'Light theme', icon: '\u2600' },     // sun
   { value: 'dark', label: 'Dark theme', icon: '\u263E' },       // moon
+  { value: 'bedtime', label: 'Bedtime theme', icon: '\u2B50' }, // star
 ];
 
 export default function ThemeToggle() {
