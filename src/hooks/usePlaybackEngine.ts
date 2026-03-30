@@ -20,6 +20,7 @@ interface PlaybackActions {
 
 interface UsePlaybackEngineOptions {
   segments: Segment[];
+  totalSegments: number;
   initialWpm?: number;
   onSegmentChange?: (index: number) => void;
   onComplete?: () => void;
@@ -36,7 +37,7 @@ function clampWpm(value: number): number {
 export function usePlaybackEngine(
   options: UsePlaybackEngineOptions
 ): [PlaybackState, PlaybackActions] {
-  const { segments, initialWpm = DEFAULT_WPM, onSegmentChange, onComplete } = options;
+  const { segments, totalSegments, initialWpm = DEFAULT_WPM, onSegmentChange, onComplete } = options;
 
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -59,6 +60,9 @@ export function usePlaybackEngine(
   wpmRef.current = wpm;
   const segmentsRef = useRef(segments);
   segmentsRef.current = segments;
+  const totalSegmentsRef = useRef(totalSegments);
+  totalSegmentsRef.current = totalSegments;
+  const waitingForSegmentsRef = useRef(false);
 
   const getSegmentDuration = useCallback((segment: Segment, currentWpm: number): number => {
     // duration_ms was calculated at 250 WPM. Scale proportionally.
@@ -75,8 +79,17 @@ export function usePlaybackEngine(
   const tick = useCallback((timestamp: number) => {
     const segs = segmentsRef.current;
     const idx = currentIndexRef.current;
+    const total = totalSegmentsRef.current;
 
     if (idx >= segs.length) {
+      // Out of loaded segments — check if more exist
+      if (total > 0 && segs.length < total) {
+        // More segments to come; pause and wait for prefetch
+        waitingForSegmentsRef.current = true;
+        setIsPlaying(false);
+        stopLoop();
+        return;
+      }
       setIsPlaying(false);
       stopLoop();
       onCompleteRef.current?.();
@@ -97,6 +110,15 @@ export function usePlaybackEngine(
       elapsedRef.current = 0;
 
       if (nextIndex >= segs.length) {
+        if (total > 0 && segs.length < total) {
+          // More segments to come; stay at current and wait
+          waitingForSegmentsRef.current = true;
+          setIsPlaying(false);
+          stopLoop();
+          // Trigger prefetch for upcoming segments
+          onSegmentChangeRef.current?.(nextIndex);
+          return;
+        }
         setCurrentIndex(nextIndex - 1);
         setIsPlaying(false);
         stopLoop();
@@ -149,6 +171,14 @@ export function usePlaybackEngine(
     setWpmState((prev) => clampWpm(prev + delta));
   }, []);
 
+  // Auto-resume when new segments arrive after waiting for prefetch
+  useEffect(() => {
+    if (waitingForSegmentsRef.current && segments.length > currentIndexRef.current) {
+      waitingForSegmentsRef.current = false;
+      play();
+    }
+  }, [segments, play]);
+
   // Auto-pause on visibility change
   useVisibilityPause(isPlaying, pause, play);
 
@@ -159,7 +189,8 @@ export function usePlaybackEngine(
     };
   }, [stopLoop]);
 
-  const progress = segments.length > 0 ? currentIndex / segments.length : 0;
+  const effectiveTotal = totalSegments > 0 ? totalSegments : segments.length;
+  const progress = effectiveTotal > 0 ? currentIndex / effectiveTotal : 0;
 
   const state: PlaybackState = {
     currentIndex,

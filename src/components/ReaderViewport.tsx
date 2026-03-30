@@ -228,6 +228,7 @@ function ActiveReader({
   /* ---- Playback engines (initialized with correct WPM from the start) ---- */
   const [playbackState, playbackActions] = usePlaybackEngine({
     segments: loaderState.segments,
+    totalSegments: loaderState.totalSegments,
     initialWpm,
     onSegmentChange,
     onComplete: onPlaybackComplete,
@@ -235,6 +236,7 @@ function ActiveReader({
 
   const [rsvpState, rsvpActions] = useRsvpEngine({
     segments: loaderState.segments,
+    totalSegments: loaderState.totalSegments,
     initialWpm,
     onSegmentChange,
     onComplete: onPlaybackComplete,

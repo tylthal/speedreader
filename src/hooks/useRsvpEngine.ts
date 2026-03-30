@@ -23,6 +23,7 @@ interface RsvpActions {
 
 interface UseRsvpEngineOptions {
   segments: Segment[];
+  totalSegments: number;
   initialWpm?: number;
   onSegmentChange?: (index: number) => void;
   onComplete?: () => void;
@@ -70,7 +71,7 @@ function getWordDuration(word: string, wpm: number): number {
 export function useRsvpEngine(
   options: UseRsvpEngineOptions
 ): [RsvpState, RsvpActions] {
-  const { segments, initialWpm = DEFAULT_WPM, onSegmentChange, onComplete } = options;
+  const { segments, totalSegments, initialWpm = DEFAULT_WPM, onSegmentChange, onComplete } = options;
 
   const [currentSegmentIndex, setCurrentSegmentIndex] = useState(0);
   const [currentWordIndex, setCurrentWordIndex] = useState(0);
@@ -90,6 +91,9 @@ export function useRsvpEngine(
   wpmRef.current = wpm;
   const segmentsRef = useRef(segments);
   segmentsRef.current = segments;
+  const totalSegmentsRef = useRef(totalSegments);
+  totalSegmentsRef.current = totalSegments;
+  const waitingForSegmentsRef = useRef(false);
   const onSegmentChangeRef = useRef(onSegmentChange);
   onSegmentChangeRef.current = onSegmentChange;
   const onCompleteRef = useRef(onComplete);
@@ -106,8 +110,16 @@ export function useRsvpEngine(
     const segs = segmentsRef.current;
     const segIdx = currentSegmentIndexRef.current;
     const wordIdx = currentWordIndexRef.current;
+    const total = totalSegmentsRef.current;
 
     if (segIdx >= segs.length) {
+      if (total > 0 && segs.length < total) {
+        // More segments to come; pause and wait for prefetch
+        waitingForSegmentsRef.current = true;
+        setIsPlaying(false);
+        stopLoop();
+        return;
+      }
       setIsPlaying(false);
       stopLoop();
       onCompleteRef.current?.();
@@ -132,6 +144,15 @@ export function useRsvpEngine(
         // Move to next segment
         const nextSegIdx = segIdx + 1;
         if (nextSegIdx >= segs.length) {
+          if (total > 0 && segs.length < total) {
+            // More segments to come; stay at current and wait
+            waitingForSegmentsRef.current = true;
+            setIsPlaying(false);
+            stopLoop();
+            // Trigger prefetch for upcoming segments
+            onSegmentChangeRef.current?.(nextSegIdx);
+            return;
+          }
           setIsPlaying(false);
           stopLoop();
           onCompleteRef.current?.();
@@ -190,6 +211,14 @@ export function useRsvpEngine(
     setWpmState((prev) => clampWpm(prev + delta));
   }, []);
 
+  // Auto-resume when new segments arrive after waiting for prefetch
+  useEffect(() => {
+    if (waitingForSegmentsRef.current && segments.length > currentSegmentIndexRef.current) {
+      waitingForSegmentsRef.current = false;
+      play();
+    }
+  }, [segments, play]);
+
   // Auto-pause on visibility change
   useVisibilityPause(isPlaying, pause, play);
 
@@ -206,14 +235,10 @@ export function useRsvpEngine(
   const currentWord = words[currentWordIndex] ?? '';
   const orpIndex = computeOrpIndex(currentWord);
 
-  // Compute total words for progress
-  const totalWords = segments.reduce((sum, seg) => sum + getWordsFromSegment(seg).length, 0);
-  let wordsBefore = 0;
-  for (let i = 0; i < currentSegmentIndex && i < segments.length; i++) {
-    wordsBefore += getWordsFromSegment(segments[i]).length;
-  }
-  wordsBefore += currentWordIndex;
-  const progress = totalWords > 0 ? wordsBefore / totalWords : 0;
+  // Compute progress using totalSegments for a stable denominator.
+  // We use segment-based progress (not word-based) to avoid jumps as new batches load.
+  const effectiveTotal = totalSegments > 0 ? totalSegments : segments.length;
+  const progress = effectiveTotal > 0 ? currentSegmentIndex / effectiveTotal : 0;
 
   const state: RsvpState = {
     currentWord,
