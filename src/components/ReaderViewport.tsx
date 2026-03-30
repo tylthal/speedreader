@@ -426,11 +426,10 @@ function ActiveReader({
       )}
       <GestureLayer
         onTap={activeActions.togglePlayPause}
-        onSwipeLeft={handleNextChapter}
-        onSwipeRight={handlePrevChapter}
-        onSwipeUp={() => activeActions.adjustWpm(25)}
-        onSwipeDown={() => activeActions.adjustWpm(-25)}
-        enabled={activeState.isPlaying}
+        onSwipeLeft={activeState.isPlaying ? handleNextChapter : undefined}
+        onSwipeRight={activeState.isPlaying ? handlePrevChapter : undefined}
+        onSwipeUp={activeState.isPlaying ? () => activeActions.adjustWpm(25) : undefined}
+        onSwipeDown={activeState.isPlaying ? () => activeActions.adjustWpm(-25) : undefined}
       >
         <FocusChunkOverlay
           segment={currentSegment}

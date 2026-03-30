@@ -308,24 +308,24 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
-}
-
-.controls--playing .controls__chapter-row,
-.controls--playing .controls__main-row {
-  opacity: 0.2;
-  transition: opacity 0.4s ease;
-  pointer-events: none;
-}
-
-.controls--playing .controls__play-bar {
-  opacity: 0.2;
-  transition: opacity 0.4s ease;
+  overflow: hidden;
 }
 
 .controls__chapter-row,
 .controls__main-row,
 .controls__play-bar {
-  transition: opacity 0.3s ease;
+  transition: transform 0.4s ease, opacity 0.4s ease, max-height 0.4s ease;
+  max-height: 80px;
+}
+
+.controls--playing .controls__chapter-row,
+.controls--playing .controls__main-row,
+.controls--playing .controls__play-bar {
+  transform: translateY(100%);
+  opacity: 0;
+  max-height: 0;
+  pointer-events: none;
+  overflow: hidden;
 }
 
 .controls__progress {
@@ -1054,11 +1054,14 @@
   border: 1px solid var(--text-muted);
   opacity: 0.8;
 }
+.theme-toggle {
+  transition: transform 0.4s ease, opacity 0.4s ease;
+}
 .theme-toggle:hover { opacity: 1; }
 [data-playing] .theme-toggle {
-  opacity: 0.2;
+  transform: translateY(-150%);
+  opacity: 0;
   pointer-events: none;
-  transition: opacity 0.4s ease;
 }
 .theme-toggle__btn {
   background: none;
