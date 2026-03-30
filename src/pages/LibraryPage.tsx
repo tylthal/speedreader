@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { getPublications, uploadBook, getProgress } from '../api/client';
+import { getPublications, uploadBook, getProgress, deletePublication } from '../api/client';
 import type { Publication, ReadingProgress } from '../api/client';
 import StorageStatus from '../components/StorageStatus';
 
@@ -10,8 +10,24 @@ export default function LibraryPage() {
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
+
+  const handleDelete = async (e: React.MouseEvent, pub: Publication) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!confirm(`Delete "${pub.title}"? This cannot be undone.`)) return;
+    setDeleting(pub.id);
+    try {
+      await deletePublication(pub.id);
+      setPublications((prev) => prev.filter((p) => p.id !== pub.id));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Delete failed');
+    } finally {
+      setDeleting(null);
+    }
+  };
 
   const fetchPubs = useCallback(async () => {
     try {
@@ -136,7 +152,17 @@ export default function LibraryPage() {
               role="article"
               aria-label={`${pub.title} by ${pub.author}`}
             >
-              <div className="library__card-title">{pub.title}</div>
+              <div className="library__card-header">
+                <div className="library__card-title">{pub.title}</div>
+                <button
+                  className="library__card-delete"
+                  onClick={(e) => handleDelete(e, pub)}
+                  disabled={deleting === pub.id}
+                  aria-label={`Delete ${pub.title}`}
+                >
+                  {deleting === pub.id ? '...' : '\u00D7'}
+                </button>
+              </div>
               <div className="library__card-author">{pub.author}</div>
               <div className="library__card-meta">
                 {pub.total_segments.toLocaleString()} segments

@@ -51,6 +51,7 @@ export function useSegmentLoader(
   });
 
   const fetchingRef = useRef(false);
+  const pendingPrefetchRef = useRef<{ start: number; end: number } | null>(null);
   const loadedRangeRef = useRef(loadedRange);
   loadedRangeRef.current = loadedRange;
   const totalSegmentsRef = useRef(totalSegments);
@@ -92,6 +93,16 @@ export function useSegmentLoader(
       } finally {
         fetchingRef.current = false;
         setIsLoading(false);
+
+        // If a prefetch was requested while we were fetching, flush it now
+        const pending = pendingPrefetchRef.current;
+        if (pending) {
+          pendingPrefetchRef.current = null;
+          // Re-check: the completed fetch may have already covered the range
+          if (pending.start < pending.end) {
+            fetchBatch(pending.start, pending.end, true);
+          }
+        }
       }
     },
     [publicationId, chapterId]
@@ -106,6 +117,7 @@ export function useSegmentLoader(
     setTotalSegments(0);
     totalSegmentsRef.current = 0;
     setError(null);
+    pendingPrefetchRef.current = null;
 
     // On first load, start from the saved position (with some lookback context)
     const startFrom = !initialFetchedRef.current && initialSegmentIndex > 0
@@ -120,14 +132,39 @@ export function useSegmentLoader(
       const range = loadedRangeRef.current;
       const total = totalSegmentsRef.current;
 
+      // Convert array index to absolute segment position so the comparison
+      // against range.end (an absolute position) is correct even when
+      // segments were loaded starting from a non-zero offset.
+      const segmentPosition = range.start + currentIndex;
+
+      // Forward prefetch: approaching the end of loaded segments
       if (
-        currentIndex + prefetchThreshold >= range.end &&
-        range.end < total &&
-        !fetchingRef.current
+        segmentPosition + prefetchThreshold >= range.end &&
+        range.end < total
       ) {
         const nextStart = range.end;
         const nextEnd = Math.min(range.end + batchSize, total);
-        fetchBatch(nextStart, nextEnd, true);
+        if (fetchingRef.current) {
+          pendingPrefetchRef.current = { start: nextStart, end: nextEnd };
+        } else {
+          fetchBatch(nextStart, nextEnd, true);
+        }
+        return;
+      }
+
+      // Backward prefetch: approaching the start of loaded segments
+      // (e.g. user resumed mid-chapter and scrolled back)
+      if (
+        range.start > 0 &&
+        segmentPosition - prefetchThreshold <= range.start
+      ) {
+        const prevEnd = range.start;
+        const prevStart = Math.max(0, range.start - batchSize);
+        if (fetchingRef.current) {
+          pendingPrefetchRef.current = { start: prevStart, end: prevEnd };
+        } else {
+          fetchBatch(prevStart, prevEnd, true);
+        }
       }
     },
     [batchSize, prefetchThreshold, fetchBatch]
@@ -138,6 +175,7 @@ export function useSegmentLoader(
     setLoadedRange({ start: 0, end: 0 });
     loadedRangeRef.current = { start: 0, end: 0 };
     setError(null);
+    pendingPrefetchRef.current = null;
     fetchBatch(0, batchSize, false);
   }, [batchSize, fetchBatch]);
 

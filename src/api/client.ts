@@ -97,6 +97,11 @@ export async function getPublications(): Promise<Publication[]> {
   return res.json()
 }
 
+export async function deletePublication(id: number): Promise<void> {
+  const res = await fetch(`${BASE}/publications/${id}`, { method: 'DELETE' })
+  if (!res.ok) throw new Error(`Failed to delete publication: ${res.status}`)
+}
+
 export async function getPublication(id: number): Promise<PublicationDetail> {
   const res = await fetch(`${BASE}/publications/${id}`, {
     headers: getSaveDataHeaders(),

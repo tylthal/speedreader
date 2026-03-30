@@ -308,7 +308,6 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
-  overflow: hidden;
 }
 
 .controls__chapter-row,
@@ -649,11 +648,37 @@
   background: var(--surface-hover);
 }
 
+.library__card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
 .library__card-title {
   font-size: 1.05rem;
   font-weight: 600;
   color: var(--text);
   margin-bottom: 0.25rem;
+  flex: 1;
+  min-width: 0;
+}
+
+.library__card-delete {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 1.2rem;
+  line-height: 1;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+
+.library__card-delete:hover {
+  color: #e55;
 }
 
 .library__card-author {

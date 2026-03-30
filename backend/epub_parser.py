@@ -72,6 +72,37 @@ def _get_metadata_value(book: epub.EpubBook, namespace: str, key: str) -> str | 
     return None
 
 
+def _build_toc_title_map(book: epub.EpubBook) -> dict[str, str]:
+    """Build a mapping from item file names to TOC titles.
+
+    Walks the EPUB table of contents (which may contain nested sections)
+    and returns ``{filename_without_fragment: title}`` for each entry.
+    """
+    title_map: dict[str, str] = {}
+
+    def _walk(entries: list) -> None:
+        for entry in entries:
+            if isinstance(entry, tuple):
+                # Section: (section_object, children_list)
+                section, children = entry
+                if hasattr(section, "href") and hasattr(section, "title") and section.title:
+                    fname = section.href.split("#")[0]
+                    if fname and fname not in title_map:
+                        title_map[fname] = section.title.strip()
+                _walk(children)
+            elif hasattr(entry, "href") and hasattr(entry, "title") and entry.title:
+                fname = entry.href.split("#")[0]
+                if fname and fname not in title_map:
+                    title_map[fname] = entry.title.strip()
+
+    try:
+        _walk(book.toc)
+    except Exception:
+        pass
+
+    return title_map
+
+
 def parse_epub(file_path: str) -> ParsedBook:
     """Parse an EPUB file and return structured book data.
 
@@ -93,7 +124,7 @@ def parse_epub(file_path: str) -> ParsedBook:
     ebooklib.epub.EpubException
         If the file is not a valid EPUB.
     """
-    book = epub.read_epub(file_path, options={"ignore_ncx": True})
+    book = epub.read_epub(file_path)
 
     # --- metadata -----------------------------------------------------------
     title = (
@@ -106,6 +137,9 @@ def parse_epub(file_path: str) -> ParsedBook:
         or _get_metadata_value(book, "http://purl.org/dc/elements/1.1/", "creator")
         or "Unknown Author"
     )
+
+    # --- TOC title lookup ---------------------------------------------------
+    toc_titles = _build_toc_title_map(book)
 
     # --- chapters in spine order --------------------------------------------
     chapters: list[ParsedChapter] = []
@@ -135,7 +169,10 @@ def parse_epub(file_path: str) -> ParsedBook:
             continue
 
         chapter_counter += 1
-        final_title = heading_title or f"Chapter {chapter_counter}"
+
+        # Prefer TOC title, then heading from HTML, then generic fallback
+        toc_title = toc_titles.get(item.get_name())
+        final_title = toc_title or heading_title or f"Chapter {chapter_counter}"
 
         chapters.append(ParsedChapter(title=final_title, text=text))
 

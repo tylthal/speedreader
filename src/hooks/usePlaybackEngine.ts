@@ -160,6 +160,8 @@ export function usePlaybackEngine(
     currentIndexRef.current = clamped;
     elapsedRef.current = 0;
     lastTimestampRef.current = 0;
+    // Clear waiting state — the user explicitly moved to a valid position
+    waitingForSegmentsRef.current = false;
     onSegmentChangeRef.current?.(clamped);
   }, []);
 
@@ -178,6 +180,13 @@ export function usePlaybackEngine(
       play();
     }
   }, [segments, play]);
+
+  // Reset waiting state when segments are cleared (e.g. chapter change)
+  useEffect(() => {
+    if (segments.length === 0) {
+      waitingForSegmentsRef.current = false;
+    }
+  }, [segments.length]);
 
   // Auto-pause on visibility change
   useVisibilityPause(isPlaying, pause, play);

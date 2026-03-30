@@ -97,6 +97,31 @@ async def list_publications():
     return [PublicationOut(**dict(r)) for r in rows]
 
 
+@router.delete("/{pub_id}", status_code=204)
+async def delete_publication(pub_id: int):
+    async with get_db() as db:
+        cursor = await db.execute("SELECT id FROM publications WHERE id = ?", (pub_id,))
+        if not await cursor.fetchone():
+            raise HTTPException(status_code=404, detail="Publication not found.")
+
+        # Get chapter IDs for cascading deletes
+        ch_cursor = await db.execute(
+            "SELECT id FROM chapters WHERE publication_id = ?", (pub_id,)
+        )
+        ch_ids = [r["id"] for r in await ch_cursor.fetchall()]
+
+        if ch_ids:
+            placeholders = ",".join("?" * len(ch_ids))
+            await db.execute(f"DELETE FROM segments WHERE chapter_id IN ({placeholders})", ch_ids)
+
+        await db.execute("DELETE FROM chapters WHERE publication_id = ?", (pub_id,))
+        await db.execute("DELETE FROM reading_progress WHERE publication_id = ?", (pub_id,))
+        await db.execute("DELETE FROM bookmarks WHERE publication_id = ?", (pub_id,))
+        await db.execute("DELETE FROM highlights WHERE publication_id = ?", (pub_id,))
+        await db.execute("DELETE FROM publications WHERE id = ?", (pub_id,))
+        await db.commit()
+
+
 @router.get("/{pub_id}", response_model=PublicationDetail)
 async def get_publication(pub_id: int):
     async with get_db() as db:

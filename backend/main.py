@@ -46,13 +46,19 @@ DIST_DIR = Path(__file__).resolve().parent.parent / "dist"
 if DIST_DIR.is_dir():
     # Serve static assets (JS, CSS, manifest, etc.)
     app.mount("/assets", StaticFiles(directory=str(DIST_DIR / "assets")), name="assets")
-    app.mount(
-        "/", StaticFiles(directory=str(DIST_DIR), html=True), name="static"
-    )
 
-    # SPA catch-all: serve index.html for any non-API, non-file route
+    # Serve top-level static files (sw.js, manifest, icons, etc.)
+    _TOP_LEVEL_STATIC = {
+        f.name for f in DIST_DIR.iterdir() if f.is_file() and f.name != "index.html"
+    }
+
     @app.exception_handler(404)
     async def spa_fallback(request: Request, exc):
+        path = request.url.path.lstrip("/")
+        # Serve top-level static files from dist
+        if path in _TOP_LEVEL_STATIC:
+            return FileResponse(str(DIST_DIR / path))
+        # SPA fallback for non-API routes
         if not request.url.path.startswith("/api/"):
             return FileResponse(str(DIST_DIR / "index.html"))
         return JSONResponse(status_code=404, content={"detail": "Not Found"})

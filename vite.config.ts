@@ -26,8 +26,9 @@ export default defineConfig({
             },
           },
           {
-            // Cache publication metadata
+            // Cache publication metadata (GET only — must not intercept DELETE)
             urlPattern: /\/api\/v1\/publications/,
+            method: 'GET',
             handler: 'StaleWhileRevalidate',
             options: {
               cacheName: 'publication-cache',
