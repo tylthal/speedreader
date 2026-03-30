@@ -68,6 +68,7 @@ export function useProgressSaver(options: UseProgressSaverOptions): void {
         wpm,
         reading_mode: readingMode,
         updated_at: new Date().toISOString(),
+        segments_read: segmentIndex,
       };
       localStorage.setItem(localStorageKey(publicationId), JSON.stringify(lsData));
     } catch {

@@ -446,13 +446,15 @@ function ActiveReader({
         onSwipeUp={() => activeActions.adjustWpm(25)}
         onSwipeDown={() => activeActions.adjustWpm(-25)}
       >
-        <TranscriptPane
-          segments={loaderState.segments}
-          currentIndex={activeState.currentIndex}
-          onSegmentClick={activeActions.seekTo}
-          bookmarkedIndices={bookmarkedIndices}
-          highlightedIndices={highlightedIndices}
-        />
+        {!activeState.isPlaying && (
+          <TranscriptPane
+            segments={loaderState.segments}
+            currentIndex={activeState.currentIndex}
+            onSegmentClick={activeActions.seekTo}
+            bookmarkedIndices={bookmarkedIndices}
+            highlightedIndices={highlightedIndices}
+          />
+        )}
         <FocusChunkOverlay
           segment={currentSegment}
           isPlaying={activeState.isPlaying}

@@ -39,10 +39,6 @@ export default function RsvpDisplay({
           <span className="rsvp-display__right">{rightPart}</span>
         </div>
       )}
-      <div className="rsvp-info">
-        <span className="rsvp-info__wpm">{wpm} WPM</span>
-        <span className="rsvp-info__progress">{Math.round(progress * 100)}%</span>
-      </div>
     </div>
   );
 }

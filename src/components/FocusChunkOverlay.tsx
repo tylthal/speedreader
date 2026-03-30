@@ -100,7 +100,7 @@ export default function FocusChunkOverlay({
   if (mode === 'rsvp') {
     return (
       <div
-        className="focus-overlay"
+        className={`focus-overlay ${isPlaying ? 'focus-overlay--playing' : ''}`}
         role="region"
         aria-roledescription="RSVP speed reading display"
         aria-label="RSVP reading display"
@@ -130,7 +130,7 @@ export default function FocusChunkOverlay({
 
   return (
     <div
-      className="focus-overlay"
+      className={`focus-overlay ${isPlaying ? 'focus-overlay--playing' : ''}`}
       role="region"
       aria-roledescription="speed reading display"
       aria-label="Current reading segment"

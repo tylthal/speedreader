@@ -146,6 +146,10 @@
   padding: 1rem;
 }
 
+.focus-overlay--playing {
+  background: transparent;
+}
+
 .focus-overlay__center {
   position: absolute;
   top: 50%;
@@ -911,8 +915,7 @@
   max-width: 100%;
   font-size: clamp(1.8rem, 7vw, 3.5rem);
   font-family: monospace;
-  line-height: 1;
-  overflow: hidden;
+  line-height: 1.25;
 }
 
 .rsvp-display--medium {
@@ -928,7 +931,6 @@
   flex: 0 0 auto;
   min-width: 30%;
   color: var(--text);
-  overflow: hidden;
 }
 
 .rsvp-display__orp {
@@ -953,7 +955,6 @@
   text-align: left;
   flex: 1 1 auto;
   color: var(--text);
-  overflow: hidden;
 }
 
 .rsvp-info {
