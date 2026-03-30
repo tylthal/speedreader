@@ -59,11 +59,14 @@
 .reader-viewport {
   display: flex;
   flex-direction: column;
-  height: 100dvh;
+  height: 100%;
+  max-height: 100dvh;
   overflow: hidden;
   position: relative;
   background: var(--bg);
   padding-top: env(safe-area-inset-top);
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
 }
 
 .reader-viewport__loading,
@@ -193,6 +196,34 @@
   transition: width 0.15s linear;
 }
 
+/* ---------- Context Wings ---------- */
+.focus-overlay__wings {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4rem;
+  max-width: 90%;
+  max-height: 30vh;
+  overflow: hidden;
+  opacity: 0;
+  transform: translateY(0);
+  transition: opacity 0.3s ease, transform 0.3s ease;
+  pointer-events: none;
+}
+
+.focus-overlay__wings--visible {
+  opacity: 1;
+}
+
+.focus-overlay__wing-segment {
+  font-size: clamp(0.95rem, 3vw, 1.5rem);
+  font-weight: 400;
+  color: var(--text-muted);
+  text-align: center;
+  line-height: 1.4;
+  max-width: 100%;
+}
+
 /* ---------- ControlsBottomSheet ---------- */
 .controls {
   position: relative;
@@ -201,11 +232,11 @@
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
   border-top: 1px solid var(--surface-border);
-  padding: 8px 16px;
-  padding-bottom: calc(12px + env(safe-area-inset-bottom));
+  padding: 8px 12px;
+  padding-bottom: calc(8px + env(safe-area-inset-bottom));
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
 }
 
 .controls__progress {
@@ -402,23 +433,55 @@
   cursor: not-allowed;
 }
 
-.controls__play-btn {
-  width: 56px;
-  height: 56px;
-  border-radius: 50%;
+/* Play/Pause — full-width bar at bottom */
+.controls__play-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 56px;
+  padding: 12px 16px;
+  border: none;
+  border-radius: 12px;
   background: var(--accent);
   color: #fff;
-  font-size: 1.4rem;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.1s ease;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  position: relative;
+  z-index: 25;
 }
 
-.controls__play-btn:hover {
+.controls__play-bar:hover {
   background: var(--accent-hover);
+}
+
+.controls__play-bar:active {
+  transform: scale(0.98);
+}
+
+.controls__play-bar-icon {
+  font-size: 1.3rem;
+  line-height: 1;
+}
+
+.controls__play-bar-label {
+  font-size: 0.95rem;
+  letter-spacing: 0.02em;
 }
 
 /* ---------- LibraryPage ---------- */
 .library {
   min-height: 100dvh;
   padding: 1.5rem 1rem;
+  padding-top: calc(1.5rem + env(safe-area-inset-top));
+  padding-bottom: calc(1.5rem + env(safe-area-inset-bottom));
+  padding-left: calc(1rem + env(safe-area-inset-left));
+  padding-right: calc(1rem + env(safe-area-inset-right));
   max-width: 600px;
   margin: 0 auto;
 }

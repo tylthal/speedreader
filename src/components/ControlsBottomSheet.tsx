@@ -161,17 +161,17 @@ export default function ControlsBottomSheet({
             {isCurrentBookmarked ? '\uD83D\uDD16' : '\u2606'}
           </button>
         )}
-
-        {/* Play/Pause */}
-        <button
-          className="controls__btn controls__play-btn"
-          onClick={handleTogglePlay}
-          aria-label={isPlaying ? 'Pause reading' : 'Play reading'}
-        >
-          {isPlaying ? '\u23F8' : '\u25B6'}
-        </button>
-
       </div>
+
+      {/* Play/Pause — large bottom target */}
+      <button
+        className="controls__play-bar"
+        onClick={handleTogglePlay}
+        aria-label={isPlaying ? 'Pause reading' : 'Play reading'}
+      >
+        <span className="controls__play-bar-icon">{isPlaying ? '\u23F8' : '\u25B6'}</span>
+        <span className="controls__play-bar-label">{isPlaying ? 'Tap to Pause' : 'Tap to Play'}</span>
+      </button>
 
       {/* Chapter list overlay */}
       {showChapterList && chapters.length > 0 && (

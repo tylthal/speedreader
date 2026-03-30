@@ -44,7 +44,15 @@ async def health_check():
 DIST_DIR = Path(__file__).resolve().parent.parent / "dist"
 
 if DIST_DIR.is_dir():
-    # Mount static files — mounts are checked AFTER all explicit routes,
-    # so API routes always take priority. html=True serves index.html as
-    # the fallback for SPA client-side routing.
-    app.mount("/", StaticFiles(directory=str(DIST_DIR), html=True), name="static")
+    # Serve static assets (JS, CSS, manifest, etc.)
+    app.mount("/assets", StaticFiles(directory=str(DIST_DIR / "assets")), name="assets")
+    app.mount(
+        "/", StaticFiles(directory=str(DIST_DIR), html=True), name="static"
+    )
+
+    # SPA catch-all: serve index.html for any non-API, non-file route
+    @app.exception_handler(404)
+    async def spa_fallback(request: Request, exc):
+        if not request.url.path.startswith("/api/"):
+            return FileResponse(str(DIST_DIR / "index.html"))
+        return {"detail": "Not Found"}

@@ -200,6 +200,7 @@ function ActiveReader({
     publicationId,
     chapterId: currentChapterId,
     dataSaver: isDataSaver,
+    initialSegmentIndex,
   });
 
   useEffect(() => {
@@ -270,9 +271,19 @@ function ActiveReader({
     hasAppliedInitialSeek.current = true;
 
     if (initialSegmentIndex > 0) {
-      const targetIdx = Math.min(initialSegmentIndex, loaderState.segments.length - 1);
+      // Find the array index matching the saved segment_index
+      // (segments may not start from 0 when loaded from an offset)
+      let targetIdx = loaderState.segments.findIndex(
+        (s) => s.segment_index >= initialSegmentIndex,
+      );
+      if (targetIdx === -1) targetIdx = loaderState.segments.length - 1;
+
       if (import.meta.env.DEV) {
-        console.log('[Progress] applying initial seek', { targetIdx, initialWpm });
+        console.log('[Progress] applying initial seek', {
+          savedSegmentIndex: initialSegmentIndex,
+          arrayIndex: targetIdx,
+          initialWpm,
+        });
       }
       playbackActions.seekTo(targetIdx);
       rsvpActions.seekToSegment(targetIdx);
@@ -312,10 +323,13 @@ function ActiveReader({
   }, [playbackActions, rsvpActions, playbackState.currentIndex, playbackState.wpm, rsvpState.currentSegmentIndex, rsvpState.wpm]);
 
   /* ---- Progress saver (enabled only after initial seek) ---- */
+  // Save the segment's real segment_index (its position in the chapter),
+  // not the array index, so restoring works even when segments load from an offset.
+  const currentSegmentRealIndex = loaderState.segments[activeState.currentIndex]?.segment_index ?? activeState.currentIndex;
   useProgressSaver({
     publicationId,
     chapterId: currentChapterId,
-    segmentIndex: activeState.currentIndex,
+    segmentIndex: currentSegmentRealIndex,
     wordIndex: readingMode === 'rsvp' ? rsvpState.currentWordIndex : 0,
     wpm: activeState.wpm,
     readingMode,
@@ -447,6 +461,8 @@ function ActiveReader({
           rsvpWord={rsvpState.currentWord}
           rsvpOrpIndex={rsvpState.orpIndex}
           rsvpWpm={rsvpState.wpm}
+          segments={loaderState.segments}
+          currentIndex={activeState.currentIndex}
         />
       </GestureLayer>
 

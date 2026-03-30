@@ -8,6 +8,7 @@ interface UseSegmentLoaderOptions {
   batchSize?: number; // default 50
   prefetchThreshold?: number; // segments remaining before prefetch, default 20
   dataSaver?: boolean; // reduce prefetch aggressiveness
+  initialSegmentIndex?: number; // start loading from this segment
 }
 
 interface SegmentLoaderState {
@@ -37,6 +38,7 @@ export function useSegmentLoader(
     dataSaver = false,
     batchSize = dataSaver ? DATA_SAVER_BATCH_SIZE : DEFAULT_BATCH_SIZE,
     prefetchThreshold = dataSaver ? DATA_SAVER_PREFETCH_THRESHOLD : DEFAULT_PREFETCH_THRESHOLD,
+    initialSegmentIndex = 0,
   } = options;
 
   const [segments, setSegments] = useState<Segment[]>([]);
@@ -96,6 +98,7 @@ export function useSegmentLoader(
   );
 
   // Initial load when chapterId changes
+  const initialFetchedRef = useRef(false);
   useEffect(() => {
     setSegments([]);
     setLoadedRange({ start: 0, end: 0 });
@@ -103,8 +106,14 @@ export function useSegmentLoader(
     setTotalSegments(0);
     totalSegmentsRef.current = 0;
     setError(null);
-    fetchBatch(0, batchSize, false);
-  }, [chapterId, batchSize, fetchBatch]);
+
+    // On first load, start from the saved position (with some lookback context)
+    const startFrom = !initialFetchedRef.current && initialSegmentIndex > 0
+      ? Math.max(0, initialSegmentIndex - 10)
+      : 0;
+    initialFetchedRef.current = true;
+    fetchBatch(startFrom, startFrom + batchSize, false);
+  }, [chapterId, batchSize, fetchBatch, initialSegmentIndex]);
 
   const checkPrefetch = useCallback(
     (currentIndex: number) => {
