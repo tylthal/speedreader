@@ -3,7 +3,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from backend.database import init_db
@@ -55,4 +55,4 @@ if DIST_DIR.is_dir():
     async def spa_fallback(request: Request, exc):
         if not request.url.path.startswith("/api/"):
             return FileResponse(str(DIST_DIR / "index.html"))
-        return {"detail": "Not Found"}
+        return JSONResponse(status_code=404, content={"detail": "Not Found"})

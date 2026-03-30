@@ -77,13 +77,13 @@ export default function FocusChunkOverlay({
 
   const renderWings = (items: Segment[], direction: 'before' | 'after') => (
     <div
-      className={`focus-overlay__wings ${wingsVisible ? 'focus-overlay__wings--visible' : ''}`}
+      className={`focus-overlay__wings focus-overlay__wings--${direction} ${wingsVisible ? 'focus-overlay__wings--visible' : ''}`}
       aria-hidden="true"
     >
       {items.map((seg, i) => {
         const dist = direction === 'before'
-          ? items.length - i   // first item = farthest
-          : i + 1;             // last item = farthest
+          ? items.length - i
+          : i + 1;
         return (
           <span
             key={seg.id}
@@ -107,19 +107,21 @@ export default function FocusChunkOverlay({
       >
         {renderWings(wings.before, 'before')}
 
-        {!isPlaying && wingsVisible ? (
-          <span className="focus-overlay__text focus-overlay__text--visible">
-            {segment?.text ?? ''}
-          </span>
-        ) : (
-          <RsvpDisplay
-            currentWord={rsvpWord}
-            orpIndex={rsvpOrpIndex}
-            isPlaying={isPlaying}
-            wpm={rsvpWpm}
-            progress={progress}
-          />
-        )}
+        <div className="focus-overlay__center">
+          {!isPlaying && wingsVisible ? (
+            <span className="focus-overlay__text focus-overlay__text--visible">
+              {segment?.text ?? ''}
+            </span>
+          ) : (
+            <RsvpDisplay
+              currentWord={rsvpWord}
+              orpIndex={rsvpOrpIndex}
+              isPlaying={isPlaying}
+              wpm={rsvpWpm}
+              progress={progress}
+            />
+          )}
+        </div>
 
         {renderWings(wings.after, 'after')}
       </div>
@@ -135,27 +137,15 @@ export default function FocusChunkOverlay({
     >
       {renderWings(wings.before, 'before')}
 
-      {showPrompt ? (
-        <span className="focus-overlay__prompt">Tap to start</span>
-      ) : (
-        <span className={`focus-overlay__text ${animClass}`}>{displayText}</span>
-      )}
+      <div className="focus-overlay__center">
+        {showPrompt ? (
+          <span className="focus-overlay__prompt">Tap to start</span>
+        ) : (
+          <span className={`focus-overlay__text ${animClass}`}>{displayText}</span>
+        )}
+      </div>
 
       {renderWings(wings.after, 'after')}
-
-      <div
-        className="focus-overlay__progress"
-        role="progressbar"
-        aria-valuenow={Math.round(progress * 100)}
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-label="Reading progress"
-      >
-        <div
-          className="focus-overlay__progress-bar"
-          style={{ width: `${progress * 100}%` }}
-        />
-      </div>
     </div>
   );
 }

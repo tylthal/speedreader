@@ -55,6 +55,7 @@ class ReadingProgressOut(BaseModel):
     wpm: int
     reading_mode: str = "phrase"
     updated_at: str
+    segments_read: int = 0
 
 
 class BookmarkIn(BaseModel):

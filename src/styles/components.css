@@ -140,14 +140,21 @@
   left: 0;
   right: 0;
   bottom: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
   pointer-events: none;
   z-index: 10;
   background: var(--overlay-bg);
   padding: 1rem;
+}
+
+.focus-overlay__center {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: calc(100% - 2rem);
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .focus-overlay__text {
@@ -198,17 +205,26 @@
 
 /* ---------- Context Wings ---------- */
 .focus-overlay__wings {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 0.4rem;
   max-width: 90%;
-  max-height: 30vh;
   overflow: hidden;
   opacity: 0;
-  transform: translateY(0);
-  transition: opacity 0.3s ease, transform 0.3s ease;
+  transition: opacity 0.3s ease;
   pointer-events: none;
+}
+
+.focus-overlay__wings--before {
+  bottom: calc(50% + 2.5rem);
+}
+
+.focus-overlay__wings--after {
+  top: calc(50% + 2.5rem);
 }
 
 .focus-overlay__wings--visible {
@@ -883,7 +899,6 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  height: 100%;
   width: 100%;
   position: relative;
 }
@@ -893,18 +908,31 @@
   align-items: center;
   justify-content: center;
   width: 100%;
-  font-size: clamp(2rem, 8vw, 4rem);
+  max-width: 100%;
+  font-size: clamp(1.8rem, 7vw, 3.5rem);
   font-family: monospace;
   line-height: 1;
+  overflow: hidden;
+}
+
+.rsvp-display--medium {
+  font-size: clamp(1.4rem, 5.5vw, 2.8rem);
+}
+
+.rsvp-display--small {
+  font-size: clamp(1.1rem, 4vw, 2.2rem);
 }
 
 .rsvp-display__left {
   text-align: right;
-  min-width: 40%;
+  flex: 0 0 auto;
+  min-width: 30%;
   color: var(--text);
+  overflow: hidden;
 }
 
 .rsvp-display__orp {
+  flex: 0 0 auto;
   color: var(--accent);
   position: relative;
 }
@@ -923,8 +951,9 @@
 
 .rsvp-display__right {
   text-align: left;
-  min-width: 40%;
+  flex: 1 1 auto;
   color: var(--text);
+  overflow: hidden;
 }
 
 .rsvp-info {

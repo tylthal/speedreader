@@ -44,6 +44,7 @@ export interface ReadingProgress {
   wpm: number
   reading_mode: string
   updated_at: string
+  segments_read: number
 }
 
 export interface Bookmark {

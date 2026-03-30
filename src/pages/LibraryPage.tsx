@@ -30,6 +30,17 @@ export default function LibraryPage() {
         }
       });
       setProgressMap(map);
+
+      // Sort: most recently read first, then unread books by id descending
+      pubs.sort((a, b) => {
+        const pa = map[a.id];
+        const pb = map[b.id];
+        if (pa && pb) return new Date(pb.updated_at).getTime() - new Date(pa.updated_at).getTime();
+        if (pa) return -1;
+        if (pb) return 1;
+        return b.id - a.id;
+      });
+      setPublications([...pubs]);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load library');
     } finally {
@@ -131,7 +142,7 @@ export default function LibraryPage() {
                 {pub.total_segments.toLocaleString()} segments
                 {progressMap[pub.id] && (
                   <span className="library__card-progress-text">
-                    {' · '}{Math.round((progressMap[pub.id].segment_index / pub.total_segments) * 100)}% read
+                    {' · '}{Math.round((progressMap[pub.id].segments_read / pub.total_segments) * 100)}% read
                   </span>
                 )}
               </div>
@@ -139,7 +150,7 @@ export default function LibraryPage() {
                 <div className="library__card-progress-bar">
                   <div
                     className="library__card-progress-fill"
-                    style={{ width: `${Math.min(100, (progressMap[pub.id].segment_index / pub.total_segments) * 100)}%` }}
+                    style={{ width: `${Math.min(100, (progressMap[pub.id].segments_read / pub.total_segments) * 100)}%` }}
                   />
                 </div>
               )}
