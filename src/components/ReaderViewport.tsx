@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useAnnounce } from '../hooks/useAnnounce';
 import { useSegmentLoader } from '../hooks/useSegmentLoader';
 import { usePlaybackEngine } from '../hooks/usePlaybackEngine';
@@ -9,13 +9,11 @@ import { useKeyboardHandling } from '../hooks/useKeyboardHandling';
 import { useNavigate } from 'react-router-dom';
 import { getPublication, getProgress } from '../api/client';
 import { useBookmarks } from '../hooks/useBookmarks';
-import { useHighlights } from '../hooks/useHighlights';
 import { useDataSaver } from '../hooks/useDataSaver';
 import { markNavigationStart, markFirstChunkRendered } from '../lib/ttfcMetric';
 import type { Chapter, ReadingProgress } from '../api/client';
 import type { ReadingMode } from '../types';
 import GestureLayer from './GestureLayer';
-import TranscriptPane from './TranscriptPane';
 import FocusChunkOverlay from './FocusChunkOverlay';
 import ControlsBottomSheet from './ControlsBottomSheet';
 
@@ -338,27 +336,6 @@ function ActiveReader({
 
   /* ---- Bookmarks & highlights ---- */
   const { bookmarks, addBookmark, removeBookmark, isBookmarked } = useBookmarks(publicationId);
-  const { highlights } = useHighlights(publicationId);
-
-  const bookmarkedIndices = useMemo(() => {
-    const set = new Set<number>();
-    for (const b of bookmarks) {
-      if (b.chapter_id === currentChapterId) {
-        set.add(b.segment_index);
-      }
-    }
-    return set;
-  }, [bookmarks, currentChapterId]);
-
-  const highlightedIndices = useMemo(() => {
-    const map = new Map<number, string>();
-    for (const h of highlights) {
-      if (h.chapter_id === currentChapterId) {
-        map.set(h.segment_index, h.color);
-      }
-    }
-    return map;
-  }, [highlights, currentChapterId]);
 
   const currentSegment = loaderState.segments[activeState.currentIndex] ?? null;
 
@@ -445,16 +422,8 @@ function ActiveReader({
         onSwipeRight={handlePrevChapter}
         onSwipeUp={() => activeActions.adjustWpm(25)}
         onSwipeDown={() => activeActions.adjustWpm(-25)}
+        enabled={activeState.isPlaying}
       >
-        {!activeState.isPlaying && (
-          <TranscriptPane
-            segments={loaderState.segments}
-            currentIndex={activeState.currentIndex}
-            onSegmentClick={activeActions.seekTo}
-            bookmarkedIndices={bookmarkedIndices}
-            highlightedIndices={highlightedIndices}
-          />
-        )}
         <FocusChunkOverlay
           segment={currentSegment}
           isPlaying={activeState.isPlaying}
@@ -465,6 +434,7 @@ function ActiveReader({
           rsvpWpm={rsvpState.wpm}
           segments={loaderState.segments}
           currentIndex={activeState.currentIndex}
+          onSeek={activeActions.seekTo}
         />
       </GestureLayer>
 

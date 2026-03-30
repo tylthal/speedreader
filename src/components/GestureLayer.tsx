@@ -7,6 +7,7 @@ interface GestureLayerProps {
   onSwipeDown?: () => void;
   onSwipeLeft?: () => void;
   onSwipeRight?: () => void;
+  enabled?: boolean;
   children: ReactNode;
 }
 
@@ -16,6 +17,7 @@ export default function GestureLayer({
   onSwipeDown,
   onSwipeLeft,
   onSwipeRight,
+  enabled = true,
   children,
 }: GestureLayerProps) {
   const pointerHandlers = useGestures({
@@ -27,7 +29,11 @@ export default function GestureLayer({
   });
 
   return (
-    <div className="gesture-layer" aria-hidden="true" {...pointerHandlers}>
+    <div
+      className={`gesture-layer ${!enabled ? 'gesture-layer--passthrough' : ''}`}
+      aria-hidden="true"
+      {...(enabled ? pointerHandlers : {})}
+    >
       {children}
     </div>
   );

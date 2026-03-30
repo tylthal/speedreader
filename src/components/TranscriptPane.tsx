@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback } from 'react';
+import { useRef, useState, useEffect, useCallback } from 'react';
 import { FixedSizeList as List } from 'react-window';
 import type { ListChildComponentProps } from 'react-window';
 import type { Segment } from '../types';
@@ -22,13 +22,16 @@ export default function TranscriptPane({
 }: TranscriptPaneProps) {
   const listRef = useRef<List>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const heightRef = useRef(400);
+  const [height, setHeight] = useState(400);
 
   useEffect(() => {
-    if (containerRef.current) {
-      const h = containerRef.current.clientHeight;
-      if (h > 0) heightRef.current = h;
-    }
+    if (!containerRef.current) return;
+    const ro = new ResizeObserver(([entry]) => {
+      const h = entry.contentRect.height;
+      if (h > 0) setHeight(h);
+    });
+    ro.observe(containerRef.current);
+    return () => ro.disconnect();
   }, []);
 
   useEffect(() => {
@@ -85,7 +88,7 @@ export default function TranscriptPane({
       {segments.length > 0 && (
         <List
           ref={listRef}
-          height={heightRef.current}
+          height={height}
           itemCount={segments.length}
           itemSize={ROW_HEIGHT}
           width="100%"

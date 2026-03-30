@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import type { Segment } from '../types';
 import type { ReadingMode } from '../types';
 import RsvpDisplay from './RsvpDisplay';
@@ -13,6 +13,7 @@ interface FocusChunkOverlayProps {
   rsvpWpm?: number;
   segments?: Segment[];
   currentIndex?: number;
+  onSeek?: (index: number) => void;
 }
 
 const WING_COUNT = 3;
@@ -21,6 +22,128 @@ function getWingOpacity(distFromCenter: number, total: number): number {
   if (total <= 1) return 0.4;
   return 0.6 - (distFromCenter / total) * 0.4;
 }
+
+/* ------------------------------------------------------------------ */
+/*  Paused scroll view — all segments in a scrollable list             */
+/* ------------------------------------------------------------------ */
+
+function PausedScrollView({
+  segments,
+  currentIndex,
+  onSeek,
+}: {
+  segments: Segment[];
+  currentIndex: number;
+  onSeek: (index: number) => void;
+}) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const itemRefs = useRef<Map<number, HTMLDivElement>>(new Map());
+  const isUserScrolling = useRef(false);
+  const scrollTimeout = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const programmaticScroll = useRef(false);
+
+  // Scroll to current index when it changes (from external seek or initial mount)
+  useEffect(() => {
+    const el = itemRefs.current.get(currentIndex);
+    if (el && !isUserScrolling.current) {
+      programmaticScroll.current = true;
+      el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      // Reset programmatic flag after scroll completes
+      setTimeout(() => { programmaticScroll.current = false; }, 500);
+    }
+  }, [currentIndex]);
+
+  // Initial scroll (instant, no animation)
+  useEffect(() => {
+    const el = itemRefs.current.get(currentIndex);
+    if (el) {
+      programmaticScroll.current = true;
+      el.scrollIntoView({ block: 'center', behavior: 'instant' });
+      setTimeout(() => { programmaticScroll.current = false; }, 100);
+    }
+    // Only on mount
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Detect which segment is closest to center on scroll
+  const handleScroll = useCallback(() => {
+    if (programmaticScroll.current) return;
+
+    isUserScrolling.current = true;
+    clearTimeout(scrollTimeout.current);
+
+    const container = containerRef.current;
+    if (!container) return;
+
+    const containerRect = container.getBoundingClientRect();
+    const centerY = containerRect.top + containerRect.height / 2;
+
+    let closestIdx = currentIndex;
+    let closestDist = Infinity;
+
+    itemRefs.current.forEach((el, idx) => {
+      const rect = el.getBoundingClientRect();
+      const itemCenter = rect.top + rect.height / 2;
+      const dist = Math.abs(itemCenter - centerY);
+      if (dist < closestDist) {
+        closestDist = dist;
+        closestIdx = idx;
+      }
+    });
+
+    if (closestIdx !== currentIndex) {
+      onSeek(closestIdx);
+    }
+
+    scrollTimeout.current = setTimeout(() => {
+      isUserScrolling.current = false;
+    }, 150);
+  }, [currentIndex, onSeek]);
+
+  const setItemRef = useCallback((idx: number, el: HTMLDivElement | null) => {
+    if (el) {
+      itemRefs.current.set(idx, el);
+    } else {
+      itemRefs.current.delete(idx);
+    }
+  }, []);
+
+  return (
+    <div
+      ref={containerRef}
+      className="focus-scroll"
+      onScroll={handleScroll}
+    >
+      {/* Spacer so first item can be centered */}
+      <div className="focus-scroll__spacer" />
+
+      {segments.map((seg, idx) => {
+        const isActive = idx === currentIndex;
+        const dist = Math.abs(idx - currentIndex);
+        const opacity = isActive ? 1 : Math.max(0.2, 0.6 - dist * 0.1);
+
+        return (
+          <div
+            key={seg.id}
+            ref={(el) => setItemRef(idx, el)}
+            className={`focus-scroll__item ${isActive ? 'focus-scroll__item--active' : ''}`}
+            style={{ opacity }}
+            onClick={() => onSeek(idx)}
+          >
+            {seg.text}
+          </div>
+        );
+      })}
+
+      {/* Spacer so last item can be centered */}
+      <div className="focus-scroll__spacer" />
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Main overlay                                                       */
+/* ------------------------------------------------------------------ */
 
 export default function FocusChunkOverlay({
   segment,
@@ -32,6 +155,7 @@ export default function FocusChunkOverlay({
   rsvpWpm = 250,
   segments,
   currentIndex,
+  onSeek,
 }: FocusChunkOverlayProps) {
   const [displayText, setDisplayText] = useState('');
   const [animClass, setAnimClass] = useState('focus-overlay__text--visible');
@@ -75,6 +199,21 @@ export default function FocusChunkOverlay({
 
   const showPrompt = !isPlaying && !segment;
 
+  // --- Paused: show scrollable list ---
+  if (!isPlaying && segments && segments.length > 0 && currentIndex != null && onSeek) {
+    return (
+      <div className="focus-overlay" role="region" aria-label="Reading position">
+        <PausedScrollView
+          segments={segments}
+          currentIndex={currentIndex}
+          onSeek={onSeek}
+        />
+      </div>
+    );
+  }
+
+  // --- Playing: existing focus/RSVP view ---
+
   const renderWings = (items: Segment[], direction: 'before' | 'after') => (
     <div
       className={`focus-overlay__wings focus-overlay__wings--${direction} ${wingsVisible ? 'focus-overlay__wings--visible' : ''}`}
@@ -100,29 +239,21 @@ export default function FocusChunkOverlay({
   if (mode === 'rsvp') {
     return (
       <div
-        className={`focus-overlay ${isPlaying ? 'focus-overlay--playing' : ''}`}
+        className="focus-overlay focus-overlay--playing"
         role="region"
         aria-roledescription="RSVP speed reading display"
         aria-label="RSVP reading display"
       >
         {renderWings(wings.before, 'before')}
-
         <div className="focus-overlay__center">
-          {!isPlaying && wingsVisible ? (
-            <span className="focus-overlay__text focus-overlay__text--visible">
-              {segment?.text ?? ''}
-            </span>
-          ) : (
-            <RsvpDisplay
-              currentWord={rsvpWord}
-              orpIndex={rsvpOrpIndex}
-              isPlaying={isPlaying}
-              wpm={rsvpWpm}
-              progress={progress}
-            />
-          )}
+          <RsvpDisplay
+            currentWord={rsvpWord}
+            orpIndex={rsvpOrpIndex}
+            isPlaying={isPlaying}
+            wpm={rsvpWpm}
+            progress={progress}
+          />
         </div>
-
         {renderWings(wings.after, 'after')}
       </div>
     );
@@ -130,7 +261,7 @@ export default function FocusChunkOverlay({
 
   return (
     <div
-      className={`focus-overlay ${isPlaying ? 'focus-overlay--playing' : ''}`}
+      className="focus-overlay focus-overlay--playing"
       role="region"
       aria-roledescription="speed reading display"
       aria-label="Current reading segment"
