@@ -133,11 +133,12 @@ export function useSegmentLoader(
     setError(null);
     pendingPrefetchRef.current = null;
 
-    // On first load, start one segment before the saved position so the
-    // user can see prior context and scroll up. The viewport handles the
-    // initial seek to land on the correct saved segment.
+    // On first load, start from the exact saved position.
+    // No lookback — avoids array offset that requires seeking and causes
+    // visual flash of the wrong segment. Backward prefetch handles earlier
+    // segments if the user scrolls back.
     const startFrom = !initialFetchedRef.current && initialSegmentIndex > 0
-      ? Math.max(0, initialSegmentIndex - 1)
+      ? initialSegmentIndex
       : 0;
     initialFetchedRef.current = true;
     fetchBatch(startFrom, startFrom + batchSize, false);

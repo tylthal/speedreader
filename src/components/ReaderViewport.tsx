@@ -308,25 +308,13 @@ function ActiveReader({
 
     hasAppliedInitialSeek.current = true;
 
-    // Segments may include one prior segment for context (scroll-up).
-    // Find the array index that matches the saved segment position.
-    const savedArrayIdx = loaderState.segments.findIndex(
-      (s) => s.segment_index >= initialSegmentIndex,
-    );
-    const seekIdx = savedArrayIdx !== -1 ? savedArrayIdx : 0;
-
-    // Suppress prefetch during initial seek — the loaded range already
-    // covers the right window; an early backward prefetch would shift
-    // the array and cause a visual flash.
-    suppressPrefetchRef.current = true;
-    if (seekIdx > 0) {
-      playbackActions.seekTo(seekIdx);
-      rsvpActions.seekToSegment(seekIdx, initialWordIndex);
-    } else if (initialWordIndex > 0) {
+    // Segments now load starting from the exact saved position, so
+    // array index 0 IS the saved segment. No seek needed for the segment.
+    // Only restore word position for RSVP mode.
+    if (initialWordIndex > 0) {
       rsvpActions.seekToSegment(0, initialWordIndex);
     }
-    suppressPrefetchRef.current = false;
-    trackedSegmentIndexRef.current = loaderState.segments[seekIdx]?.segment_index ?? initialSegmentIndex;
+    trackedSegmentIndexRef.current = loaderState.segments[0]?.segment_index ?? initialSegmentIndex;
 
     setSaverEnabled(true);
   }, [loaderState.segments, initialSegmentIndex, initialWordIndex, playbackActions, rsvpActions]);
