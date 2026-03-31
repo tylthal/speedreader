@@ -27,7 +27,6 @@ export function useProgressSaver(options: UseProgressSaverOptions): void {
   latestRef.current = options;
 
   const lastSavedKeyRef = useRef('');
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const doSave = useCallback(() => {
     const {
@@ -42,10 +41,6 @@ export function useProgressSaver(options: UseProgressSaverOptions): void {
 
     if (!enabled || chapterId === 0) return;
 
-    const key = `${publicationId}:${chapterId}:${segmentIndex}:${wordIndex}:${wpm}:${readingMode}`;
-    if (key === lastSavedKeyRef.current) return;
-    lastSavedKeyRef.current = key;
-
     const data = {
       chapter_id: chapterId,
       segment_index: segmentIndex,
@@ -54,11 +49,7 @@ export function useProgressSaver(options: UseProgressSaverOptions): void {
       reading_mode: readingMode,
     };
 
-    if (import.meta.env.DEV) {
-      console.log('[ProgressSaver] saving', data);
-    }
-
-    // localStorage: sync, always works
+    // localStorage (immediate, in case API fails)
     try {
       const lsData: ReadingProgress = {
         publication_id: publicationId,
@@ -79,15 +70,48 @@ export function useProgressSaver(options: UseProgressSaverOptions): void {
     saveProgress(publicationId, data).catch(() => {});
   }, []);
 
-  // Debounced save on value change (2 seconds)
+  // Save on segment change — localStorage is immediate (sync),
+  // API is debounced to avoid flooding the server.
+  const apiTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     if (!options.enabled || options.chapterId === 0) return;
 
-    if (timerRef.current) clearTimeout(timerRef.current);
-    timerRef.current = setTimeout(doSave, 2000);
+    // Always save to localStorage immediately on segment change
+    const {
+      publicationId,
+      chapterId,
+      segmentIndex,
+      wordIndex,
+      wpm,
+      readingMode,
+    } = options;
+
+    const key = `${publicationId}:${chapterId}:${segmentIndex}:${wordIndex}:${wpm}:${readingMode}`;
+    if (key !== lastSavedKeyRef.current) {
+      lastSavedKeyRef.current = key;
+      try {
+        const lsData: ReadingProgress = {
+          publication_id: publicationId,
+          chapter_id: chapterId,
+          segment_index: segmentIndex,
+          word_index: wordIndex,
+          wpm,
+          reading_mode: readingMode,
+          updated_at: new Date().toISOString(),
+          segments_read: segmentIndex,
+        };
+        localStorage.setItem(localStorageKey(publicationId), JSON.stringify(lsData));
+      } catch {
+        /* storage full or unavailable */
+      }
+    }
+
+    // Debounce API save (2 seconds)
+    if (apiTimerRef.current) clearTimeout(apiTimerRef.current);
+    apiTimerRef.current = setTimeout(doSave, 2000);
 
     return () => {
-      if (timerRef.current) clearTimeout(timerRef.current);
+      if (apiTimerRef.current) clearTimeout(apiTimerRef.current);
     };
   }, [
     options.enabled,

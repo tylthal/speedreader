@@ -18,7 +18,7 @@ interface RsvpActions {
   togglePlayPause: () => void;
   setWpm: (wpm: number) => void;
   adjustWpm: (delta: number) => void;
-  seekToSegment: (index: number) => void;
+  seekToSegment: (index: number, wordIndex?: number) => void;
 }
 
 interface UseRsvpEngineOptions {
@@ -192,12 +192,13 @@ export function useRsvpEngine(
     }
   }, [isPlaying, play, pause]);
 
-  const seekToSegment = useCallback((index: number) => {
+  const seekToSegment = useCallback((index: number, wordIndex?: number) => {
     const clamped = Math.max(0, Math.min(index, segmentsRef.current.length - 1));
     setCurrentSegmentIndex(clamped);
     currentSegmentIndexRef.current = clamped;
-    setCurrentWordIndex(0);
-    currentWordIndexRef.current = 0;
+    const wi = wordIndex ?? 0;
+    setCurrentWordIndex(wi);
+    currentWordIndexRef.current = wi;
     elapsedRef.current = 0;
     lastTimestampRef.current = 0;
     // Clear waiting state — the user explicitly moved to a valid position
@@ -245,9 +246,11 @@ export function useRsvpEngine(
   const orpIndex = computeOrpIndex(currentWord);
 
   // Compute progress using totalSegments for a stable denominator.
-  // We use segment-based progress (not word-based) to avoid jumps as new batches load.
+  // Use the absolute segment_index (not array index) so progress is correct
+  // even when resuming mid-chapter with a partial segment window loaded.
   const effectiveTotal = totalSegments > 0 ? totalSegments : segments.length;
-  const progress = effectiveTotal > 0 ? currentSegmentIndex / effectiveTotal : 0;
+  const absoluteIndex = segments[currentSegmentIndex]?.segment_index ?? currentSegmentIndex;
+  const progress = effectiveTotal > 0 ? absoluteIndex / effectiveTotal : 0;
 
   const state: RsvpState = {
     currentWord,

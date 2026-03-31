@@ -199,7 +199,8 @@ export function usePlaybackEngine(
   }, [stopLoop]);
 
   const effectiveTotal = totalSegments > 0 ? totalSegments : segments.length;
-  const progress = effectiveTotal > 0 ? currentIndex / effectiveTotal : 0;
+  const absoluteIndex = segments[currentIndex]?.segment_index ?? currentIndex;
+  const progress = effectiveTotal > 0 ? absoluteIndex / effectiveTotal : 0;
 
   const state: PlaybackState = {
     currentIndex,

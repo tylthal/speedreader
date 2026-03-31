@@ -23,6 +23,8 @@ interface ControlsBottomSheetProps {
   chapters?: { id: number; title: string; chapter_index: number }[];
   currentChapterIndex?: number;
   onJumpToChapter?: (index: number) => void;
+  stopAtChapterEnd?: boolean;
+  onToggleStopAtChapter?: () => void;
 }
 
 export default function ControlsBottomSheet({
@@ -45,6 +47,8 @@ export default function ControlsBottomSheet({
   chapters = [],
   currentChapterIndex = 0,
   onJumpToChapter,
+  stopAtChapterEnd = false,
+  onToggleStopAtChapter,
 }: ControlsBottomSheetProps) {
   const { announce } = useAnnounce();
   const haptics = useHaptics();
@@ -144,6 +148,22 @@ export default function ControlsBottomSheet({
             aria-label={mode === 'phrase' ? 'Switch to RSVP mode' : 'Switch to phrase mode'}
           >
             {mode === 'phrase' ? 'RSVP' : 'Phrase'}
+          </button>
+        )}
+
+        {/* Stop at chapter end */}
+        {onToggleStopAtChapter && (
+          <button
+            className={`controls__chapter-stop-btn${stopAtChapterEnd ? ' controls__chapter-stop-btn--active' : ''}`}
+            onClick={() => {
+              onToggleStopAtChapter();
+              haptics.tap();
+              announce(stopAtChapterEnd ? 'Continuous reading on' : 'Pause between chapters on');
+            }}
+            aria-label={stopAtChapterEnd ? 'Switch to continuous reading' : 'Pause between chapters'}
+            aria-pressed={stopAtChapterEnd}
+          >
+            {stopAtChapterEnd ? 'Ch. Pause' : 'Ch. Auto'}
           </button>
         )}
 

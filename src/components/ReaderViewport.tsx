@@ -183,8 +183,23 @@ function ActiveReader({
   const [readingMode, setReadingMode] = useState<ReadingMode>(initialReadingMode);
   const [chapterIdx, setChapterIdx] = useState(initialChapterIdx);
   const [saverEnabled, setSaverEnabled] = useState(false);
+  const [stopAtChapterEnd, setStopAtChapterEnd] = useState(() => {
+    try {
+      return localStorage.getItem(`speedreader_stop_at_chapter_${publicationId}`) === '1';
+    } catch { return false; }
+  });
   const hasAppliedInitialSeek = useRef(false);
   const autoAdvanceRef = useRef(false);
+  const stopAtChapterEndRef = useRef(stopAtChapterEnd);
+  stopAtChapterEndRef.current = stopAtChapterEnd;
+
+  const handleToggleStopAtChapter = useCallback(() => {
+    setStopAtChapterEnd((prev) => {
+      const next = !prev;
+      try { localStorage.setItem(`speedreader_stop_at_chapter_${publicationId}`, next ? '1' : '0'); } catch {}
+      return next;
+    });
+  }, [publicationId]);
 
   const navigate = useNavigate();
   const { announce } = useAnnounce();
@@ -192,6 +207,17 @@ function ActiveReader({
 
   const currentChapter = chapters[chapterIdx] ?? null;
   const currentChapterId = currentChapter?.id ?? 0;
+
+  // Track the absolute segment_index the engines are currently on.
+  // This survives array shifts caused by backward prefetch.
+  const trackedSegmentIndexRef = useRef(initialSegmentIndex);
+
+  // Reset tracked segment position on chapter change
+  const prevChapterIdRef = useRef(currentChapterId);
+  if (prevChapterIdRef.current !== currentChapterId) {
+    prevChapterIdRef.current = currentChapterId;
+    trackedSegmentIndexRef.current = 0;
+  }
 
   /* ---- Segment loader ---- */
   const [loaderState, loaderActions] = useSegmentLoader({
@@ -208,21 +234,31 @@ function ActiveReader({
   }, [loaderState.segments]);
 
   /* ---- Callbacks for engines ---- */
+  const suppressPrefetchRef = useRef(false);
   const onSegmentChange = useCallback(
     (index: number) => {
-      loaderActions.checkPrefetch(index);
+      // Keep the tracked absolute segment_index in sync
+      const seg = loaderState.segments[index];
+      if (seg) trackedSegmentIndexRef.current = seg.segment_index;
+      if (!suppressPrefetchRef.current) {
+        loaderActions.checkPrefetch(index);
+      }
     },
-    [loaderActions],
+    [loaderActions, loaderState.segments],
   );
 
   const onPlaybackComplete = useCallback(() => {
-    if (chapterIdx < chapters.length - 1) {
-      autoAdvanceRef.current = true;
-      setChapterIdx((i) => i + 1);
-      announce(`Next chapter: ${chapters[chapterIdx + 1]?.title ?? ''}`);
-    } else {
+    if (chapterIdx >= chapters.length - 1) {
       announce('Book finished');
+      return;
     }
+    if (stopAtChapterEndRef.current) {
+      announce(`Chapter complete: ${chapters[chapterIdx]?.title ?? ''}`);
+      return;
+    }
+    autoAdvanceRef.current = true;
+    setChapterIdx((i) => i + 1);
+    announce(`Next chapter: ${chapters[chapterIdx + 1]?.title ?? ''}`);
   }, [chapterIdx, chapters, announce]);
 
   /* ---- Playback engines (initialized with correct WPM from the start) ---- */
@@ -263,6 +299,8 @@ function ActiveReader({
       }
     : playbackActions;
 
+  // trackedSegmentIndexRef declared earlier, before chapter change reset
+
   /* ---- Initial seek: apply once when segments first load ---- */
   useEffect(() => {
     if (hasAppliedInitialSeek.current) return;
@@ -270,29 +308,56 @@ function ActiveReader({
 
     hasAppliedInitialSeek.current = true;
 
-    if (initialSegmentIndex > 0) {
-      // Find the array index matching the saved segment_index
-      // (segments may not start from 0 when loaded from an offset)
-      let targetIdx = loaderState.segments.findIndex(
-        (s) => s.segment_index >= initialSegmentIndex,
-      );
-      if (targetIdx === -1) targetIdx = loaderState.segments.length - 1;
+    // Segments may include one prior segment for context (scroll-up).
+    // Find the array index that matches the saved segment position.
+    const savedArrayIdx = loaderState.segments.findIndex(
+      (s) => s.segment_index >= initialSegmentIndex,
+    );
+    const seekIdx = savedArrayIdx !== -1 ? savedArrayIdx : 0;
 
-      if (import.meta.env.DEV) {
-        console.log('[Progress] applying initial seek', {
-          savedSegmentIndex: initialSegmentIndex,
-          arrayIndex: targetIdx,
-          initialWpm,
-        });
-      }
-      playbackActions.seekTo(targetIdx);
-      rsvpActions.seekToSegment(targetIdx);
+    // Suppress prefetch during initial seek — the loaded range already
+    // covers the right window; an early backward prefetch would shift
+    // the array and cause a visual flash.
+    suppressPrefetchRef.current = true;
+    if (seekIdx > 0) {
+      playbackActions.seekTo(seekIdx);
+      rsvpActions.seekToSegment(seekIdx, initialWordIndex);
+    } else if (initialWordIndex > 0) {
+      rsvpActions.seekToSegment(0, initialWordIndex);
     }
+    suppressPrefetchRef.current = false;
+    trackedSegmentIndexRef.current = loaderState.segments[seekIdx]?.segment_index ?? initialSegmentIndex;
 
-    // Enable saving after the initial seek has been applied.
-    // Use a microtask to ensure seek state updates are flushed first.
-    Promise.resolve().then(() => setSaverEnabled(true));
-  }, [loaderState.segments, initialSegmentIndex, initialWpm, playbackActions, rsvpActions]);
+    setSaverEnabled(true);
+  }, [loaderState.segments, initialSegmentIndex, initialWordIndex, playbackActions, rsvpActions]);
+
+  /* ---- Correct engine positions when segments prepend shifts array ---- */
+  const prevSegmentsRef = useRef(loaderState.segments);
+  useEffect(() => {
+    if (!hasAppliedInitialSeek.current) return;
+    const prev = prevSegmentsRef.current;
+    const next = loaderState.segments;
+    prevSegmentsRef.current = next;
+
+    // Skip if segments were cleared (chapter change) or this is the first load
+    if (prev.length === 0 || next.length === 0 || prev === next) return;
+
+    // Detect if the array start shifted (backward prefetch prepended segments)
+    const prevFirstIdx = prev[0]?.segment_index;
+    const nextFirstIdx = next[0]?.segment_index;
+    if (prevFirstIdx === undefined || nextFirstIdx === undefined) return;
+    if (nextFirstIdx >= prevFirstIdx) return; // Forward append or no change — indices still valid
+
+    // Array shifted: find new array index for the tracked segment
+    const targetSegIdx = trackedSegmentIndexRef.current;
+    const newArrayIdx = next.findIndex((s) => s.segment_index >= targetSegIdx);
+    if (newArrayIdx !== -1) {
+      playbackActions.seekTo(newArrayIdx);
+      // Preserve word index for RSVP
+      const currentWordIdx = rsvpState.currentWordIndex;
+      rsvpActions.seekToSegment(newArrayIdx, currentWordIdx);
+    }
+  }, [loaderState.segments, playbackActions, rsvpActions, rsvpState.currentWordIndex]);
 
   /* ---- Auto-play after chapter auto-advance ---- */
   useEffect(() => {
@@ -323,9 +388,11 @@ function ActiveReader({
   }, [playbackActions, rsvpActions, playbackState.currentIndex, playbackState.wpm, rsvpState.currentSegmentIndex, rsvpState.wpm]);
 
   /* ---- Progress saver (enabled only after initial seek) ---- */
-  // Save the segment's real segment_index (its position in the chapter),
-  // not the array index, so restoring works even when segments load from an offset.
-  const currentSegmentRealIndex = loaderState.segments[activeState.currentIndex]?.segment_index ?? activeState.currentIndex;
+  // Use the tracked absolute segment_index which survives array shifts from
+  // backward prefetch, rather than computing from the array each render.
+  const currentSegmentRealIndex = loaderState.segments[activeState.currentIndex]?.segment_index
+    ?? trackedSegmentIndexRef.current;
+
   useProgressSaver({
     publicationId,
     chapterId: currentChapterId,
@@ -468,6 +535,8 @@ function ActiveReader({
           setChapterIdx(idx);
           activeActions.seekTo(0);
         }}
+        stopAtChapterEnd={stopAtChapterEnd}
+        onToggleStopAtChapter={handleToggleStopAtChapter}
       />
     </div>
   );

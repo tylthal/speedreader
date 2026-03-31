@@ -83,8 +83,15 @@ export function useSegmentLoader(
           );
         });
 
-        const newEnd = Math.max(loadedRangeRef.current.end, end);
-        const newStart = append ? loadedRangeRef.current.start : start;
+        // Use the actual end of returned data, not the requested end.
+        // Near the end of a chapter the API may return fewer segments than
+        // requested; using the requested `end` would overshoot and prevent
+        // further prefetch from being triggered.
+        const actualEnd = batch.segments.length > 0
+          ? Math.max(...batch.segments.map((s) => s.segment_index)) + 1
+          : end;
+        const newEnd = Math.max(loadedRangeRef.current.end, actualEnd);
+        const newStart = append ? Math.min(loadedRangeRef.current.start, start) : start;
         setLoadedRange({ start: newStart, end: newEnd });
         loadedRangeRef.current = { start: newStart, end: newEnd };
       } catch (err) {
@@ -98,9 +105,16 @@ export function useSegmentLoader(
         const pending = pendingPrefetchRef.current;
         if (pending) {
           pendingPrefetchRef.current = null;
-          // Re-check: the completed fetch may have already covered the range
-          if (pending.start < pending.end) {
-            fetchBatch(pending.start, pending.end, true);
+          // Re-check: skip if the completed fetch already covered this range
+          const range = loadedRangeRef.current;
+          if (pending.start >= range.start && pending.end <= range.end) {
+            // Already covered — no fetch needed
+          } else {
+            // Clamp to avoid re-fetching already-loaded portions
+            const clampedStart = Math.max(pending.start, range.end);
+            if (clampedStart < pending.end) {
+              fetchBatch(clampedStart, pending.end, true);
+            }
           }
         }
       }
@@ -119,9 +133,11 @@ export function useSegmentLoader(
     setError(null);
     pendingPrefetchRef.current = null;
 
-    // On first load, start from the saved position (with some lookback context)
+    // On first load, start one segment before the saved position so the
+    // user can see prior context and scroll up. The viewport handles the
+    // initial seek to land on the correct saved segment.
     const startFrom = !initialFetchedRef.current && initialSegmentIndex > 0
-      ? Math.max(0, initialSegmentIndex - 10)
+      ? Math.max(0, initialSegmentIndex - 1)
       : 0;
     initialFetchedRef.current = true;
     fetchBatch(startFrom, startFrom + batchSize, false);
@@ -153,8 +169,11 @@ export function useSegmentLoader(
       }
 
       // Backward prefetch: approaching the start of loaded segments
-      // (e.g. user resumed mid-chapter and scrolled back)
+      // (e.g. user resumed mid-chapter and scrolled back).
+      // Only trigger when actually moving backward (currentIndex > 0),
+      // not on the initial position which is already at the right spot.
       if (
+        currentIndex > 0 &&
         range.start > 0 &&
         segmentPosition - prefetchThreshold <= range.start
       ) {
