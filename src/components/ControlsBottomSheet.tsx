@@ -167,20 +167,6 @@ export default function ControlsBottomSheet({
           </button>
         )}
 
-        {/* Bookmark */}
-        {onToggleBookmark && (
-          <button
-            className={`controls__bookmark-btn${isCurrentBookmarked ? ' controls__bookmark-btn--active' : ''}`}
-            onClick={() => {
-              onToggleBookmark();
-              haptics.tap();
-              announce(isCurrentBookmarked ? 'Bookmark removed' : 'Bookmark added');
-            }}
-            aria-label={isCurrentBookmarked ? 'Remove bookmark' : 'Add bookmark'}
-          >
-            {isCurrentBookmarked ? '\uD83D\uDD16' : '\u2606'}
-          </button>
-        )}
       </div>
 
       {/* Play/Pause — large bottom target */}
