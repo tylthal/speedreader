@@ -21,6 +21,7 @@ interface SegmentLoaderState {
 
 interface SegmentLoaderActions {
   checkPrefetch: (index: number) => void;
+  loadBackward: () => void;
   reload: () => void;
 }
 
@@ -133,15 +134,11 @@ export function useSegmentLoader(
     setError(null);
     pendingPrefetchRef.current = null;
 
-    // On first load, start from the exact saved position.
-    // No lookback — avoids array offset that requires seeking and causes
-    // visual flash of the wrong segment. Backward prefetch handles earlier
-    // segments if the user scrolls back.
-    const startFrom = !initialFetchedRef.current && initialSegmentIndex > 0
-      ? initialSegmentIndex
-      : 0;
+    // Load the entire chapter from the start. Chapters are small enough
+    // (avg ~500 segments, max ~1600) that loading everything up front is
+    // simpler and avoids complex prefetch/scroll-preservation logic.
     initialFetchedRef.current = true;
-    fetchBatch(startFrom, startFrom + batchSize, false);
+    fetchBatch(0, 999999, false);
   }, [chapterId, batchSize, fetchBatch, initialSegmentIndex]);
 
   const checkPrefetch = useCallback(
@@ -190,6 +187,18 @@ export function useSegmentLoader(
     [batchSize, prefetchThreshold, fetchBatch]
   );
 
+  const loadBackward = useCallback(() => {
+    const range = loadedRangeRef.current;
+    if (range.start <= 0) return;
+    const prevEnd = range.start;
+    const prevStart = Math.max(0, range.start - batchSize);
+    if (fetchingRef.current) {
+      pendingPrefetchRef.current = { start: prevStart, end: prevEnd };
+    } else {
+      fetchBatch(prevStart, prevEnd, true);
+    }
+  }, [batchSize, fetchBatch]);
+
   const reload = useCallback(() => {
     setSegments([]);
     setLoadedRange({ start: 0, end: 0 });
@@ -207,5 +216,5 @@ export function useSegmentLoader(
     loadedRange,
   };
 
-  return [state, { checkPrefetch, reload }];
+  return [state, { checkPrefetch, loadBackward, reload }];
 }
