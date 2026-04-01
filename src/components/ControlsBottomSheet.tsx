@@ -143,11 +143,12 @@ export default function ControlsBottomSheet({
             onClick={() => {
               onToggleMode();
               haptics.tap();
-              announce(mode === 'phrase' ? 'Switched to RSVP mode' : 'Switched to phrase mode');
+              const nextMode = mode === 'phrase' ? 'RSVP' : mode === 'rsvp' ? 'Scroll' : 'Phrase';
+              announce(`Switched to ${nextMode} mode`);
             }}
-            aria-label={mode === 'phrase' ? 'Switch to RSVP mode' : 'Switch to phrase mode'}
+            aria-label={`Switch reading mode (current: ${mode === 'phrase' ? 'Phrase' : mode === 'rsvp' ? 'RSVP' : 'Scroll'})`}
           >
-            {mode === 'phrase' ? 'RSVP' : 'Phrase'}
+            {mode === 'phrase' ? 'Phrase' : mode === 'rsvp' ? 'RSVP' : 'Scroll'}
           </button>
         )}
 

@@ -3,6 +3,7 @@ import { useAnnounce } from '../hooks/useAnnounce';
 import { useSegmentLoader } from '../hooks/useSegmentLoader';
 import { usePlaybackEngine } from '../hooks/usePlaybackEngine';
 import { useRsvpEngine } from '../hooks/useRsvpEngine';
+import { useScrollEngine } from '../hooks/useScrollEngine';
 import { useProgressSaver } from '../hooks/useProgressSaver';
 import { useOrientationResilience } from '../hooks/useOrientationResilience';
 import { useKeyboardHandling } from '../hooks/useKeyboardHandling';
@@ -108,7 +109,7 @@ export default function ReaderViewport({ publicationId }: ReaderViewportProps) {
             segmentIndex = progress.segment_index;
             wordIndex = progress.word_index ?? 0;
             wpm = progress.wpm;
-            if (progress.reading_mode === 'rsvp' || progress.reading_mode === 'phrase') {
+            if (progress.reading_mode === 'rsvp' || progress.reading_mode === 'phrase' || progress.reading_mode === 'scroll') {
               readingMode = progress.reading_mode as ReadingMode;
             }
           }
@@ -278,6 +279,20 @@ function ActiveReader({
     onComplete: onPlaybackComplete,
   });
 
+  /* ---- Scroll engine ---- */
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const scrollItemRefsMap = useRef<Map<number, HTMLDivElement>>(new Map());
+
+  const [scrollState, scrollActions] = useScrollEngine({
+    segments: loaderState.segments,
+    totalSegments: loaderState.totalSegments,
+    containerRef: scrollContainerRef,
+    itemOffsetsRef: scrollItemRefsMap,
+    initialWpm,
+    onSegmentChange,
+    onComplete: onPlaybackComplete,
+  });
+
   /* ---- Active state/actions based on reading mode ---- */
   const activeState = readingMode === 'rsvp'
     ? {
@@ -286,6 +301,8 @@ function ActiveReader({
         wpm: rsvpState.wpm,
         progress: rsvpState.progress,
       }
+    : readingMode === 'scroll'
+    ? scrollState
     : playbackState;
 
   const activeActions = readingMode === 'rsvp'
@@ -297,6 +314,8 @@ function ActiveReader({
         setWpm: rsvpActions.setWpm,
         adjustWpm: rsvpActions.adjustWpm,
       }
+    : readingMode === 'scroll'
+    ? scrollActions
     : playbackActions;
 
   // trackedSegmentIndexRef declared earlier, before chapter change reset
@@ -320,6 +339,7 @@ function ActiveReader({
     if (seekIdx > 0) {
       playbackActions.seekTo(seekIdx);
       rsvpActions.seekToSegment(seekIdx, initialWordIndex);
+      scrollActions.seekTo(seekIdx);
     } else if (initialWordIndex > 0) {
       rsvpActions.seekToSegment(0, initialWordIndex);
     }
@@ -327,7 +347,7 @@ function ActiveReader({
     trackedSegmentIndexRef.current = loaderState.segments[seekIdx]?.segment_index ?? initialSegmentIndex;
 
     setSaverEnabled(true);
-  }, [loaderState.segments, initialSegmentIndex, initialWordIndex, playbackActions, rsvpActions]);
+  }, [loaderState.segments, initialSegmentIndex, initialWordIndex, playbackActions, rsvpActions, scrollActions]);
 
   /* ---- Correct engine positions when segments prepend shifts array ---- */
   const prevSegmentsRef = useRef(loaderState.segments);
@@ -354,8 +374,9 @@ function ActiveReader({
       // Preserve word index for RSVP
       const currentWordIdx = rsvpState.currentWordIndex;
       rsvpActions.seekToSegment(newArrayIdx, currentWordIdx);
+      scrollActions.seekTo(newArrayIdx);
     }
-  }, [loaderState.segments, playbackActions, rsvpActions, rsvpState.currentWordIndex]);
+  }, [loaderState.segments, playbackActions, rsvpActions, scrollActions, rsvpState.currentWordIndex]);
 
   /* ---- Auto-play after chapter auto-advance ---- */
   useEffect(() => {
@@ -371,19 +392,40 @@ function ActiveReader({
   const handleToggleMode = useCallback(() => {
     playbackActions.pause();
     rsvpActions.pause();
+    scrollActions.pause();
 
     setReadingMode((prev) => {
-      const next = prev === 'phrase' ? 'rsvp' : 'phrase';
-      if (next === 'rsvp') {
-        rsvpActions.seekToSegment(playbackState.currentIndex);
-        rsvpActions.setWpm(playbackState.wpm);
+      // Determine the current index and wpm from whichever engine is active
+      let curIdx: number;
+      let curWpm: number;
+      if (prev === 'rsvp') {
+        curIdx = rsvpState.currentSegmentIndex;
+        curWpm = rsvpState.wpm;
+      } else if (prev === 'scroll') {
+        curIdx = scrollState.currentIndex;
+        curWpm = scrollState.wpm;
       } else {
-        playbackActions.seekTo(rsvpState.currentSegmentIndex);
-        playbackActions.setWpm(rsvpState.wpm);
+        curIdx = playbackState.currentIndex;
+        curWpm = playbackState.wpm;
       }
+
+      const next: ReadingMode = prev === 'phrase' ? 'rsvp' : prev === 'rsvp' ? 'scroll' : 'phrase';
+
+      // Sync the next engine to the current position/wpm
+      if (next === 'rsvp') {
+        rsvpActions.seekToSegment(curIdx);
+        rsvpActions.setWpm(curWpm);
+      } else if (next === 'scroll') {
+        scrollActions.seekTo(curIdx);
+        scrollActions.setWpm(curWpm);
+      } else {
+        playbackActions.seekTo(curIdx);
+        playbackActions.setWpm(curWpm);
+      }
+
       return next;
     });
-  }, [playbackActions, rsvpActions, playbackState.currentIndex, playbackState.wpm, rsvpState.currentSegmentIndex, rsvpState.wpm]);
+  }, [playbackActions, rsvpActions, scrollActions, playbackState.currentIndex, playbackState.wpm, rsvpState.currentSegmentIndex, rsvpState.wpm, scrollState.currentIndex, scrollState.wpm]);
 
   /* ---- Progress saver (enabled only after initial seek) ---- */
   // Use the tracked absolute segment_index which survives array shifts from
@@ -507,6 +549,8 @@ function ActiveReader({
           segments={loaderState.segments}
           currentIndex={activeState.currentIndex}
           onSeek={activeActions.seekTo}
+          scrollContainerRef={scrollContainerRef}
+          scrollItemRefs={scrollItemRefsMap}
         />
       </GestureLayer>
 

@@ -14,6 +14,8 @@ interface FocusChunkOverlayProps {
   segments?: Segment[];
   currentIndex?: number;
   onSeek?: (index: number) => void;
+  scrollContainerRef?: React.RefObject<HTMLDivElement | null>;
+  scrollItemRefs?: React.RefObject<Map<number, HTMLDivElement>>;
 }
 
 const WING_COUNT = 3;
@@ -142,6 +144,68 @@ function PausedScrollView({
 }
 
 /* ------------------------------------------------------------------ */
+/*  Scroll mode playing view — auto-scrolled by engine                 */
+/* ------------------------------------------------------------------ */
+
+function ScrollPlayingView({
+  segments,
+  currentIndex,
+  containerRef,
+  itemRefsOut,
+}: {
+  segments: Segment[];
+  currentIndex: number;
+  containerRef: React.RefObject<HTMLDivElement | null>;
+  itemRefsOut: React.RefObject<Map<number, HTMLDivElement>>;
+}) {
+  const setItemRef = useCallback((idx: number, el: HTMLDivElement | null) => {
+    if (itemRefsOut.current) {
+      if (el) {
+        itemRefsOut.current.set(idx, el);
+      } else {
+        itemRefsOut.current.delete(idx);
+      }
+    }
+  }, [itemRefsOut]);
+
+  // Scroll to the current segment on mount so playback starts from the right position
+  const didInitialScroll = useRef(false);
+  useEffect(() => {
+    if (didInitialScroll.current) return;
+    const el = itemRefsOut.current?.get(currentIndex);
+    if (el) {
+      el.scrollIntoView({ block: 'center', behavior: 'instant' });
+      didInitialScroll.current = true;
+    }
+    // Only on mount
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return (
+    <div
+      ref={containerRef}
+      className="focus-scroll focus-scroll--playing"
+    >
+      {/* Spacer so first item can be centered */}
+      <div className="focus-scroll__spacer" />
+
+      {segments.map((seg, idx) => (
+          <div
+            key={seg.id}
+            ref={(el) => setItemRef(idx, el)}
+            className="focus-scroll__item"
+          >
+            {seg.text}
+          </div>
+      ))}
+
+      {/* Spacer so last item can be centered */}
+      <div className="focus-scroll__spacer" />
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /*  Main overlay                                                       */
 /* ------------------------------------------------------------------ */
 
@@ -156,6 +220,8 @@ export default function FocusChunkOverlay({
   segments,
   currentIndex,
   onSeek,
+  scrollContainerRef,
+  scrollItemRefs,
 }: FocusChunkOverlayProps) {
   const [displayText, setDisplayText] = useState('');
   const [animClass, setAnimClass] = useState('focus-overlay__text--visible');
@@ -198,6 +264,22 @@ export default function FocusChunkOverlay({
   }, [segments, currentIndex]);
 
   const showPrompt = !isPlaying && !segment;
+
+  // --- Scroll mode playing: auto-scrolling teleprompter ---
+  if (mode === 'scroll' && isPlaying && segments && segments.length > 0 && currentIndex != null && scrollContainerRef && scrollItemRefs) {
+    return (
+      <div className="focus-overlay" role="region" aria-label="Scroll reading display">
+        <ScrollPlayingView
+          segments={segments}
+          currentIndex={currentIndex}
+          containerRef={scrollContainerRef}
+          itemRefsOut={scrollItemRefs}
+        />
+        <div className="focus-scroll__gradient focus-scroll__gradient--top" />
+        <div className="focus-scroll__gradient focus-scroll__gradient--bottom" />
+      </div>
+    );
+  }
 
   // --- Paused: show scrollable list ---
   if (!isPlaying && segments && segments.length > 0 && currentIndex != null && onSeek) {

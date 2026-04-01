@@ -295,6 +295,36 @@
   background: rgba(255, 255, 255, 0.05);
 }
 
+/* Scroll mode playing: no pointer events (engine auto-scrolls) */
+.focus-scroll--playing {
+  pointer-events: none;
+  scroll-behavior: auto;
+}
+
+.focus-scroll--playing .focus-scroll__item {
+  color: var(--text);
+}
+
+/* Gradient overlays for scroll mode edges */
+.focus-scroll__gradient {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 80px;
+  pointer-events: none;
+  z-index: 11;
+}
+
+.focus-scroll__gradient--top {
+  top: 0;
+  background: linear-gradient(to bottom, var(--bg), transparent);
+}
+
+.focus-scroll__gradient--bottom {
+  bottom: 0;
+  background: linear-gradient(to top, var(--bg), transparent);
+}
+
 .focus-scroll__jump-btn {
   position: fixed;
   bottom: 260px;
@@ -595,11 +625,32 @@
   margin: 0 auto;
 }
 
+.library__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1.5rem;
+}
+
 .library__title {
   font-size: 1.5rem;
   font-weight: 700;
-  margin-bottom: 1.5rem;
+  margin-bottom: 0;
   color: var(--text);
+}
+
+.library__refresh-btn {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 1.4rem;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .library__drop-zone {

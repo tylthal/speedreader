@@ -102,7 +102,16 @@ export default function LibraryPage() {
 
   return (
     <div className="library" role="main" aria-label="Book library" id="main-content">
-      <h1 className="library__title">Library</h1>
+      <div className="library__header">
+        <h1 className="library__title">Library</h1>
+        <button
+          className="library__refresh-btn"
+          onClick={() => window.location.reload()}
+          aria-label="Refresh page"
+        >
+          ↻
+        </button>
+      </div>
 
       {/* Upload drop zone */}
       <div
