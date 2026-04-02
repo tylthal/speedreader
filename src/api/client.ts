@@ -98,7 +98,11 @@ export async function getPublications(): Promise<Publication[]> {
 }
 
 export async function deletePublication(id: number): Promise<void> {
-  const res = await fetch(`${BASE}/publications/${id}`, { method: 'DELETE' })
+  const res = await fetch(`${BASE}/publications/${id}`, {
+    method: 'DELETE',
+    // Prevent service worker from intercepting mutation requests
+    cache: 'no-store',
+  })
   if (!res.ok) throw new Error(`Failed to delete publication: ${res.status}`)
 }
 

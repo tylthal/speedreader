@@ -104,16 +104,11 @@ async def delete_publication(pub_id: int):
         if not await cursor.fetchone():
             raise HTTPException(status_code=404, detail="Publication not found.")
 
-        # Get chapter IDs for cascading deletes
-        ch_cursor = await db.execute(
-            "SELECT id FROM chapters WHERE publication_id = ?", (pub_id,)
+        # Cascade delete using subquery (faster than fetching IDs into Python)
+        await db.execute(
+            "DELETE FROM segments WHERE chapter_id IN (SELECT id FROM chapters WHERE publication_id = ?)",
+            (pub_id,),
         )
-        ch_ids = [r["id"] for r in await ch_cursor.fetchall()]
-
-        if ch_ids:
-            placeholders = ",".join("?" * len(ch_ids))
-            await db.execute(f"DELETE FROM segments WHERE chapter_id IN ({placeholders})", ch_ids)
-
         await db.execute("DELETE FROM chapters WHERE publication_id = ?", (pub_id,))
         await db.execute("DELETE FROM reading_progress WHERE publication_id = ?", (pub_id,))
         await db.execute("DELETE FROM bookmarks WHERE publication_id = ?", (pub_id,))

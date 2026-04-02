@@ -60,6 +60,11 @@ async def init_db():
         """)
 
         await db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_chapters_publication
+            ON chapters(publication_id)
+        """)
+
+        await db.execute("""
             CREATE TABLE IF NOT EXISTS reading_progress (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 publication_id INTEGER NOT NULL REFERENCES publications(id),
