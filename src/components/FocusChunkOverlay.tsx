@@ -67,40 +67,68 @@ function PausedScrollView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Detect which segment is closest to center on scroll
+  // Detect which segment is closest to center on scroll.
+  // Throttled via rAF to run at most once per frame, and onSeek is
+  // debounced to avoid re-rendering the entire tree on every scroll frame.
+  const rafPending = useRef(false);
+  const pendingSeekIdx = useRef(currentIndex);
+  const seekDebounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+
   const handleScroll = useCallback(() => {
     if (programmaticScroll.current) return;
 
     isUserScrolling.current = true;
     clearTimeout(scrollTimeout.current);
 
-    const container = containerRef.current;
-    if (!container) return;
+    // Throttle to one layout read per frame
+    if (!rafPending.current) {
+      rafPending.current = true;
+      requestAnimationFrame(() => {
+        rafPending.current = false;
+        const container = containerRef.current;
+        if (!container) return;
 
-    const containerRect = container.getBoundingClientRect();
-    const centerY = containerRect.top + containerRect.height / 2;
+        // Use scrollTop + cached positions instead of getBoundingClientRect
+        // for each item. Fall back to a sampling approach — check only items
+        // near the current index rather than all items.
+        const containerRect = container.getBoundingClientRect();
+        const centerY = containerRect.top + containerRect.height / 2;
 
-    let closestIdx = currentIndex;
-    let closestDist = Infinity;
+        const items = itemRefs.current;
+        const searchRadius = 10; // only check nearby items
+        let closestIdx = pendingSeekIdx.current;
+        let closestDist = Infinity;
 
-    itemRefs.current.forEach((el, idx) => {
-      const rect = el.getBoundingClientRect();
-      const itemCenter = rect.top + rect.height / 2;
-      const dist = Math.abs(itemCenter - centerY);
-      if (dist < closestDist) {
-        closestDist = dist;
-        closestIdx = idx;
-      }
-    });
+        const lo = Math.max(0, closestIdx - searchRadius);
+        const hi = Math.min(segments.length - 1, closestIdx + searchRadius);
 
-    if (closestIdx !== currentIndex) {
-      onSeek(closestIdx);
+        for (let idx = lo; idx <= hi; idx++) {
+          const el = items.get(idx);
+          if (!el) continue;
+          const rect = el.getBoundingClientRect();
+          const dist = Math.abs(rect.top + rect.height / 2 - centerY);
+          if (dist < closestDist) {
+            closestDist = dist;
+            closestIdx = idx;
+          }
+        }
+
+        pendingSeekIdx.current = closestIdx;
+
+        // Debounce the actual seek to avoid constant re-renders
+        clearTimeout(seekDebounceRef.current);
+        seekDebounceRef.current = setTimeout(() => {
+          if (pendingSeekIdx.current !== currentIndex) {
+            onSeek(pendingSeekIdx.current);
+          }
+        }, 100);
+      });
     }
 
     scrollTimeout.current = setTimeout(() => {
       isUserScrolling.current = false;
     }, 150);
-  }, [currentIndex, onSeek]);
+  }, [currentIndex, onSeek, segments.length]);
 
   const setItemRef = useCallback((idx: number, el: HTMLDivElement | null) => {
     if (el) {
@@ -119,23 +147,16 @@ function PausedScrollView({
       {/* Spacer so first item can be centered */}
       <div className="focus-scroll__spacer" />
 
-      {segments.map((seg, idx) => {
-        const isActive = idx === currentIndex;
-        const dist = Math.abs(idx - currentIndex);
-        const opacity = isActive ? 1 : Math.max(0.2, 0.6 - dist * 0.1);
-
-        return (
-          <div
-            key={seg.id}
-            ref={(el) => setItemRef(idx, el)}
-            className={`focus-scroll__item ${isActive ? 'focus-scroll__item--active' : ''}`}
-            style={{ opacity }}
-            onClick={() => onSeek(idx)}
-          >
-            {seg.text}
-          </div>
-        );
-      })}
+      {segments.map((seg, idx) => (
+        <div
+          key={seg.id}
+          ref={(el) => setItemRef(idx, el)}
+          className="focus-scroll__item"
+          onClick={() => onSeek(idx)}
+        >
+          {seg.text}
+        </div>
+      ))}
 
       {/* Spacer so last item can be centered */}
       <div className="focus-scroll__spacer" />
@@ -265,10 +286,10 @@ export default function FocusChunkOverlay({
 
   const showPrompt = !isPlaying && !segment;
 
-  // --- Scroll mode playing: auto-scrolling teleprompter ---
-  if (mode === 'scroll' && isPlaying && segments && segments.length > 0 && currentIndex != null && scrollContainerRef && scrollItemRefs) {
+  // --- Scroll / Eye track mode playing: auto-scrolling teleprompter ---
+  if ((mode === 'scroll' || mode === 'eyetrack') && isPlaying && segments && segments.length > 0 && currentIndex != null && scrollContainerRef && scrollItemRefs) {
     return (
-      <div className="focus-overlay" role="region" aria-label="Scroll reading display">
+      <div className="focus-overlay" role="region" aria-label={mode === 'eyetrack' ? 'Eye track reading display' : 'Scroll reading display'}>
         <ScrollPlayingView
           segments={segments}
           currentIndex={currentIndex}

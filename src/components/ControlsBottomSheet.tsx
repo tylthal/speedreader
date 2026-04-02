@@ -19,12 +19,16 @@ interface ControlsBottomSheetProps {
   onToggleBookmark?: () => void;
   mode?: ReadingMode;
   onToggleMode?: () => void;
+  onSetMode?: (mode: ReadingMode) => void;
   onExit?: () => void;
   chapters?: { id: number; title: string; chapter_index: number }[];
   currentChapterIndex?: number;
   onJumpToChapter?: (index: number) => void;
   stopAtChapterEnd?: boolean;
   onToggleStopAtChapter?: () => void;
+  gazeSensitivity?: number;
+  onGazeSensitivityChange?: (value: number) => void;
+  onRecalibrate?: () => void;
 }
 
 export default function ControlsBottomSheet({
@@ -43,16 +47,24 @@ export default function ControlsBottomSheet({
   onToggleBookmark,
   mode = 'phrase',
   onToggleMode,
+  onSetMode,
   onExit,
   chapters = [],
   currentChapterIndex = 0,
   onJumpToChapter,
   stopAtChapterEnd = false,
   onToggleStopAtChapter,
+  gazeSensitivity = 1.0,
+  onGazeSensitivityChange,
+  onRecalibrate,
 }: ControlsBottomSheetProps) {
   const { announce } = useAnnounce();
   const haptics = useHaptics();
   const [showChapterList, setShowChapterList] = useState(false);
+  const [showModeList, setShowModeList] = useState(false);
+
+  const modeNames: Record<string, string> = { phrase: 'Phrase', rsvp: 'RSVP', scroll: 'Scroll', eyetrack: 'Eye Track' };
+  const allModes: ReadingMode[] = ['phrase', 'rsvp', 'scroll', 'eyetrack'];
 
   const handleTogglePlay = () => {
     onTogglePlay();
@@ -137,19 +149,42 @@ export default function ControlsBottomSheet({
         </div>
 
         {/* Mode toggle */}
-        {onToggleMode && (
-          <button
-            className="controls__mode-btn"
-            onClick={() => {
-              onToggleMode();
-              haptics.tap();
-              const nextMode = mode === 'phrase' ? 'RSVP' : mode === 'rsvp' ? 'Scroll' : 'Phrase';
-              announce(`Switched to ${nextMode} mode`);
-            }}
-            aria-label={`Switch reading mode (current: ${mode === 'phrase' ? 'Phrase' : mode === 'rsvp' ? 'RSVP' : 'Scroll'})`}
-          >
-            {mode === 'phrase' ? 'Phrase' : mode === 'rsvp' ? 'RSVP' : 'Scroll'}
-          </button>
+        {(onToggleMode || onSetMode) && (
+          <div className="controls__mode-wrapper">
+            <button
+              className="controls__mode-btn"
+              onClick={() => {
+                setShowModeList(v => !v);
+                haptics.tap();
+              }}
+              aria-label={`Reading mode: ${modeNames[mode]}`}
+              aria-expanded={showModeList}
+            >
+              {modeNames[mode]} &#9662;
+            </button>
+            {showModeList && (
+              <div className="controls__mode-list" role="listbox" aria-label="Select reading mode">
+                {allModes.map(m => (
+                  <button
+                    key={m}
+                    className={`controls__mode-list-item${m === mode ? ' controls__mode-list-item--active' : ''}`}
+                    role="option"
+                    aria-selected={m === mode}
+                    onClick={() => {
+                      if (m !== mode && onSetMode) {
+                        onSetMode(m);
+                        announce(`Switched to ${modeNames[m]} mode`);
+                      }
+                      setShowModeList(false);
+                      haptics.tap();
+                    }}
+                  >
+                    {modeNames[m]}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         )}
 
         {/* Stop at chapter end */}
@@ -169,6 +204,42 @@ export default function ControlsBottomSheet({
         )}
 
       </div>
+
+      {/* Eye track controls */}
+      {mode === 'eyetrack' && onGazeSensitivityChange && (
+        <div className="controls__eyetrack-row">
+          <label className="controls__sensitivity-label">
+            Sensitivity
+            <input
+              type="range"
+              min="0.5"
+              max="3"
+              step="0.25"
+              value={gazeSensitivity}
+              onChange={(e) => {
+                const val = parseFloat(e.target.value);
+                onGazeSensitivityChange(val);
+                haptics.tick();
+              }}
+              className="controls__sensitivity-slider"
+              aria-label={`Gaze sensitivity: ${gazeSensitivity.toFixed(1)}x`}
+            />
+            <span className="controls__sensitivity-value">{gazeSensitivity.toFixed(1)}x</span>
+          </label>
+          {onRecalibrate && (
+            <button
+              className="controls__chapter-stop-btn"
+              onClick={() => {
+                onRecalibrate();
+                haptics.tap();
+                announce('Recalibrating eye tracking');
+              }}
+            >
+              Recalibrate
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Play/Pause — large bottom target */}
       <button

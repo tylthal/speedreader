@@ -4,6 +4,8 @@ import { useSegmentLoader } from '../hooks/useSegmentLoader';
 import { usePlaybackEngine } from '../hooks/usePlaybackEngine';
 import { useRsvpEngine } from '../hooks/useRsvpEngine';
 import { useScrollEngine } from '../hooks/useScrollEngine';
+import { useEyeTrackEngine } from '../hooks/useEyeTrackEngine';
+import { useGazeTracker } from '../hooks/useGazeTracker';
 import { useProgressSaver } from '../hooks/useProgressSaver';
 import { useOrientationResilience } from '../hooks/useOrientationResilience';
 import { useKeyboardHandling } from '../hooks/useKeyboardHandling';
@@ -17,6 +19,8 @@ import type { ReadingMode } from '../types';
 import GestureLayer from './GestureLayer';
 import FocusChunkOverlay from './FocusChunkOverlay';
 import ControlsBottomSheet from './ControlsBottomSheet';
+import GazeIndicator from './GazeIndicator';
+import EyeTrackCalibration from './EyeTrackCalibration';
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -109,7 +113,7 @@ export default function ReaderViewport({ publicationId }: ReaderViewportProps) {
             segmentIndex = progress.segment_index;
             wordIndex = progress.word_index ?? 0;
             wpm = progress.wpm;
-            if (progress.reading_mode === 'rsvp' || progress.reading_mode === 'phrase' || progress.reading_mode === 'scroll') {
+            if (progress.reading_mode === 'rsvp' || progress.reading_mode === 'phrase' || progress.reading_mode === 'scroll' || progress.reading_mode === 'eyetrack') {
               readingMode = progress.reading_mode as ReadingMode;
             }
           }
@@ -293,6 +297,66 @@ function ActiveReader({
     onComplete: onPlaybackComplete,
   });
 
+  /* ---- Gaze tracker + eye track engine ---- */
+  const [gazeState, gazeRef, gazeActions] = useGazeTracker();
+  const [showCalibration, setShowCalibration] = useState(false);
+  const [gazeSensitivity, setGazeSensitivity] = useState(1.0);
+  const hasCalibrated = useRef(!!(() => { try { return localStorage.getItem('speedreader_gaze_calibration'); } catch { return null; } })());
+
+  const [eyetrackState, eyetrackActions] = useEyeTrackEngine({
+    segments: loaderState.segments,
+    totalSegments: loaderState.totalSegments,
+    containerRef: scrollContainerRef,
+    itemOffsetsRef: scrollItemRefsMap,
+    gazeRef,
+    initialWpm,
+    onSegmentChange,
+    onComplete: onPlaybackComplete,
+  });
+
+  // Start/stop camera when entering/leaving eyetrack mode
+  const readingModeRef = useRef(readingMode);
+  readingModeRef.current = readingMode;
+  useEffect(() => {
+    if (readingMode === 'eyetrack') {
+      gazeActions.start().then((success) => {
+        if (success && readingModeRef.current === 'eyetrack' && !hasCalibrated.current) {
+          setShowCalibration(true);
+        }
+      });
+    } else {
+      gazeActions.stop();
+      setShowCalibration(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [readingMode]);
+
+  // Auto-pause on tracking loss, auto-resume when tracking recovers
+  const [wasPlayingBeforeLost, setWasPlayingBeforeLost] = useState(false);
+  useEffect(() => {
+    if (readingMode === 'eyetrack') {
+      if (gazeState.status === 'lost' && eyetrackState.isPlaying) {
+        setWasPlayingBeforeLost(true);
+        eyetrackActions.pause();
+      } else if (gazeState.status === 'tracking' && wasPlayingBeforeLost && !eyetrackState.isPlaying) {
+        setWasPlayingBeforeLost(false);
+        eyetrackActions.play();
+      }
+    }
+  }, [readingMode, gazeState.status, eyetrackState.isPlaying, eyetrackActions, wasPlayingBeforeLost]);
+
+  // Pause gaze inference when playback is paused to free up CPU for touch scrolling
+  useEffect(() => {
+    if (readingMode !== 'eyetrack') return;
+    if (eyetrackState.isPlaying) {
+      gazeActions.resumeTracking();
+    } else if (!wasPlayingBeforeLost) {
+      // Only pause tracking if this isn't a tracking-loss auto-pause
+      // (tracking needs to stay on to detect when the user returns)
+      gazeActions.pauseTracking();
+    }
+  }, [readingMode, eyetrackState.isPlaying, wasPlayingBeforeLost, gazeActions]);
+
   /* ---- Active state/actions based on reading mode ---- */
   const activeState = readingMode === 'rsvp'
     ? {
@@ -303,6 +367,8 @@ function ActiveReader({
       }
     : readingMode === 'scroll'
     ? scrollState
+    : readingMode === 'eyetrack'
+    ? eyetrackState
     : playbackState;
 
   const activeActions = readingMode === 'rsvp'
@@ -316,6 +382,8 @@ function ActiveReader({
       }
     : readingMode === 'scroll'
     ? scrollActions
+    : readingMode === 'eyetrack'
+    ? eyetrackActions
     : playbackActions;
 
   // trackedSegmentIndexRef declared earlier, before chapter change reset
@@ -340,6 +408,7 @@ function ActiveReader({
       playbackActions.seekTo(seekIdx);
       rsvpActions.seekToSegment(seekIdx, initialWordIndex);
       scrollActions.seekTo(seekIdx);
+      eyetrackActions.seekTo(seekIdx);
     } else if (initialWordIndex > 0) {
       rsvpActions.seekToSegment(0, initialWordIndex);
     }
@@ -375,8 +444,9 @@ function ActiveReader({
       const currentWordIdx = rsvpState.currentWordIndex;
       rsvpActions.seekToSegment(newArrayIdx, currentWordIdx);
       scrollActions.seekTo(newArrayIdx);
+      eyetrackActions.seekTo(newArrayIdx);
     }
-  }, [loaderState.segments, playbackActions, rsvpActions, scrollActions, rsvpState.currentWordIndex]);
+  }, [loaderState.segments, playbackActions, rsvpActions, scrollActions, eyetrackActions, rsvpState.currentWordIndex]);
 
   /* ---- Auto-play after chapter auto-advance ---- */
   useEffect(() => {
@@ -388,44 +458,60 @@ function ActiveReader({
     }
   }, [loaderState.segments, activeActions]);
 
-  /* ---- Mode toggle ---- */
-  const handleToggleMode = useCallback(() => {
+  /* ---- Mode switching (shared logic) ---- */
+  const switchToMode = useCallback((next: ReadingMode) => {
     playbackActions.pause();
     rsvpActions.pause();
     scrollActions.pause();
+    eyetrackActions.pause();
 
-    setReadingMode((prev) => {
-      // Determine the current index and wpm from whichever engine is active
-      let curIdx: number;
-      let curWpm: number;
-      if (prev === 'rsvp') {
-        curIdx = rsvpState.currentSegmentIndex;
-        curWpm = rsvpState.wpm;
-      } else if (prev === 'scroll') {
-        curIdx = scrollState.currentIndex;
-        curWpm = scrollState.wpm;
-      } else {
-        curIdx = playbackState.currentIndex;
-        curWpm = playbackState.wpm;
-      }
+    // Get current position/wpm from the active engine
+    let curIdx: number;
+    let curWpm: number;
+    const cur = readingMode;
+    if (cur === 'rsvp') {
+      curIdx = rsvpState.currentSegmentIndex;
+      curWpm = rsvpState.wpm;
+    } else if (cur === 'scroll') {
+      curIdx = scrollState.currentIndex;
+      curWpm = scrollState.wpm;
+    } else if (cur === 'eyetrack') {
+      curIdx = eyetrackState.currentIndex;
+      curWpm = eyetrackState.wpm;
+    } else {
+      curIdx = playbackState.currentIndex;
+      curWpm = playbackState.wpm;
+    }
 
-      const next: ReadingMode = prev === 'phrase' ? 'rsvp' : prev === 'rsvp' ? 'scroll' : 'phrase';
+    // Sync the target engine
+    if (next === 'rsvp') {
+      rsvpActions.seekToSegment(curIdx);
+      rsvpActions.setWpm(curWpm);
+    } else if (next === 'scroll') {
+      scrollActions.seekTo(curIdx);
+      scrollActions.setWpm(curWpm);
+    } else if (next === 'eyetrack') {
+      eyetrackActions.seekTo(curIdx);
+      eyetrackActions.setWpm(curWpm);
+    } else {
+      playbackActions.seekTo(curIdx);
+      playbackActions.setWpm(curWpm);
+    }
 
-      // Sync the next engine to the current position/wpm
-      if (next === 'rsvp') {
-        rsvpActions.seekToSegment(curIdx);
-        rsvpActions.setWpm(curWpm);
-      } else if (next === 'scroll') {
-        scrollActions.seekTo(curIdx);
-        scrollActions.setWpm(curWpm);
-      } else {
-        playbackActions.seekTo(curIdx);
-        playbackActions.setWpm(curWpm);
-      }
+    setReadingMode(next);
+  }, [readingMode, playbackActions, rsvpActions, scrollActions, eyetrackActions, playbackState.currentIndex, playbackState.wpm, rsvpState.currentSegmentIndex, rsvpState.wpm, scrollState.currentIndex, scrollState.wpm, eyetrackState.currentIndex, eyetrackState.wpm]);
 
-      return next;
-    });
-  }, [playbackActions, rsvpActions, scrollActions, playbackState.currentIndex, playbackState.wpm, rsvpState.currentSegmentIndex, rsvpState.wpm, scrollState.currentIndex, scrollState.wpm]);
+  const handleToggleMode = useCallback(() => {
+    const modeOrder: ReadingMode[] = ['phrase', 'rsvp', 'scroll', 'eyetrack'];
+    const next = modeOrder[(modeOrder.indexOf(readingMode) + 1) % modeOrder.length];
+    switchToMode(next);
+  }, [readingMode, switchToMode]);
+
+  const handleSetMode = useCallback((target: ReadingMode) => {
+    if (target !== readingMode) {
+      switchToMode(target);
+    }
+  }, [readingMode, switchToMode]);
 
   /* ---- Progress saver (enabled only after initial seek) ---- */
   // Use the tracked absolute segment_index which survives array shifts from
@@ -537,6 +623,7 @@ function ActiveReader({
         onSwipeRight={activeState.isPlaying ? handlePrevChapter : undefined}
         onSwipeUp={activeState.isPlaying ? () => activeActions.adjustWpm(25) : undefined}
         onSwipeDown={activeState.isPlaying ? () => activeActions.adjustWpm(-25) : undefined}
+        enabled={activeState.isPlaying}
       >
         <FocusChunkOverlay
           segment={currentSegment}
@@ -554,6 +641,80 @@ function ActiveReader({
         />
       </GestureLayer>
 
+      {readingMode === 'eyetrack' && gazeState.status !== 'idle' && activeState.isPlaying && (
+        <GazeIndicator
+          direction={gazeState.direction}
+          intensity={gazeState.intensity}
+          status={gazeState.status}
+          debugPitch={gazeState.debugPitch}
+          debugNormalized={gazeState.debugNormalized}
+        />
+      )}
+
+      {showCalibration && (
+        <EyeTrackCalibration
+          onComplete={() => { setShowCalibration(false); hasCalibrated.current = true; }}
+          onSkip={() => { setShowCalibration(false); hasCalibrated.current = true; }}
+          onCalibratePoint={gazeActions.calibratePoint}
+          onFinish={gazeActions.finishCalibration}
+        />
+      )}
+
+      {readingMode === 'eyetrack' && gazeState.status === 'lost' && wasPlayingBeforeLost && (
+        <div className="gaze-resume-overlay" role="status">
+          <div className="gaze-resume-overlay__content">
+            {gazeState.resumeCountdown > 0 ? (
+              <>
+                <span className="gaze-resume-overlay__title">Resuming...</span>
+                <span className="gaze-resume-overlay__countdown">{gazeState.resumeCountdown}</span>
+                <span className="gaze-resume-overlay__message">Keep looking at the screen</span>
+              </>
+            ) : (
+              <>
+                <span className="gaze-resume-overlay__title">Reading paused</span>
+                <span className="gaze-resume-overlay__message">Look back at the screen to resume</span>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {readingMode === 'eyetrack' && gazeState.status === 'error' && (
+        <div className="gaze-error-overlay" role="alert">
+          <div className="gaze-error-overlay__content">
+            <span className="gaze-error-overlay__title">Camera unavailable</span>
+            <span className="gaze-error-overlay__message">{gazeState.error}</span>
+            <button
+              className="gaze-error-overlay__btn"
+              onClick={handleToggleMode}
+            >
+              Switch mode
+            </button>
+            <button
+              className="gaze-error-overlay__retry"
+              onClick={() => gazeActions.start()}
+            >
+              Retry
+            </button>
+          </div>
+        </div>
+      )}
+
+      {readingMode === 'eyetrack' && (gazeState.status === 'requesting' || gazeState.status === 'loading_model') && (
+        <div className="gaze-error-overlay" role="status">
+          <div className="gaze-error-overlay__content">
+            <span className="gaze-error-overlay__title">
+              {gazeState.status === 'requesting' ? 'Starting camera...' : 'Loading eye tracking model...'}
+            </span>
+            <span className="gaze-error-overlay__message">
+              {gazeState.status === 'requesting'
+                ? 'Please allow camera access when prompted.'
+                : 'Downloading model files. This may take a moment on first use.'}
+            </span>
+          </div>
+        </div>
+      )}
+
       {!activeState.isPlaying && activeState.currentIndex < loaderState.segments.length - 5 && (
         <button
           className="focus-scroll__jump-btn"
@@ -565,7 +726,7 @@ function ActiveReader({
       )}
 
       <ControlsBottomSheet
-        isPlaying={activeState.isPlaying}
+        isPlaying={activeState.isPlaying || wasPlayingBeforeLost}
         wpm={activeState.wpm}
         progress={activeState.progress}
         onTogglePlay={activeActions.togglePlayPause}
@@ -580,6 +741,7 @@ function ActiveReader({
         onToggleBookmark={handleToggleBookmark}
         mode={readingMode}
         onToggleMode={handleToggleMode}
+        onSetMode={handleSetMode}
         onExit={() => navigate('/')}
         chapters={chapters}
         currentChapterIndex={chapterIdx}
@@ -589,6 +751,13 @@ function ActiveReader({
         }}
         stopAtChapterEnd={stopAtChapterEnd}
         onToggleStopAtChapter={handleToggleStopAtChapter}
+        gazeSensitivity={gazeSensitivity}
+        onGazeSensitivityChange={(val) => { setGazeSensitivity(val); gazeActions.setSensitivity(val); }}
+        onRecalibrate={() => {
+          hasCalibrated.current = false;
+          try { localStorage.removeItem('speedreader_gaze_calibration'); } catch {}
+          setShowCalibration(true);
+        }}
       />
     </div>
   );

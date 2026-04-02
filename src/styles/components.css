@@ -258,13 +258,13 @@
   right: 0;
   bottom: 0;
   overflow-y: auto;
-  -webkit-overflow-scrolling: touch;
-  scroll-behavior: smooth;
+  overflow-x: hidden;
   display: flex;
   flex-direction: column;
   align-items: center;
   padding: 0 1rem;
   pointer-events: auto;
+  overscroll-behavior: none;
 }
 
 .focus-scroll__spacer {
@@ -277,32 +277,25 @@
   text-align: center;
   font-size: clamp(1rem, 3.5vw, 1.4rem);
   line-height: 1.5;
-  color: var(--text-muted);
+  color: var(--text);
   max-width: 90%;
   cursor: pointer;
-  transition: color 0.2s ease, transform 0.2s ease, font-weight 0.2s ease;
   border-radius: 8px;
-}
-
-.focus-scroll__item--active {
-  color: var(--text);
-  font-size: clamp(1.5rem, 5vw, 2.5rem);
-  font-weight: 700;
-  transform: scale(1);
-}
-
-.focus-scroll__item:not(.focus-scroll__item--active):hover {
-  background: rgba(255, 255, 255, 0.05);
+  contain: layout style;
 }
 
 /* Scroll mode playing: no pointer events (engine auto-scrolls) */
 .focus-scroll--playing {
   pointer-events: none;
   scroll-behavior: auto;
+  contain: content;
+  will-change: scroll-position;
 }
 
 .focus-scroll--playing .focus-scroll__item {
   color: var(--text);
+  transition: none;
+  contain: layout style;
 }
 
 /* Gradient overlays for scroll mode edges */
@@ -1090,6 +1083,454 @@
 .controls__mode-btn:hover {
   background: rgba(255, 255, 255, 0.15);
   border-color: var(--accent);
+}
+
+/* ---------- Mode Selector Dropdown ---------- */
+.controls__mode-wrapper {
+  position: relative;
+}
+
+.controls__mode-list {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  margin-bottom: 6px;
+  background: var(--bg-surface);
+  border: 1px solid var(--surface-border);
+  border-radius: 10px;
+  box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.3);
+  overflow: hidden;
+  min-width: 120px;
+  z-index: 30;
+  animation: slideUp 0.15s ease-out;
+}
+
+.controls__mode-list-item {
+  display: block;
+  width: 100%;
+  padding: 10px 16px;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--surface-border);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+  text-align: left;
+  min-height: 44px;
+}
+
+.controls__mode-list-item:last-child {
+  border-bottom: none;
+}
+
+.controls__mode-list-item:hover {
+  background: var(--surface-hover);
+}
+
+.controls__mode-list-item--active {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* ---------- Eye Track Controls Row ---------- */
+.controls__eyetrack-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  transition: transform 0.4s ease, opacity 0.4s ease, max-height 0.4s ease;
+  max-height: 60px;
+}
+
+.controls--playing .controls__eyetrack-row {
+  transform: translateY(100%);
+  opacity: 0;
+  max-height: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.controls__sensitivity-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.controls__sensitivity-slider {
+  width: 100px;
+  height: 4px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.controls__sensitivity-value {
+  font-size: 0.75rem;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  min-width: 28px;
+}
+
+/* ---------- Gaze Indicator ---------- */
+.gaze-indicator {
+  position: fixed;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 25;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  opacity: 0.8;
+  transition: opacity 0.3s ease;
+  pointer-events: none;
+}
+
+.gaze-indicator__track {
+  width: 4px;
+  height: 120px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.08);
+  position: relative;
+}
+
+[data-theme="light"] .gaze-indicator__track {
+  background: rgba(0, 0, 0, 0.08);
+}
+
+.gaze-indicator__thumb {
+  position: absolute;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 6px;
+  height: 24px;
+  border-radius: 3px;
+  background: var(--accent);
+  opacity: 0.5;
+  transition: top 100ms ease-out, opacity 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
+}
+
+.gaze-indicator__thumb--active {
+  opacity: 1;
+  box-shadow: 0 0 8px rgba(var(--accent-rgb, 15, 125, 255), 0.4);
+}
+
+.gaze-indicator__thumb--lost {
+  background: #ff6b6b;
+  opacity: 0.8;
+  animation: gaze-pulse 1.2s ease-in-out infinite;
+}
+
+.gaze-indicator__thumb--calibrating {
+  background: #f59e0b;
+  opacity: 0.8;
+  animation: gaze-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes gaze-pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+
+.gaze-indicator__label {
+  font-size: 0.55rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  text-align: center;
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  letter-spacing: 0.05em;
+}
+
+.gaze-indicator__debug {
+  position: fixed;
+  top: 4px;
+  right: 4px;
+  display: flex;
+  gap: 4px;
+  font-size: 0.45rem;
+  font-family: monospace;
+  color: var(--text-muted);
+  background: rgba(0, 0, 0, 0.4);
+  padding: 2px 4px;
+  border-radius: 3px;
+  pointer-events: none;
+  z-index: 10002;
+  opacity: 0.6;
+}
+
+/* ---------- Gaze Calibration Overlay ---------- */
+.gaze-calibration {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 10000;
+  background: var(--overlay-bg);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.gaze-calibration__intro {
+  text-align: center;
+  max-width: 320px;
+  padding: 2rem;
+}
+
+.gaze-calibration__title {
+  font-size: 1.3rem;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 1rem;
+}
+
+.gaze-calibration__text {
+  font-size: 0.95rem;
+  color: var(--text);
+  line-height: 1.5;
+  margin-bottom: 0.75rem;
+}
+
+.gaze-calibration__text--muted {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.gaze-calibration__buttons {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  margin-top: 1.5rem;
+}
+
+.gaze-calibration__btn {
+  padding: 10px 24px;
+  border-radius: 10px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+  min-height: 48px;
+  transition: background 0.15s ease;
+}
+
+.gaze-calibration__btn--primary {
+  background: var(--accent);
+  color: #fff;
+}
+
+.gaze-calibration__btn--primary:hover {
+  background: var(--accent-hover);
+}
+
+.gaze-calibration__btn--secondary {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text-muted);
+}
+
+[data-theme="light"] .gaze-calibration__btn--secondary {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.gaze-calibration__btn--secondary:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.gaze-calibration__point-screen {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.gaze-calibration__step-label {
+  position: absolute;
+  bottom: 15vh;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 0.9rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.gaze-calibration__dot-container {
+  position: absolute;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.gaze-calibration__dot {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--accent);
+  position: absolute;
+}
+
+.gaze-calibration__ring {
+  color: var(--accent);
+}
+
+.gaze-calibration__ring-progress {
+  transition: stroke-dashoffset 30ms linear;
+  transform: rotate(-90deg);
+  transform-origin: center;
+}
+
+.gaze-calibration__done {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.gaze-calibration__check {
+  font-size: 2.5rem;
+  color: #22c55e;
+}
+
+.gaze-calibration__done-text {
+  font-size: 1.1rem;
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* ---------- Gaze Resume Overlay ---------- */
+.gaze-resume-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 9998;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.gaze-resume-overlay__content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  text-align: center;
+}
+
+.gaze-resume-overlay__title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.gaze-resume-overlay__countdown {
+  font-size: 2.5rem;
+  font-weight: 700;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.gaze-resume-overlay__message {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+/* ---------- Gaze Error / Status Overlay ---------- */
+.gaze-error-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 9999;
+  background: var(--overlay-bg);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.gaze-error-overlay__content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  max-width: 300px;
+  padding: 2rem;
+  text-align: center;
+}
+
+.gaze-error-overlay__title {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.gaze-error-overlay__message {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.gaze-error-overlay__btn {
+  padding: 10px 24px;
+  border-radius: 10px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+  min-height: 48px;
+  background: var(--accent);
+  color: #fff;
+  transition: background 0.15s ease;
+}
+
+.gaze-error-overlay__btn:hover {
+  background: var(--accent-hover);
+}
+
+.gaze-error-overlay__retry {
+  padding: 8px 20px;
+  border-radius: 10px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  min-height: 44px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-muted);
+  transition: background 0.15s ease;
+}
+
+[data-theme="light"] .gaze-error-overlay__retry {
+  border-color: rgba(0, 0, 0, 0.15);
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.gaze-error-overlay__retry:hover {
+  background: rgba(255, 255, 255, 0.15);
 }
 
 /* ---------- RSVP Display ---------- */
