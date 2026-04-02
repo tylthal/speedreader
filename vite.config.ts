@@ -1,13 +1,12 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
-import basicSsl from '@vitejs/plugin-basic-ssl'
+// basicSsl removed — Tailscale provides HTTPS for getUserMedia
 import { VitePWA } from 'vite-plugin-pwa'
 import { fileURLToPath, URL } from 'node:url'
 
 export default defineConfig({
   plugins: [
     react(),
-    basicSsl(),
     VitePWA({
       registerType: 'autoUpdate',
       workbox: {
@@ -44,7 +43,7 @@ export default defineConfig({
             },
           },
           {
-            // Cache progress data
+            // Cache progress data — only cache successful responses
             urlPattern: /\/api\/v1\/progress/,
             handler: 'NetworkFirst',
             options: {
@@ -52,6 +51,9 @@ export default defineConfig({
               expiration: {
                 maxEntries: 50,
                 maxAgeSeconds: 60 * 60 * 24,
+              },
+              cacheableResponse: {
+                statuses: [200],
               },
             },
           },
@@ -117,7 +119,7 @@ export default defineConfig({
   server: {
     allowedHosts: true,
     proxy: {
-      '/api': 'http://localhost:3002',
+      '/api': 'http://localhost:3000',
     },
   },
   resolve: {

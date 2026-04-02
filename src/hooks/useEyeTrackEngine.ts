@@ -245,16 +245,21 @@ export function useEyeTrackEngine(
     speedMultiplierRef.current = 1.0;
     segCheckCounterRef.current = 0;
 
-    // Restore saved scroll position after ScrollPlayingView mounts.
-    // Use rAF to ensure the DOM has updated before setting scrollTop.
+    // Wait for ScrollPlayingView to mount and do its initial scroll,
+    // then sync our scroll position tracker and start the rAF loop.
     const savedPos = savedScrollTopRef.current;
+    // Double-rAF: first for React render, second for ScrollPlayingView's mount effect
     requestAnimationFrame(() => {
-      const container = containerRef.current;
-      if (container && savedPos > 0) {
-        container.scrollTop = savedPos;
-      }
-      scrollPositionRef.current = container?.scrollTop ?? savedPos;
-      rafRef.current = requestAnimationFrame(tick);
+      requestAnimationFrame(() => {
+        const container = containerRef.current;
+        if (container && savedPos > 0) {
+          // Resume from pause — restore exact position
+          container.scrollTop = savedPos;
+        }
+        // Sync our tracker to wherever the container actually is
+        scrollPositionRef.current = container?.scrollTop ?? 0;
+        rafRef.current = requestAnimationFrame(tick);
+      });
     });
   }, [tick, containerRef]);
 
@@ -278,6 +283,7 @@ export function useEyeTrackEngine(
     setCurrentIndex(clamped);
     currentIndexRef.current = clamped;
     lastTimestampRef.current = 0;
+    savedScrollTopRef.current = 0; // reset so play() scrolls to the seeked segment
     onSegmentChangeRef.current?.(clamped);
 
     const items = itemOffsetsRef.current;
