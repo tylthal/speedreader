@@ -1,4 +1,4 @@
-export type ReadingMode = 'phrase' | 'rsvp' | 'scroll' | 'eyetrack';
+export type ReadingMode = 'phrase' | 'rsvp' | 'scroll' | 'track';
 
 export interface Segment {
   id: number;

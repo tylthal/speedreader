@@ -35,9 +35,9 @@ export default function GazeIndicator({ direction, intensity, status, debugPitch
       role="status"
       aria-label={
         isLost
-          ? 'Eye tracking lost'
+          ? 'Head tracking lost'
           : isCalibrating
-          ? 'Calibrating eye tracking'
+          ? 'Calibrating head tracking'
           : `Gaze direction: ${direction}`
       }
     >

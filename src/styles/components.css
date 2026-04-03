@@ -1134,8 +1134,8 @@
   font-weight: 600;
 }
 
-/* ---------- Eye Track Controls Row ---------- */
-.controls__eyetrack-row {
+/* ---------- Track Controls Row ---------- */
+.controls__track-row {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1145,7 +1145,7 @@
   max-height: 60px;
 }
 
-.controls--playing .controls__eyetrack-row {
+.controls--playing .controls__track-row {
   transform: translateY(100%);
   opacity: 0;
   max-height: 0;

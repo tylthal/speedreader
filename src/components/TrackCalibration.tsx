@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 
-interface EyeTrackCalibrationProps {
+interface TrackCalibrationProps {
   onComplete: () => void;
   onSkip: () => void;
   onCalibratePoint: (point: 'top' | 'center' | 'bottom') => void;
@@ -16,12 +16,12 @@ const POINTS: { step: 'top' | 'center' | 'bottom'; label: string; position: stri
   { step: 'bottom', label: 'Tilt head down toward the dot', position: '85vh' },
 ];
 
-export default function EyeTrackCalibration({
+export default function TrackCalibration({
   onComplete,
   onSkip,
   onCalibratePoint,
   onFinish,
-}: EyeTrackCalibrationProps) {
+}: TrackCalibrationProps) {
   const [step, setStep] = useState<CalibrationStep>('intro');
   const [progress, setProgress] = useState(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -75,7 +75,7 @@ export default function EyeTrackCalibration({
   const stepIndex = POINTS.findIndex(p => p.step === step);
 
   return (
-    <div className="gaze-calibration" role="dialog" aria-label="Eye tracking calibration">
+    <div className="gaze-calibration" role="dialog" aria-label="Head tracking calibration">
       {step === 'intro' && (
         <div className="gaze-calibration__intro">
           <h2 className="gaze-calibration__title">Head Tracking Setup</h2>

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback } from 'react';
 import type { Segment } from '../types';
 import type { ReadingMode } from '../types';
 import RsvpDisplay from './RsvpDisplay';
@@ -74,6 +74,12 @@ function PausedScrollView({
   const pendingSeekIdx = useRef(currentIndex);
   const seekDebounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 
+  // Keep refs to current values so the unmount cleanup isn't stale
+  const currentIndexRef = useRef(currentIndex);
+  currentIndexRef.current = currentIndex;
+  const onSeekRef = useRef(onSeek);
+  onSeekRef.current = onSeek;
+
   const handleScroll = useCallback(() => {
     if (programmaticScroll.current) return;
 
@@ -88,28 +94,37 @@ function PausedScrollView({
         const container = containerRef.current;
         if (!container) return;
 
-        // Use scrollTop + cached positions instead of getBoundingClientRect
-        // for each item. Fall back to a sampling approach — check only items
-        // near the current index rather than all items.
         const containerRect = container.getBoundingClientRect();
         const centerY = containerRect.top + containerRect.height / 2;
 
         const items = itemRefs.current;
-        const searchRadius = 10; // only check nearby items
+        // Adaptive search: start near last known position, widen if
+        // the best match is at the edge (user scrolled fast/far).
         let closestIdx = pendingSeekIdx.current;
         let closestDist = Infinity;
+        let radius = 15;
 
-        const lo = Math.max(0, closestIdx - searchRadius);
-        const hi = Math.min(segments.length - 1, closestIdx + searchRadius);
+        for (let attempt = 0; attempt < 3; attempt++) {
+          const lo = Math.max(0, closestIdx - radius);
+          const hi = Math.min(segments.length - 1, closestIdx + radius);
 
-        for (let idx = lo; idx <= hi; idx++) {
-          const el = items.get(idx);
-          if (!el) continue;
-          const rect = el.getBoundingClientRect();
-          const dist = Math.abs(rect.top + rect.height / 2 - centerY);
-          if (dist < closestDist) {
-            closestDist = dist;
-            closestIdx = idx;
+          for (let idx = lo; idx <= hi; idx++) {
+            const el = items.get(idx);
+            if (!el) continue;
+            const rect = el.getBoundingClientRect();
+            const dist = Math.abs(rect.top + rect.height / 2 - centerY);
+            if (dist < closestDist) {
+              closestDist = dist;
+              closestIdx = idx;
+            }
+          }
+
+          // If best match is at the edge, widen the search and retry
+          // centered on the new best match
+          if (closestIdx === lo || closestIdx === hi) {
+            radius *= 3;
+          } else {
+            break; // found a match that's not at the boundary
           }
         }
 
@@ -118,8 +133,8 @@ function PausedScrollView({
         // Debounce the actual seek to avoid constant re-renders
         clearTimeout(seekDebounceRef.current);
         seekDebounceRef.current = setTimeout(() => {
-          if (pendingSeekIdx.current !== currentIndex) {
-            onSeek(pendingSeekIdx.current);
+          if (pendingSeekIdx.current !== currentIndexRef.current) {
+            onSeekRef.current(pendingSeekIdx.current);
           }
         }, 100);
       });
@@ -128,7 +143,18 @@ function PausedScrollView({
     scrollTimeout.current = setTimeout(() => {
       isUserScrolling.current = false;
     }, 150);
-  }, [currentIndex, onSeek, segments.length]);
+  }, [segments.length]);
+
+  // Flush any pending debounced seek on unmount so currentIndex is up-to-date
+  // before ScrollPlayingView mounts (e.g. user scrolled then immediately hit Play).
+  useEffect(() => {
+    return () => {
+      clearTimeout(seekDebounceRef.current);
+      if (pendingSeekIdx.current !== currentIndexRef.current) {
+        onSeekRef.current(pendingSeekIdx.current);
+      }
+    };
+  }, []);
 
   const setItemRef = useCallback((idx: number, el: HTMLDivElement | null) => {
     if (el) {
@@ -189,18 +215,26 @@ function ScrollPlayingView({
     }
   }, [itemRefsOut]);
 
-  // Scroll to the current segment on mount so playback starts from the right position
-  const didInitialScroll = useRef(false);
-  useEffect(() => {
-    if (didInitialScroll.current) return;
+  // Scroll to the current segment on mount so playback starts from the right position.
+  // useLayoutEffect ensures this runs synchronously before paint, so the scroll
+  // position is settled before any rAF tick in the engine captures scrollTop.
+  //
+  // We allow a brief mount window (2 renders) to also accept a late currentIndex
+  // update from PausedScrollView's unmount cleanup flush, but stop after that
+  // to avoid fighting with the engine's tick-driven scroll updates.
+  const mountRenderCount = useRef(0);
+  const lastScrolledIdx = useRef(-1);
+  useLayoutEffect(() => {
+    mountRenderCount.current++;
+    // Only auto-scroll during the first 2 renders (mount + possible flush)
+    if (mountRenderCount.current > 2) return;
+    if (currentIndex === lastScrolledIdx.current) return;
     const el = itemRefsOut.current?.get(currentIndex);
     if (el) {
       el.scrollIntoView({ block: 'center', behavior: 'instant' });
-      didInitialScroll.current = true;
+      lastScrolledIdx.current = currentIndex;
     }
-    // Only on mount
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [currentIndex, itemRefsOut]);
 
   return (
     <div
@@ -286,10 +320,10 @@ export default function FocusChunkOverlay({
 
   const showPrompt = !isPlaying && !segment;
 
-  // --- Scroll / Eye track mode playing: auto-scrolling teleprompter ---
-  if ((mode === 'scroll' || mode === 'eyetrack') && isPlaying && segments && segments.length > 0 && currentIndex != null && scrollContainerRef && scrollItemRefs) {
+  // --- Scroll / Track mode playing: auto-scrolling teleprompter ---
+  if ((mode === 'scroll' || mode === 'track') && isPlaying && segments && segments.length > 0 && currentIndex != null && scrollContainerRef && scrollItemRefs) {
     return (
-      <div className="focus-overlay" role="region" aria-label={mode === 'eyetrack' ? 'Eye track reading display' : 'Scroll reading display'}>
+      <div className="focus-overlay" role="region" aria-label={mode === 'track' ? 'Track reading display' : 'Scroll reading display'}>
         <ScrollPlayingView
           segments={segments}
           currentIndex={currentIndex}

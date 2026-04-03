@@ -130,11 +130,19 @@ export class GazeProcessor {
   private calBottom = 10; // degrees when tilting down (default: +10°)
   private isCalibrated = false;
 
+  /** Effective ranges after balancing (degrees, always positive) */
+  private effectiveUpRange = 10;
+  private effectiveDownRange = 10;
+
   /** User-adjustable sensitivity multiplier (1.0 = default) */
   sensitivity = 1.0;
 
   /** Dead zone half-width on the normalized -1..+1 scale */
   deadZone = 0.35;
+
+  /** Per-direction dead zones (computed from range ratio after calibration) */
+  private upDeadZone = 0.35;
+  private downDeadZone = 0.35;
 
   /** Hysteresis: once in neutral, need to exceed this to leave.
    *  Once active, only need to drop below deadZone to return. */
@@ -143,6 +151,11 @@ export class GazeProcessor {
 
   private calibrationSamples = new Map<string, number[]>();
   private currentCalPoint: string | null = null;
+
+  /** Minimum calibration range in degrees per direction */
+  private static MIN_RANGE_DEG = 3;
+  /** Smaller range must be at least this fraction of larger range */
+  private static MIN_RANGE_RATIO = 0.4;
 
   /**
    * Process a pitch angle (degrees) into a gaze result.
@@ -173,27 +186,27 @@ export class GazeProcessor {
       return (pitch - this.calCenter) / 10;
     }
 
-    // Map calibrated range to -1..+1
+    // Map calibrated range to -1..+1 using effective (balanced) ranges
     if (pitch < this.calCenter) {
       // Tilting up (pitch goes negative)
-      const range = this.calCenter - this.calTop;
-      if (range < 0.5) return 0; // less than 0.5° range = bad calibration
-      return -((this.calCenter - pitch) / range);
+      return -((this.calCenter - pitch) / this.effectiveUpRange);
     } else {
       // Tilting down (pitch goes positive)
-      const range = this.calBottom - this.calCenter;
-      if (range < 0.5) return 0;
-      return (pitch - this.calCenter) / range;
+      return (pitch - this.calCenter) / this.effectiveDownRange;
     }
   }
 
   private classify(normalized: number): { direction: GazeDirection; intensity: number } {
     const abs = Math.abs(normalized);
 
+    // Use per-direction dead zone so the direction with a smaller
+    // calibration range gets a wider dead zone (less sensitive)
+    const dirDeadZone = normalized < 0 ? this.upDeadZone : this.downDeadZone;
+
     // Hysteresis: use a wider threshold to leave neutral, narrower to return
     const threshold = this.wasActive
-      ? this.deadZone                        // easy to stay active
-      : this.deadZone + this.hysteresis;     // harder to leave neutral
+      ? dirDeadZone                          // easy to stay active
+      : dirDeadZone + this.hysteresis;       // harder to leave neutral
 
     if (abs <= threshold) {
       this.wasActive = false;
@@ -202,7 +215,7 @@ export class GazeProcessor {
 
     this.wasActive = true;
 
-    // Smoothstep curve from the base dead zone edge (not hysteresis edge)
+    // Smoothstep curve from the threshold edge
     // so intensity ramps smoothly from 0 once past the threshold
     const beyondDeadZone = (abs - threshold) / (1 - threshold);
     const t = Math.min(1, Math.max(0, beyondDeadZone));
@@ -243,6 +256,7 @@ export class GazeProcessor {
       this.calCenter = avgCenter;
       this.calBottom = avgBottom;
       this.isCalibrated = true;
+      this.computeEffectiveRanges();
     }
 
     this.calibrationSamples.clear();
@@ -256,7 +270,56 @@ export class GazeProcessor {
     this.calTop = data.top;
     this.calBottom = data.bottom;
     this.isCalibrated = true;
+    this.computeEffectiveRanges();
     this.filter.reset();
+  }
+
+  /**
+   * Compute effective ranges and per-direction dead zones from
+   * calibration data. Handles asymmetric phone positions by:
+   *  1. Enforcing a minimum range per direction (MIN_RANGE_DEG)
+   *  2. Ensuring the smaller range is at least MIN_RANGE_RATIO of the larger
+   *  3. Widening the dead zone for the direction with smaller range
+   */
+  private computeEffectiveRanges(): void {
+    let rawUp = Math.abs(this.calCenter - this.calTop);
+    let rawDown = Math.abs(this.calBottom - this.calCenter);
+
+    // Enforce minimum range
+    rawUp = Math.max(rawUp, GazeProcessor.MIN_RANGE_DEG);
+    rawDown = Math.max(rawDown, GazeProcessor.MIN_RANGE_DEG);
+
+    // Balance ranges: smaller must be at least MIN_RANGE_RATIO of larger
+    const larger = Math.max(rawUp, rawDown);
+    const minAllowed = larger * GazeProcessor.MIN_RANGE_RATIO;
+    rawUp = Math.max(rawUp, minAllowed);
+    rawDown = Math.max(rawDown, minAllowed);
+
+    this.effectiveUpRange = rawUp;
+    this.effectiveDownRange = rawDown;
+
+    // Compute asymmetric dead zones: the direction with a smaller
+    // calibrated range gets a proportionally wider dead zone.
+    // This prevents the tighter direction from being over-sensitive.
+    const ratio = Math.min(rawUp, rawDown) / Math.max(rawUp, rawDown);
+    // ratio is 0.4..1.0. When ranges are equal (ratio=1), both dead zones = base.
+    // When one is much smaller (ratio→0.4), that direction's dead zone widens.
+    const bonusDeadZone = (1 - ratio) * 0.15; // up to 0.15 extra dead zone
+
+    if (rawUp <= rawDown) {
+      this.upDeadZone = this.deadZone + bonusDeadZone;
+      this.downDeadZone = this.deadZone;
+    } else {
+      this.upDeadZone = this.deadZone;
+      this.downDeadZone = this.deadZone + bonusDeadZone;
+    }
+
+    if (import.meta.env.DEV) {
+      console.log('[Head Pitch Cal] effective ranges — up:', rawUp.toFixed(1) + '°',
+        'down:', rawDown.toFixed(1) + '°',
+        '| dead zones — up:', this.upDeadZone.toFixed(2),
+        'down:', this.downDeadZone.toFixed(2));
+    }
   }
 
   reset(): void {
@@ -267,8 +330,12 @@ export class GazeProcessor {
     this.calTop = -10;
     this.calBottom = 10;
     this.isCalibrated = false;
+    this.effectiveUpRange = 10;
+    this.effectiveDownRange = 10;
     this.sensitivity = 1.0;
     this.deadZone = 0.35;
+    this.upDeadZone = 0.35;
+    this.downDeadZone = 0.35;
     this.wasActive = false;
   }
 }

@@ -7,14 +7,14 @@ import { useVisibilityPause } from './useVisibilityPause';
 /*  Types                                                              */
 /* ------------------------------------------------------------------ */
 
-interface EyeTrackState {
+interface TrackState {
   currentIndex: number;
   isPlaying: boolean;
   wpm: number;
   progress: number;
 }
 
-interface EyeTrackActions {
+interface TrackActions {
   play: () => void;
   pause: () => void;
   togglePlayPause: () => void;
@@ -23,7 +23,7 @@ interface EyeTrackActions {
   adjustWpm: (delta: number) => void;
 }
 
-interface UseEyeTrackEngineOptions {
+interface UseTrackEngineOptions {
   segments: Segment[];
   totalSegments: number;
   containerRef: React.RefObject<HTMLDivElement | null>;
@@ -43,15 +43,23 @@ const MAX_WPM = 1200;
 const DEFAULT_WPM = 250;
 
 /** Speed multiplier bounds */
-const MIN_MULTIPLIER = -1.0; // reverse at full WPM speed
+const MIN_MULTIPLIER = -0.6; // reverse at 60% WPM speed (gentler reverse)
 const MAX_MULTIPLIER = 2.5;  // 2.5x WPM
 
 /**
  * When tilting up, intensity below this threshold = hold (speed 0).
- * Above this threshold = reverse scroll. Creates a "pause" band
+ * Above this threshold = reverse scroll. Creates a wide "pause" band
  * between neutral and reverse for comfortable reading control.
  */
-const HOLD_THRESHOLD = 0.4;
+const HOLD_THRESHOLD = 0.55;
+
+/**
+ * Grace period (ms) after pressing play during which gaze input is
+ * ignored and scroll runs at base WPM. Gives the user time to settle
+ * into reading position after tapping play (which often involves a
+ * head tilt that would otherwise trigger reverse scrolling).
+ */
+const PLAY_GRACE_MS = 800;
 
 function clampWpm(value: number): number {
   return Math.max(MIN_WPM, Math.min(MAX_WPM, value));
@@ -61,9 +69,9 @@ function clampWpm(value: number): number {
 /*  Hook                                                               */
 /* ------------------------------------------------------------------ */
 
-export function useEyeTrackEngine(
-  options: UseEyeTrackEngineOptions,
-): [EyeTrackState, EyeTrackActions] {
+export function useTrackEngine(
+  options: UseTrackEngineOptions,
+): [TrackState, TrackActions] {
   const {
     segments,
     totalSegments,
@@ -84,6 +92,7 @@ export function useEyeTrackEngine(
   const speedMultiplierRef = useRef(1.0);
   const scrollPositionRef = useRef(0);    // high-precision scroll accumulator
   const segCheckCounterRef = useRef(0);   // throttle segment detection
+  const playStartTimeRef = useRef(0);     // timestamp when play started (for grace period)
   const dpr = typeof window !== 'undefined' ? window.devicePixelRatio : 1;
 
   // Refs for rAF loop
@@ -185,27 +194,38 @@ export function useEyeTrackEngine(
       const dt = (timestamp - lastTimestampRef.current) / 1000;
       const gaze = gazeRef.current;
 
+      // During grace period after play, ignore gaze and scroll at base speed.
+      // This prevents accidental reverse from head movement while tapping play.
+      const elapsed = Date.now() - playStartTimeRef.current;
+      const inGracePeriod = elapsed < PLAY_GRACE_MS;
+
       // Compute target multiplier directly from gaze
       // neutral → 1.0x, down → up to 3x, up → down to -0.5x
       let targetMultiplier = 1.0;
-      if (gaze.direction === 'down') {
+      if (inGracePeriod) {
+        // Stay at 1.0x during grace period
+      } else if (gaze.direction === 'down') {
         targetMultiplier = 1.0 + 1.5 * gaze.intensity; // 1x → 2.5x
       } else if (gaze.direction === 'up') {
         if (gaze.intensity <= HOLD_THRESHOLD) {
-          // Hold zone: gentle tilt up = smoothly decelerate to stop
+          // Hold zone: gentle tilt up = smoothly decelerate to stop.
+          // Wide hold band (55% of intensity range) so pausing is easy.
           const holdProgress = gaze.intensity / HOLD_THRESHOLD; // 0→1 within hold band
           targetMultiplier = 1.0 - holdProgress; // 1x → 0x (stopped)
         } else {
-          // Reverse zone: beyond hold threshold = scroll backwards
+          // Reverse zone: beyond hold threshold = scroll backwards (gentle)
           const reverseProgress = (gaze.intensity - HOLD_THRESHOLD) / (1 - HOLD_THRESHOLD);
-          targetMultiplier = -1.0 * reverseProgress; // 0x → -1.0x
+          targetMultiplier = MIN_MULTIPLIER * reverseProgress; // 0x → -0.6x
         }
       }
       targetMultiplier = Math.max(MIN_MULTIPLIER, Math.min(MAX_MULTIPLIER, targetMultiplier));
 
       // Smooth the multiplier at 60fps for fluid transitions.
-      // τ=300ms: very gradual transitions, filters out micro-fluctuations.
-      const lerpRate = 1 - Math.exp(-dt / 0.30);
+      // Use a longer time constant when transitioning toward reverse
+      // to prevent accidental backwards scrolling from brief tilts.
+      const isDecelerating = targetMultiplier < speedMultiplierRef.current;
+      const tau = isDecelerating ? 0.45 : 0.30; // 450ms to slow/reverse, 300ms to speed up
+      const lerpRate = 1 - Math.exp(-dt / tau);
       speedMultiplierRef.current += (targetMultiplier - speedMultiplierRef.current) * lerpRate;
 
       // Base speed from WPM
@@ -243,17 +263,18 @@ export function useEyeTrackEngine(
     lastTimestampRef.current = 0;
     speedMultiplierRef.current = 1.0;
     segCheckCounterRef.current = 0;
+    playStartTimeRef.current = Date.now();
+    // Force re-sync on first tick: the tick loop will read container.scrollTop
+    // when pxPerSecPerWpmRef is 0, ensuring scrollPositionRef matches the
+    // actual DOM scroll position set by ScrollPlayingView's useLayoutEffect.
+    pxPerSecPerWpmRef.current = 0;
 
-    // Wait for ScrollPlayingView to mount and scroll to currentIndex,
-    // then sync our scroll position tracker and start the rAF loop.
-    // Triple-rAF: React render → mount effect → scrollIntoView settles
+    // Single rAF: ScrollPlayingView's useLayoutEffect scrolls synchronously
+    // during React commit (before paint), so by the next animation frame
+    // the container's scrollTop is already at the correct position.
     requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          scrollPositionRef.current = containerRef.current?.scrollTop ?? 0;
-          rafRef.current = requestAnimationFrame(tick);
-        });
-      });
+      scrollPositionRef.current = containerRef.current?.scrollTop ?? 0;
+      rafRef.current = requestAnimationFrame(tick);
     });
   }, [tick, containerRef]);
 
@@ -282,9 +303,15 @@ export function useEyeTrackEngine(
       const el = items.get(clamped);
       if (el) {
         el.scrollIntoView({ block: 'center', behavior: 'instant' });
+        // Sync the float accumulator so the rAF loop doesn't jump back
+        // to the old scroll position on the next tick.
+        const container = containerRef.current;
+        if (container) {
+          scrollPositionRef.current = container.scrollTop;
+        }
       }
     }
-  }, [itemOffsetsRef]);
+  }, [itemOffsetsRef, containerRef]);
 
   const setWpm = useCallback((value: number) => {
     setWpmState(clampWpm(value));
@@ -314,14 +341,14 @@ export function useEyeTrackEngine(
   const absoluteIndex = segments[currentIndex]?.segment_index ?? currentIndex;
   const progress = effectiveTotal > 0 ? absoluteIndex / effectiveTotal : 0;
 
-  const state: EyeTrackState = {
+  const state: TrackState = {
     currentIndex,
     isPlaying,
     wpm,
     progress,
   };
 
-  const actions: EyeTrackActions = {
+  const actions: TrackActions = {
     play,
     pause,
     togglePlayPause,

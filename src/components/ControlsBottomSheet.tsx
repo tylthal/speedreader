@@ -63,8 +63,8 @@ export default function ControlsBottomSheet({
   const [showChapterList, setShowChapterList] = useState(false);
   const [showModeList, setShowModeList] = useState(false);
 
-  const modeNames: Record<string, string> = { phrase: 'Phrase', rsvp: 'RSVP', scroll: 'Scroll', eyetrack: 'Eye Track' };
-  const allModes: ReadingMode[] = ['phrase', 'rsvp', 'scroll', 'eyetrack'];
+  const modeNames: Record<string, string> = { phrase: 'Phrase', rsvp: 'RSVP', scroll: 'Scroll', track: 'Track' };
+  const allModes: ReadingMode[] = ['phrase', 'rsvp', 'scroll', 'track'];
 
   const handleTogglePlay = () => {
     onTogglePlay();
@@ -205,9 +205,9 @@ export default function ControlsBottomSheet({
 
       </div>
 
-      {/* Eye track controls */}
-      {mode === 'eyetrack' && onGazeSensitivityChange && (
-        <div className="controls__eyetrack-row">
+      {/* Track mode controls */}
+      {mode === 'track' && onGazeSensitivityChange && (
+        <div className="controls__track-row">
           <label className="controls__sensitivity-label">
             Sensitivity
             <input
@@ -232,7 +232,7 @@ export default function ControlsBottomSheet({
               onClick={() => {
                 onRecalibrate();
                 haptics.tap();
-                announce('Recalibrating eye tracking');
+                announce('Recalibrating head tracking');
               }}
             >
               Recalibrate
