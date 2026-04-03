@@ -83,7 +83,6 @@ export function useEyeTrackEngine(
   const lastTimestampRef = useRef(0);
   const speedMultiplierRef = useRef(1.0);
   const scrollPositionRef = useRef(0);    // high-precision scroll accumulator
-  const savedScrollTopRef = useRef(0);   // preserves position across pause/resume
   const segCheckCounterRef = useRef(0);   // throttle segment detection
   const dpr = typeof window !== 'undefined' ? window.devicePixelRatio : 1;
 
@@ -245,30 +244,23 @@ export function useEyeTrackEngine(
     speedMultiplierRef.current = 1.0;
     segCheckCounterRef.current = 0;
 
-    // Wait for ScrollPlayingView to mount and do its initial scroll,
+    // Wait for ScrollPlayingView to mount and scroll to currentIndex,
     // then sync our scroll position tracker and start the rAF loop.
-    const savedPos = savedScrollTopRef.current;
-    // Double-rAF: first for React render, second for ScrollPlayingView's mount effect
+    // Triple-rAF: React render → mount effect → scrollIntoView settles
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
-        const container = containerRef.current;
-        if (container && savedPos > 0) {
-          // Resume from pause — restore exact position
-          container.scrollTop = savedPos;
-        }
-        // Sync our tracker to wherever the container actually is
-        scrollPositionRef.current = container?.scrollTop ?? 0;
-        rafRef.current = requestAnimationFrame(tick);
+        requestAnimationFrame(() => {
+          scrollPositionRef.current = containerRef.current?.scrollTop ?? 0;
+          rafRef.current = requestAnimationFrame(tick);
+        });
       });
     });
   }, [tick, containerRef]);
 
   const pause = useCallback(() => {
-    // Save scroll position before pausing so resume can restore it
-    savedScrollTopRef.current = containerRef.current?.scrollTop ?? scrollPositionRef.current;
     setIsPlaying(false);
     stopLoop();
-  }, [stopLoop, containerRef]);
+  }, [stopLoop]);
 
   const togglePlayPause = useCallback(() => {
     if (isPlaying) {
@@ -283,7 +275,6 @@ export function useEyeTrackEngine(
     setCurrentIndex(clamped);
     currentIndexRef.current = clamped;
     lastTimestampRef.current = 0;
-    savedScrollTopRef.current = 0; // reset so play() scrolls to the seeked segment
     onSegmentChangeRef.current?.(clamped);
 
     const items = itemOffsetsRef.current;

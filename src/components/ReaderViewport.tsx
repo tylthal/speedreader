@@ -9,6 +9,7 @@ import { useGazeTracker } from '../hooks/useGazeTracker';
 import { useProgressSaver } from '../hooks/useProgressSaver';
 import { useOrientationResilience } from '../hooks/useOrientationResilience';
 import { useKeyboardHandling } from '../hooks/useKeyboardHandling';
+import { useWakeLock } from '../hooks/useWakeLock';
 import { useNavigate } from 'react-router-dom';
 import { getPublication, getProgress } from '../api/client';
 import { useBookmarks } from '../hooks/useBookmarks';
@@ -602,6 +603,9 @@ function ActiveReader({
     onNextChapter: handleNextChapter,
     onPrevChapter: handlePrevChapter,
   });
+
+  /* ---- Keep screen awake during playback ---- */
+  useWakeLock(activeState.isPlaying || wasPlayingBeforeLost);
 
   /* ---- Signal playing state globally (for fading peripheral UI like ThemeToggle) ---- */
   useEffect(() => {
