@@ -1,15 +1,34 @@
 import { useEffect, useRef } from 'react';
+import { isNative } from '../lib/platform';
 
 /**
  * Prevents the screen from dimming/sleeping while active.
- * Acquires a Wake Lock when `active` is true, releases when false.
- * Re-acquires automatically when the page becomes visible again
- * (wake locks are released on visibility change by the browser).
+ * Uses @capacitor-community/keep-awake on native (Web Wake Lock API
+ * is unsupported in iOS WKWebView), falls back to Web Wake Lock on web.
  */
 export function useWakeLock(active: boolean): void {
   const lockRef = useRef<WakeLockSentinel | null>(null);
 
   useEffect(() => {
+    if (isNative()) {
+      // Native path: use KeepAwake plugin
+      if (active) {
+        import('@capacitor-community/keep-awake').then(({ KeepAwake }) => {
+          KeepAwake.keepAwake().catch(() => {});
+        });
+      } else {
+        import('@capacitor-community/keep-awake').then(({ KeepAwake }) => {
+          KeepAwake.allowSleep().catch(() => {});
+        });
+      }
+      return () => {
+        import('@capacitor-community/keep-awake').then(({ KeepAwake }) => {
+          KeepAwake.allowSleep().catch(() => {});
+        });
+      };
+    }
+
+    // Web path: use Wake Lock API
     if (!active) {
       lockRef.current?.release().catch(() => {});
       lockRef.current = null;

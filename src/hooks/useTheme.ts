@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 
-export type Theme = 'light' | 'dark' | 'bedtime' | 'system';
-export type ResolvedTheme = 'light' | 'dark' | 'bedtime';
+export type Theme = 'light' | 'dark' | 'bedtime' | 'evening' | 'forest' | 'ocean' | 'system';
+export type ResolvedTheme = 'light' | 'dark' | 'bedtime' | 'evening' | 'forest' | 'ocean';
 
 interface UseThemeReturn {
   theme: Theme;
@@ -11,6 +11,8 @@ interface UseThemeReturn {
 
 const STORAGE_KEY = 'speedreader-theme';
 const DARK_MQ = '(prefers-color-scheme: dark)';
+
+const ALL_THEMES: Theme[] = ['system', 'light', 'dark', 'evening', 'bedtime', 'forest', 'ocean'];
 
 function getSystemTheme(): ResolvedTheme {
   if (typeof window === 'undefined') return 'dark';
@@ -23,9 +25,12 @@ function resolveTheme(theme: Theme): ResolvedTheme {
 }
 
 const META_THEME_COLORS: Record<ResolvedTheme, string> = {
-  dark: '#1a1a2e',
-  light: '#f5f5f7',
+  dark: '#1C1C1E',
+  light: '#FAF9F6',
   bedtime: '#1a0f0a',
+  evening: '#1A1A2E',
+  forest: '#1A2118',
+  ocean: '#0F1923',
 };
 
 function applyTheme(resolved: ResolvedTheme) {
@@ -34,13 +39,23 @@ function applyTheme(resolved: ResolvedTheme) {
   if (metaThemeColor) {
     metaThemeColor.setAttribute('content', META_THEME_COLORS[resolved]);
   }
+
+  // Sync native status bar on Capacitor
+  import('../lib/platform').then(({ isNative }) => {
+    if (!isNative()) return;
+    import('@capacitor/status-bar').then(({ StatusBar, Style }) => {
+      const isDark = resolved !== 'light';
+      StatusBar.setStyle({ style: isDark ? Style.Dark : Style.Light }).catch(() => {});
+      StatusBar.setBackgroundColor({ color: META_THEME_COLORS[resolved] }).catch(() => {});
+    }).catch(() => {});
+  });
 }
 
 function readStoredTheme(): Theme {
   try {
     const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored === 'light' || stored === 'dark' || stored === 'bedtime' || stored === 'system') {
-      return stored;
+    if (stored && ALL_THEMES.includes(stored as Theme)) {
+      return stored as Theme;
     }
   } catch {
     // localStorage unavailable

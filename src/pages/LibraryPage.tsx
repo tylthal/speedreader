@@ -1,41 +1,36 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import { getPublications, uploadBook, getProgress, deletePublication } from '../api/client';
+import { useState, useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
+import {
+  getPublications,
+  uploadBook,
+  getProgress,
+  archivePublication,
+} from '../api/client';
 import type { Publication, ReadingProgress } from '../api/client';
-import StorageStatus from '../components/StorageStatus';
+import BookCard from '../components/BookCard';
+import EmptyState from '../components/EmptyState';
+import UploadFAB from '../components/UploadFAB';
+import ActionSheet, { type ActionSheetOption } from '../components/ActionSheet';
 
 export default function LibraryPage() {
   const [publications, setPublications] = useState<Publication[]>([]);
   const [progressMap, setProgressMap] = useState<Record<number, ReadingProgress>>({});
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
+  const [uploadPhase, setUploadPhase] = useState('');
+  const [uploadPercent, setUploadPercent] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const [deleting, setDeleting] = useState<number | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [actionSheet, setActionSheet] = useState<{
+    pub: Publication;
+  } | null>(null);
+  const [dragActive, setDragActive] = useState(false);
   const navigate = useNavigate();
-
-  const handleDelete = async (e: React.MouseEvent, pub: Publication) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (!confirm(`Delete "${pub.title}"? This cannot be undone.`)) return;
-    setDeleting(pub.id);
-    try {
-      await deletePublication(pub.id);
-      setPublications((prev) => prev.filter((p) => p.id !== pub.id));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Delete failed');
-    } finally {
-      setDeleting(null);
-    }
-  };
 
   const fetchPubs = useCallback(async () => {
     try {
       setLoading(true);
       const pubs = await getPublications();
-      setPublications(pubs);
 
-      // Fetch progress for all publications in parallel
       const progressResults = await Promise.allSettled(
         pubs.map((p) => getProgress(p.id))
       );
@@ -47,7 +42,7 @@ export default function LibraryPage() {
       });
       setProgressMap(map);
 
-      // Sort: most recently read first, then unread books by id descending
+      // Sort: most recently read first, then unread by id descending
       pubs.sort((a, b) => {
         const pa = map[a.id];
         const pb = map[b.id];
@@ -70,9 +65,14 @@ export default function LibraryPage() {
 
   const handleFileSelect = async (file: File) => {
     setUploading(true);
+    setUploadPhase('');
+    setUploadPercent(0);
     setError(null);
     try {
-      const pub = await uploadBook(file);
+      const pub = await uploadBook(file, (phase, percent) => {
+        setUploadPhase(phase);
+        setUploadPercent(percent);
+      });
       navigate(`/read/${pub.id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Upload failed');
@@ -81,140 +81,160 @@ export default function LibraryPage() {
     }
   };
 
-  const onInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) handleFileSelect(file);
+  const handleArchive = async (pub: Publication) => {
+    try {
+      await archivePublication(pub.id);
+      setPublications((prev) => prev.filter((p) => p.id !== pub.id));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Archive failed');
+    }
   };
 
-  const onDropZoneClick = () => {
-    fileInputRef.current?.click();
+  const handleTap = (pub: Publication) => {
+    navigate(`/read/${pub.id}`);
+  };
+
+  const handleLongPress = (pub: Publication, _rect: DOMRect) => {
+    setActionSheet({ pub });
+  };
+
+  const getActionSheetOptions = (): ActionSheetOption[] => {
+    if (!actionSheet) return [];
+    const { pub } = actionSheet;
+    return [
+      {
+        label: 'Continue reading',
+        icon: (
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            <polygon points="6,3 18,10 6,17" />
+          </svg>
+        ),
+        onSelect: () => navigate(`/read/${pub.id}`),
+      },
+      {
+        label: 'Archive',
+        icon: (
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="2" y="3" width="16" height="4" rx="1" />
+            <path d="M4 7v8a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7" />
+            <path d="M8 11h4" />
+          </svg>
+        ),
+        onSelect: () => handleArchive(pub),
+      },
+    ];
   };
 
   const onDragOver = (e: React.DragEvent) => {
     e.preventDefault();
+    setDragActive(true);
   };
+
+  const onDragLeave = () => setDragActive(false);
 
   const onDrop = (e: React.DragEvent) => {
     e.preventDefault();
+    setDragActive(false);
     const file = e.dataTransfer.files[0];
     if (file) handleFileSelect(file);
   };
 
   return (
-    <div className="library" role="main" aria-label="Book library" id="main-content">
-      <div className="library__header">
-        <h1 className="library__title">Library</h1>
-        <button
-          className="library__refresh-btn"
-          onClick={() => window.location.reload()}
-          aria-label="Refresh page"
-        >
-          ↻
-        </button>
-      </div>
-
-      {/* Upload drop zone */}
-      <div
-        className="library__drop-zone"
-        onClick={onDropZoneClick}
-        onDragOver={onDragOver}
-        onDrop={onDrop}
-      >
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept=".epub,.pdf,.mobi,.azw3,.txt,.html,.htm,.md,.fb2,.rtf,.docx,.djvu,.cbz,.cbr"
-          onChange={onInputChange}
-          style={{ display: 'none' }}
-        />
-        <p className="library__drop-zone-text">
-          <button
-            type="button"
-            className="library__upload-btn"
-            onClick={(e) => { e.stopPropagation(); fileInputRef.current?.click(); }}
-            aria-label="Upload EPUB book"
-          >
-            Tap to upload
-          </button>{' '}
-          or drag a book file here
-        </p>
-        {uploading && <p className="library__uploading">Uploading...</p>}
-        {error && <p className="library__error">{error}</p>}
-      </div>
-
-      <StorageStatus />
-
-      {/* Publications list */}
-      {loading ? (
-        <div className="library__empty">Loading library...</div>
-      ) : publications.length === 0 ? (
-        <div className="library__empty">
-          No books yet. Upload a book to get started.
+    <div
+      className="app-page"
+      role="main"
+      aria-label="Book library"
+      id="main-content"
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+    >
+      {/* Drag overlay */}
+      {dragActive && (
+        <div className="drag-overlay">
+          <div className="drag-overlay__content">
+            <svg width="48" height="48" viewBox="0 0 48 48" fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round">
+              <line x1="24" y1="8" x2="24" y2="40" />
+              <line x1="8" y1="24" x2="40" y2="24" />
+            </svg>
+            <p>Drop your book here</p>
+          </div>
         </div>
-      ) : (
-        <div className="library__list">
-          {publications.map((pub) => (
-            <Link
-              key={pub.id}
-              to={`/read/${pub.id}`}
-              className="library__card"
-              role="article"
-              aria-label={`${pub.title} by ${pub.author}`}
-            >
-              <div className="library__card-header">
-                <div className="library__card-title">{pub.title}</div>
-                <button
-                  className="library__card-delete"
-                  onClick={(e) => handleDelete(e, pub)}
-                  disabled={deleting === pub.id}
-                  aria-label={`Delete ${pub.title}`}
-                >
-                  {deleting === pub.id ? '...' : '\u00D7'}
-                </button>
-              </div>
-              <div className="library__card-author">
-                {pub.author}
-                {pub.filename && (
-                  <span className="library__card-format">
-                    {pub.filename.split('.').pop()?.toUpperCase()}
-                  </span>
-                )}
-              </div>
-              <div className="library__card-meta">
-                {pub.content_type === 'image'
-                  ? `${pub.total_pages.toLocaleString()} pages`
-                  : `${pub.total_segments.toLocaleString()} segments`
-                }
-                {progressMap[pub.id] && pub.content_type === 'image' && pub.total_pages > 0 && (
-                  <span className="library__card-progress-text">
-                    {' · '}{Math.round(((progressMap[pub.id].segment_index + 1) / pub.total_pages) * 100)}% read
-                  </span>
-                )}
-                {progressMap[pub.id] && pub.content_type !== 'image' && pub.total_segments > 0 && (
-                  <span className="library__card-progress-text">
-                    {' · '}{Math.round((progressMap[pub.id].segments_read / pub.total_segments) * 100)}% read
-                  </span>
-                )}
-              </div>
-              {progressMap[pub.id] && pub.content_type === 'image' && pub.total_pages > 0 && (
-                <div className="library__card-progress-bar">
-                  <div
-                    className="library__card-progress-fill"
-                    style={{ width: `${Math.min(100, ((progressMap[pub.id].segment_index + 1) / pub.total_pages) * 100)}%` }}
-                  />
-                </div>
-              )}
-              {progressMap[pub.id] && pub.content_type !== 'image' && pub.total_segments > 0 && (
-                <div className="library__card-progress-bar">
-                  <div
-                    className="library__card-progress-fill"
-                    style={{ width: `${Math.min(100, (progressMap[pub.id].segments_read / pub.total_segments) * 100)}%` }}
-                  />
-                </div>
-              )}
-            </Link>
+      )}
+
+      <header className="page-header">
+        <h1 className="page-header__title">Library</h1>
+        <p className="page-header__subtitle">
+          {publications.length === 0
+            ? 'Add a book to get started'
+            : `${publications.length} book${publications.length !== 1 ? 's' : ''}`}
+        </p>
+      </header>
+
+      {error && (
+        <div className="toast toast--error" role="alert">
+          <span>{error}</span>
+          <button className="toast__dismiss" onClick={() => setError(null)} aria-label="Dismiss">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <line x1="4" y1="4" x2="12" y2="12" /><line x1="12" y1="4" x2="4" y2="12" />
+            </svg>
+          </button>
+        </div>
+      )}
+
+      {loading ? (
+        <div className="book-list">
+          {[1, 2, 3].map((i) => (
+            <div key={i} className="book-card__skeleton">
+              <div className="skeleton skeleton--title" />
+              <div className="skeleton skeleton--text" />
+              <div className="skeleton skeleton--text skeleton--short" />
+            </div>
           ))}
         </div>
+      ) : publications.length === 0 ? (
+        <EmptyState
+          icon="library"
+          title="Your library is empty"
+          description="Upload an EPUB, PDF, or other supported format to start reading. Tap the + button below or drag a file here."
+        />
+      ) : (
+        <div className="book-list">
+          {/* Swipe hint for first-time users */}
+          {publications.length > 0 && publications.length <= 3 && (
+            <p className="book-list__hint">
+              Swipe left to archive &middot; Long press for options
+            </p>
+          )}
+          {publications.map((pub) => (
+            <BookCard
+              key={pub.id}
+              pub={pub}
+              progress={progressMap[pub.id]}
+              onTap={handleTap}
+              onSwipeAction={handleArchive}
+              onLongPress={handleLongPress}
+              swipeLabel="Archive"
+              swipeColor="accent"
+            />
+          ))}
+        </div>
+      )}
+
+      <UploadFAB
+        onFileSelect={handleFileSelect}
+        uploading={uploading}
+        uploadPhase={uploadPhase}
+        uploadPercent={uploadPercent}
+      />
+
+      {actionSheet && (
+        <ActionSheet
+          title={actionSheet.pub.title}
+          subtitle={actionSheet.pub.author || 'Unknown author'}
+          options={getActionSheetOptions()}
+          onClose={() => setActionSheet(null)}
+        />
       )}
     </div>
   );

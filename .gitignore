@@ -50,3 +50,14 @@ credentials.json
 # App data
 data/*.db
 data/uploads/
+
+# Capacitor native build artifacts
+ios/App/Pods/
+android/.gradle/
+android/app/build/
+android/capacitor-cordova-android-plugins/build/
+
+# iOS signing (never commit)
+*.p12
+*.mobileprovision
+*.p8

@@ -18,46 +18,6 @@ export default defineConfig({
         // Runtime caching rules
         runtimeCaching: [
           {
-            // Cache segment batch API responses
-            urlPattern: /\/api\/v1\/publications\/\d+\/chapters\/\d+\/segments/,
-            handler: 'StaleWhileRevalidate',
-            options: {
-              cacheName: 'segment-cache',
-              expiration: {
-                maxEntries: 500,
-                maxAgeSeconds: 60 * 60 * 24 * 7, // 7 days
-              },
-            },
-          },
-          {
-            // Cache publication metadata (GET only — must not intercept DELETE)
-            urlPattern: /\/api\/v1\/publications/,
-            method: 'GET',
-            handler: 'StaleWhileRevalidate',
-            options: {
-              cacheName: 'publication-cache',
-              expiration: {
-                maxEntries: 50,
-                maxAgeSeconds: 60 * 60 * 24, // 1 day
-              },
-            },
-          },
-          {
-            // Cache progress data — only cache successful responses
-            urlPattern: /\/api\/v1\/progress/,
-            handler: 'NetworkFirst',
-            options: {
-              cacheName: 'progress-cache',
-              expiration: {
-                maxEntries: 50,
-                maxAgeSeconds: 60 * 60 * 24,
-              },
-              cacheableResponse: {
-                statuses: [200],
-              },
-            },
-          },
-          {
             // Cache MediaPipe WASM runtime files
             urlPattern: /cdn\.jsdelivr\.net\/npm\/@mediapipe/,
             handler: 'CacheFirst',
@@ -92,10 +52,12 @@ export default defineConfig({
       manifest: {
         name: 'SpeedReader',
         short_name: 'SpeedReader',
-        theme_color: '#1a1a2e',
-        background_color: '#1a1a2e',
+        description: 'A speed reading app with RSVP, eye-tracking pace control, and offline support.',
+        theme_color: '#1C1C1E',
+        background_color: '#1C1C1E',
         display: 'standalone',
         start_url: '/',
+        categories: ['books', 'education', 'productivity'],
         icons: [
           {
             src: '/pwa-192x192.png',
@@ -112,15 +74,43 @@ export default defineConfig({
             sizes: 'any',
             type: 'image/svg+xml',
           },
+          {
+            src: '/pwa-maskable-192x192.png',
+            sizes: '192x192',
+            type: 'image/png',
+            purpose: 'maskable',
+          },
+          {
+            src: '/pwa-maskable-512x512.png',
+            sizes: '512x512',
+            type: 'image/png',
+            purpose: 'maskable',
+          },
+        ],
+        screenshots: [
+          {
+            src: '/screenshots/desktop-wide.png',
+            sizes: '1920x1080',
+            type: 'image/png',
+            form_factor: 'wide',
+            label: 'SpeedReader library view',
+          },
+          {
+            src: '/screenshots/mobile-narrow.png',
+            sizes: '390x844',
+            type: 'image/png',
+            form_factor: 'narrow',
+            label: 'SpeedReader mobile library',
+          },
         ],
       },
     }),
   ],
+  worker: {
+    format: 'es',
+  },
   server: {
     allowedHosts: true,
-    proxy: {
-      '/api': 'http://localhost:3000',
-    },
   },
   resolve: {
     alias: {

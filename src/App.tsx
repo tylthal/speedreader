@@ -1,16 +1,22 @@
-import { Routes, Route } from 'react-router-dom'
+import { Routes, Route, useLocation } from 'react-router-dom'
 import LibraryPage from './pages/LibraryPage'
+import ArchivePage from './pages/ArchivePage'
+import SettingsPage from './pages/SettingsPage'
 import ReaderPage from './pages/ReaderPage'
+import BottomNav from './components/BottomNav'
 import OfflineStatusToast from './components/OfflineStatusToast'
 import InstallNudgeBanner from './components/InstallNudgeBanner'
 import PerfOverlay from './components/PerfOverlay'
-import ThemeToggle from './components/ThemeToggle'
 import { A11yAnnouncerProvider } from './components/A11yAnnouncer'
 import { useTheme } from './hooks/useTheme'
 
+/** Pages where the bottom nav should be shown */
+const NAV_PATHS = ['/', '/archive', '/settings']
+
 export default function App() {
-  // Initialize theme on mount (applies data-theme attribute & meta tag)
   useTheme();
+  const location = useLocation();
+  const showNav = NAV_PATHS.includes(location.pathname);
 
   return (
     <A11yAnnouncerProvider>
@@ -18,11 +24,15 @@ export default function App() {
       <OfflineStatusToast />
       <InstallNudgeBanner />
       <PerfOverlay />
-      <ThemeToggle />
-      <Routes>
-        <Route path="/" element={<LibraryPage />} />
-        <Route path="/read/:pubId" element={<ReaderPage />} />
-      </Routes>
+      <div className={`app-shell${showNav ? ' app-shell--with-nav' : ''}`}>
+        <Routes>
+          <Route path="/" element={<LibraryPage />} />
+          <Route path="/archive" element={<ArchivePage />} />
+          <Route path="/settings" element={<SettingsPage />} />
+          <Route path="/read/:pubId" element={<ReaderPage />} />
+        </Routes>
+      </div>
+      {showNav && <BottomNav />}
     </A11yAnnouncerProvider>
   )
 }

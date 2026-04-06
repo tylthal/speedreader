@@ -1,255 +1,130 @@
-export type ContentType = 'text' | 'image'
+import type { SpeedReaderClient } from './interface'
+import { LocalClient } from '../db/localClient'
 
-export interface Publication {
-  id: number
-  title: string
-  author: string
-  filename: string
-  status: string
-  total_segments: number
-  content_type: ContentType
-  total_pages: number
-  created_at: string
+// Re-export all types so consumers don't need to change imports
+export type {
+  ContentType,
+  Publication,
+  PublicationDetail,
+  Chapter,
+  Segment,
+  SegmentBatch,
+  SegmentInlineImage,
+  ImagePage,
+  ImagePageBatch,
+  ReadingProgress,
+  Bookmark,
+  Highlight,
+  ProgressInput,
+  BookmarkInput,
+  HighlightInput,
+} from './types'
+
+export type { SpeedReaderClient } from './interface'
+
+// --- Client ---
+
+let _client: SpeedReaderClient | null = null
+
+export async function initClient(): Promise<void> {
+  _client = new LocalClient()
 }
 
-export interface ImagePage {
-  id: number
-  chapter_id: number
-  page_index: number
-  image_path: string
-  width: number | null
-  height: number | null
-  mime_type: string
-}
-
-export interface ImagePageBatch {
-  chapter_id: number
-  start_index: number
-  end_index: number
-  pages: ImagePage[]
-  total_pages: number
-}
-
-export interface Chapter {
-  id: number
-  publication_id: number
-  chapter_index: number
-  title: string
-}
-
-export interface PublicationDetail extends Publication {
-  chapters: Chapter[]
-}
-
-export interface SegmentInlineImage {
-  image_url: string
-  alt: string
-  width: number
-  height: number
-}
-
-export interface Segment {
-  id: number
-  chapter_id: number
-  segment_index: number
-  text: string
-  word_count: number
-  duration_ms: number
-  inline_images?: SegmentInlineImage[] | null
-}
-
-export interface SegmentBatch {
-  chapter_id: number
-  start_index: number
-  end_index: number
-  segments: Segment[]
-  total_segments: number
-}
-
-export interface ReadingProgress {
-  publication_id: number
-  chapter_id: number
-  segment_index: number
-  word_index: number
-  wpm: number
-  reading_mode: string
-  updated_at: string
-  segments_read: number
-}
-
-export interface Bookmark {
-  id: number
-  publication_id: number
-  chapter_id: number
-  segment_index: number
-  note: string
-  created_at: string
-}
-
-export interface Highlight {
-  id: number
-  publication_id: number
-  chapter_id: number
-  segment_index: number
-  text: string
-  color: string
-  note: string
-  created_at: string
-}
-
-const BASE = '/api/v1'
-
-function getSaveDataHeaders(): Record<string, string> {
-  const headers: Record<string, string> = {};
-  const conn = (navigator as any).connection;
-  if (conn?.saveData) {
-    headers['Save-Data'] = 'on';
+function getClient(): SpeedReaderClient {
+  if (!_client) {
+    _client = new LocalClient()
   }
-  return headers;
+  return _client
 }
 
-export async function uploadBook(file: File): Promise<Publication> {
-  const form = new FormData()
-  form.append('file', file)
-  const res = await fetch(`${BASE}/publications/upload`, {
-    method: 'POST',
-    body: form,
-  })
-  if (!res.ok) throw new Error(`Upload failed: ${res.status}`)
-  return res.json()
+// --- Public API (unchanged signatures for all consumers) ---
+
+export type { UploadProgressCallback } from '../db/localClient'
+
+export function uploadBook(
+  file: File,
+  onProgress?: (phase: string, percent: number) => void,
+) {
+  const client = getClient() as LocalClient
+  if (onProgress) client.onUploadProgress = onProgress
+  const result = client.uploadBook(file)
+  result.finally(() => { client.onUploadProgress = undefined })
+  return result
 }
 
-export async function getPublications(): Promise<Publication[]> {
-  const res = await fetch(`${BASE}/publications/`, {
-    headers: getSaveDataHeaders(),
-  })
-  if (!res.ok) throw new Error(`Failed to fetch publications: ${res.status}`)
-  return res.json()
+export function getPublications() {
+  return getClient().getPublications()
 }
 
-export async function deletePublication(id: number): Promise<void> {
-  const res = await fetch(`${BASE}/publications/${id}`, {
-    method: 'DELETE',
-    // Prevent service worker from intercepting mutation requests
-    cache: 'no-store',
-  })
-  if (!res.ok) throw new Error(`Failed to delete publication: ${res.status}`)
+export function getArchivedPublications() {
+  return getClient().getArchivedPublications()
 }
 
-export async function getPublication(id: number): Promise<PublicationDetail> {
-  const res = await fetch(`${BASE}/publications/${id}`, {
-    headers: getSaveDataHeaders(),
-  })
-  if (!res.ok) throw new Error(`Failed to fetch publication: ${res.status}`)
-  return res.json()
+export function archivePublication(id: number) {
+  return getClient().archivePublication(id)
 }
 
-export async function getSegments(
-  pubId: number,
-  chapterId: number,
-  start: number,
-  end: number,
-): Promise<SegmentBatch> {
-  const params = new URLSearchParams({
-    start: String(start),
-    end: String(end),
-  })
-  const res = await fetch(`${BASE}/publications/${pubId}/chapters/${chapterId}/segments?${params}`, {
-    headers: getSaveDataHeaders(),
-  })
-  if (!res.ok) throw new Error(`Failed to fetch segments: ${res.status}`)
-  return res.json()
+export function unarchivePublication(id: number) {
+  return getClient().unarchivePublication(id)
 }
 
-export async function getImagePages(
-  pubId: number,
-  chapterId: number,
-  start: number,
-  end: number,
-): Promise<ImagePageBatch> {
-  const params = new URLSearchParams({
-    start: String(start),
-    end: String(end),
-  })
-  const res = await fetch(`${BASE}/publications/${pubId}/chapters/${chapterId}/pages?${params}`, {
-    headers: getSaveDataHeaders(),
-  })
-  if (!res.ok) throw new Error(`Failed to fetch pages: ${res.status}`)
-  return res.json()
+export function deletePublication(id: number) {
+  return getClient().deletePublication(id)
 }
 
-export function getImageUrl(imagePath: string): string {
-  return `${BASE}/images/${imagePath}`
+export function getPublication(id: number) {
+  return getClient().getPublication(id)
 }
 
-export async function getProgress(pubId: number): Promise<ReadingProgress | null> {
-  const res = await fetch(`${BASE}/progress/publications/${pubId}`)
-  if (res.status === 404) return null
-  if (!res.ok) throw new Error(`Failed to fetch progress: ${res.status}`)
-  return res.json()
+export function getSegments(pubId: number, chapterId: number, start: number, end: number) {
+  return getClient().getSegments(pubId, chapterId, start, end)
 }
 
-export async function saveProgress(
+export function getImagePages(pubId: number, chapterId: number, start: number, end: number) {
+  return getClient().getImagePages(pubId, chapterId, start, end)
+}
+
+export function getImageUrl(imagePath: string) {
+  return getClient().getImageUrl(imagePath)
+}
+
+export function getProgress(pubId: number) {
+  return getClient().getProgress(pubId)
+}
+
+export function saveProgress(
   pubId: number,
   data: { chapter_id: number; segment_index: number; word_index: number; wpm: number; reading_mode: string },
-): Promise<ReadingProgress> {
-  const res = await fetch(`${BASE}/progress/publications/${pubId}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data),
-  })
-  if (!res.ok) throw new Error(`Failed to save progress: ${res.status}`)
-  return res.json()
+) {
+  return getClient().saveProgress(pubId, data)
 }
 
-// Bookmarks
-
-export async function createBookmark(
+export function createBookmark(
   pubId: number,
   data: { chapter_id: number; segment_index: number; note?: string },
-): Promise<Bookmark> {
-  const res = await fetch(`${BASE}/bookmarks/publications/${pubId}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data),
-  })
-  if (!res.ok) throw new Error(`Failed to create bookmark: ${res.status}`)
-  return res.json()
+) {
+  return getClient().createBookmark(pubId, data)
 }
 
-export async function getBookmarks(pubId: number): Promise<Bookmark[]> {
-  const res = await fetch(`${BASE}/bookmarks/publications/${pubId}`)
-  if (!res.ok) throw new Error(`Failed to fetch bookmarks: ${res.status}`)
-  return res.json()
+export function getBookmarks(pubId: number) {
+  return getClient().getBookmarks(pubId)
 }
 
-export async function deleteBookmark(id: number): Promise<void> {
-  const res = await fetch(`${BASE}/bookmarks/${id}`, { method: 'DELETE' })
-  if (!res.ok) throw new Error(`Failed to delete bookmark: ${res.status}`)
+export function deleteBookmark(id: number) {
+  return getClient().deleteBookmark(id)
 }
 
-// Highlights
-
-export async function createHighlight(
+export function createHighlight(
   pubId: number,
   data: { chapter_id: number; segment_index: number; text: string; color?: string; note?: string },
-): Promise<Highlight> {
-  const res = await fetch(`${BASE}/highlights/publications/${pubId}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data),
-  })
-  if (!res.ok) throw new Error(`Failed to create highlight: ${res.status}`)
-  return res.json()
+) {
+  return getClient().createHighlight(pubId, data)
 }
 
-export async function getHighlights(pubId: number): Promise<Highlight[]> {
-  const res = await fetch(`${BASE}/highlights/publications/${pubId}`)
-  if (!res.ok) throw new Error(`Failed to fetch highlights: ${res.status}`)
-  return res.json()
+export function getHighlights(pubId: number) {
+  return getClient().getHighlights(pubId)
 }
 
-export async function deleteHighlight(id: number): Promise<void> {
-  const res = await fetch(`${BASE}/highlights/${id}`, { method: 'DELETE' })
-  if (!res.ok) throw new Error(`Failed to delete highlight: ${res.status}`)
+export function deleteHighlight(id: number) {
+  return getClient().deleteHighlight(id)
 }

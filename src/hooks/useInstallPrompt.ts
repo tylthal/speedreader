@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { Capacitor } from '@capacitor/core'
 
 type Platform = 'ios' | 'android' | 'desktop' | 'unknown'
 
@@ -34,6 +35,18 @@ function detectInstalled(): boolean {
 }
 
 export function useInstallPrompt(): InstallPromptState {
+  // On native Capacitor apps, there is no install prompt
+  if (Capacitor.isNativePlatform()) {
+    return {
+      canInstall: false,
+      isInstalled: true,
+      platform: Capacitor.getPlatform() === 'ios' ? 'ios' : 'android',
+      install: async () => {},
+      dismiss: () => {},
+      isDismissed: false,
+    };
+  }
+
   const [platform] = useState<Platform>(detectPlatform)
   const [isInstalled] = useState<boolean>(detectInstalled)
   const [isDismissed, setIsDismissed] = useState<boolean>(() => {
