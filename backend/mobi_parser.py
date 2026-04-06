@@ -6,16 +6,18 @@ import os
 import re
 import shutil
 import tempfile
+import uuid
 
 import mobi
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 
-from backend.epub_parser import ParsedBook, ParsedChapter
+from backend.parser_types import InlineImage, ParsedBook, ParsedChapter, save_inline_image
 
 _WHITESPACE_RE = re.compile(r"\s+")
 _MIN_CHAPTER_LENGTH = 50
 _FALLBACK_WORD_LIMIT = 3000
 _HEADING_TAGS = ("h1", "h2", "h3")
+_MIN_IMAGE_SIZE = 500  # bytes — skip tiny decoration images
 
 
 def _normalize_text(text: str) -> str:
@@ -23,11 +25,85 @@ def _normalize_text(text: str) -> str:
     return _WHITESPACE_RE.sub(" ", text).strip()
 
 
+def _find_extracted_images(extracted_dir: str) -> dict[str, str]:
+    """Build a mapping of basename → absolute path for images in extracted dir."""
+    image_exts = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg"}
+    images: dict[str, str] = {}
+    if not extracted_dir or not os.path.isdir(extracted_dir):
+        return images
+    for root, _dirs, files in os.walk(extracted_dir):
+        for fname in files:
+            if os.path.splitext(fname.lower())[1] in image_exts:
+                abs_path = os.path.join(root, fname)
+                images[fname] = abs_path
+                # Also store path relative to extracted dir
+                rel = os.path.relpath(abs_path, extracted_dir)
+                images[rel] = abs_path
+    return images
+
+
+def _replace_images(
+    soup: BeautifulSoup,
+    extracted_images: dict[str, str],
+    pub_uuid: str,
+    counter_start: int,
+) -> tuple[int, list[InlineImage]]:
+    """Replace <img> tags with placeholders, saving referenced images to disk."""
+    inline_images: list[InlineImage] = []
+    counter = counter_start
+
+    for img_tag in soup.find_all("img"):
+        src = img_tag.get("src", "") or img_tag.get("recindex", "")
+        if not src:
+            img_tag.decompose()
+            continue
+
+        # Try to find the image file
+        basename = os.path.basename(src)
+        abs_path = extracted_images.get(src) or extracted_images.get(basename)
+
+        if not abs_path or not os.path.isfile(abs_path):
+            img_tag.decompose()
+            continue
+
+        # Skip tiny images (icons, spacers)
+        if os.path.getsize(abs_path) < _MIN_IMAGE_SIZE:
+            img_tag.decompose()
+            continue
+
+        # Detect MIME type
+        ext = os.path.splitext(abs_path.lower())[1]
+        mime_map = {
+            ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+            ".png": "image/png", ".gif": "image/gif",
+            ".webp": "image/webp", ".svg": "image/svg+xml",
+        }
+        mime = mime_map.get(ext, "image/jpeg")
+
+        with open(abs_path, "rb") as f:
+            data = f.read()
+
+        placeholder = f"{{{{IMG_{counter}}}}}"
+        rel_path, width, height = save_inline_image(data, pub_uuid, counter, mime)
+
+        alt = img_tag.get("alt", "")
+        inline_images.append(InlineImage(
+            placeholder=placeholder,
+            image_path=rel_path,
+            alt=alt,
+            width=width,
+            height=height,
+            mime_type=mime,
+        ))
+        img_tag.replace_with(f" {placeholder} ")
+        counter += 1
+
+    return counter, inline_images
+
+
 def _split_by_headings(soup: BeautifulSoup) -> list[ParsedChapter]:
     """Split HTML content into chapters using heading tags and page breaks."""
     chapters: list[ParsedChapter] = []
-
-    # Collect all potential break points: headings and Kindle page breaks
     break_tags = soup.find_all(_HEADING_TAGS + ("mbp:pagebreak",))
 
     if not break_tags:
@@ -35,19 +111,12 @@ def _split_by_headings(soup: BeautifulSoup) -> list[ParsedChapter]:
 
     chapter_counter = 0
     for i, tag in enumerate(break_tags):
-        # Determine chapter title
         if tag.name in _HEADING_TAGS:
             title = tag.get_text(strip=True)
         else:
             title = ""
 
-        # Gather text between this break and the next
         content_parts: list[str] = []
-        # Include text from the tag itself if it's a heading
-        if tag.name in _HEADING_TAGS:
-            pass  # title already captured
-
-        # Walk siblings until next break tag
         sibling = tag.next_sibling
         next_break = break_tags[i + 1] if i + 1 < len(break_tags) else None
 
@@ -95,38 +164,17 @@ def _split_by_word_count(text: str, limit: int = _FALLBACK_WORD_LIMIT) -> list[P
 
 
 def parse_mobi(file_path: str) -> ParsedBook:
-    """Parse a MOBI file into chapters.
-
-    Parameters
-    ----------
-    file_path:
-        Path to a ``.mobi`` file on disk.
-
-    Returns
-    -------
-    ParsedBook
-        Dataclass containing title, author, and a list of ParsedChapter
-        objects extracted from the MOBI content.
-
-    Raises
-    ------
-    FileNotFoundError
-        If *file_path* does not exist.
-    ValueError
-        If the MOBI file cannot be unpacked or parsed.
-    """
+    """Parse a MOBI file into chapters with inline images."""
     if not os.path.isfile(file_path):
         raise FileNotFoundError(f"MOBI file not found: {file_path}")
 
     tmp_dir = tempfile.mkdtemp(prefix="mobi_parse_")
     try:
-        # mobi.extract returns (tempdir, filepath_to_extracted_content)
         try:
             tempdir, extracted_path = mobi.extract(file_path)
         except Exception as exc:
             raise ValueError(f"Failed to unpack MOBI file: {exc}") from exc
 
-        # Read the extracted HTML content
         if not extracted_path or not os.path.isfile(extracted_path):
             raise ValueError("MOBI extraction produced no readable content.")
 
@@ -148,31 +196,50 @@ def parse_mobi(file_path: str) -> ParsedBook:
         if not title:
             title = "Untitled"
 
-        # MOBI metadata for author is not reliably in the HTML; default it.
         author_tag = soup.find("meta", attrs={"name": "author"})
         author = author_tag.get("content", "").strip() if author_tag else ""
         if not author:
-            # Try dc:creator
             dc_tag = soup.find("meta", attrs={"name": "dc:creator"})
             author = dc_tag.get("content", "").strip() if dc_tag else "Unknown Author"
         if not author:
             author = "Unknown Author"
 
+        # -- extract images --------------------------------------------------
+        pub_uuid = str(uuid.uuid4())
+        extracted_dir = os.path.dirname(extracted_path)
+        extracted_images = _find_extracted_images(extracted_dir)
+        # Also check the mobi tempdir
+        if tempdir and tempdir != extracted_dir:
+            extracted_images.update(_find_extracted_images(tempdir))
+
+        image_counter, all_inline_images = _replace_images(
+            soup, extracted_images, pub_uuid, 0,
+        )
+
         # -- split into chapters ---------------------------------------------
         chapters = _split_by_headings(soup)
 
         if not chapters:
-            # Fallback: extract all text and split by word count
             full_text = _normalize_text(soup.get_text(separator=" "))
             if len(full_text) < _MIN_CHAPTER_LENGTH:
                 return ParsedBook(title=title, author=author, chapters=[])
             chapters = _split_by_word_count(full_text)
 
+        # Distribute inline images to chapters based on placeholder presence
+        if all_inline_images:
+            img_map = {img.placeholder: img for img in all_inline_images}
+            import re as _re
+            _ph_re = _re.compile(r"\{\{IMG_(\d+)\}\}")
+            for chapter in chapters:
+                matches = _ph_re.findall(chapter.text)
+                for m in matches:
+                    placeholder = f"{{{{IMG_{m}}}}}"
+                    if placeholder in img_map:
+                        chapter.inline_images.append(img_map[placeholder])
+
         return ParsedBook(title=title, author=author, chapters=chapters)
 
     finally:
-        # Clean up temp directories
         shutil.rmtree(tmp_dir, ignore_errors=True)
-        # Also clean up the directory created by mobi.extract
         if "tempdir" in dir() and tempdir and os.path.isdir(tempdir):
             shutil.rmtree(tempdir, ignore_errors=True)

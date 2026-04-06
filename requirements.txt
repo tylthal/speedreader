@@ -7,3 +7,7 @@ lxml
 aiosqlite
 pymupdf
 mobi
+striprtf
+python-docx
+rarfile
+Pillow

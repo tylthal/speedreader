@@ -81,11 +81,31 @@ async def init_db():
         for col_sql in [
             "ALTER TABLE reading_progress ADD COLUMN reading_mode TEXT NOT NULL DEFAULT 'phrase'",
             "ALTER TABLE reading_progress ADD COLUMN word_index INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE publications ADD COLUMN content_type TEXT NOT NULL DEFAULT 'text'",
+            "ALTER TABLE publications ADD COLUMN total_pages INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE segments ADD COLUMN inline_images TEXT",
         ]:
             try:
                 await db.execute(col_sql)
             except Exception:
                 pass  # column already exists
+
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS image_pages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chapter_id INTEGER NOT NULL REFERENCES chapters(id),
+                page_index INTEGER NOT NULL,
+                image_path TEXT NOT NULL,
+                width INTEGER,
+                height INTEGER,
+                mime_type TEXT NOT NULL DEFAULT 'image/jpeg'
+            )
+        """)
+
+        await db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_image_pages_chapter
+            ON image_pages(chapter_id, page_index)
+        """)
 
         await db.execute("""
             CREATE TABLE IF NOT EXISTS bookmarks (

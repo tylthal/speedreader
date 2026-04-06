@@ -20,6 +20,10 @@ app.add_middleware(
 )
 
 
+IMAGES_DIR = "/workspace/data/images"
+os.makedirs(IMAGES_DIR, exist_ok=True)
+
+
 @app.on_event("startup")
 async def startup():
     await init_db()
@@ -33,6 +37,10 @@ app.include_router(segments.router, prefix="/api/v1")
 app.include_router(progress.router, prefix="/api/v1")
 app.include_router(bookmarks.router, prefix="/api/v1")
 app.include_router(highlights.router, prefix="/api/v1")
+
+
+# Serve extracted comic/image pages
+app.mount("/api/v1/images", StaticFiles(directory=IMAGES_DIR), name="images")
 
 
 @app.get("/api/health")

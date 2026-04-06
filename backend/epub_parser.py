@@ -8,25 +8,17 @@ Handles multiple chapter detection strategies:
 
 from __future__ import annotations
 
+import os
 import re
-from dataclasses import dataclass
-
+import uuid
 import ebooklib
 from ebooklib import epub
 from bs4 import BeautifulSoup, Tag
 
+from backend.parser_types import InlineImage, ParsedBook, ParsedChapter, save_inline_image
 
-@dataclass
-class ParsedChapter:
-    title: str
-    text: str
-
-
-@dataclass
-class ParsedBook:
-    title: str
-    author: str
-    chapters: list[ParsedChapter]
+# Placeholder pattern for inline images in extracted text
+_IMG_PLACEHOLDER_RE = re.compile(r"\{\{IMG_(\d+)\}\}")
 
 
 _WHITESPACE_RE = re.compile(r"\s+")
@@ -46,6 +38,92 @@ _SKIP_PATTERNS = re.compile(
 _TITLE_ONLY = re.compile(r"^title$", re.IGNORECASE)
 
 
+def _get_image_items(book: epub.EpubBook) -> dict[str, epub.EpubItem]:
+    """Build a mapping of filename → EpubItem for all image items in the book."""
+    image_items: dict[str, epub.EpubItem] = {}
+    for item in book.get_items():
+        if item.get_type() == ebooklib.ITEM_IMAGE:
+            image_items[item.get_name()] = item
+            # Also store by basename for relative path resolution
+            basename = os.path.basename(item.get_name())
+            if basename not in image_items:
+                image_items[basename] = item
+    return image_items
+
+
+def _extract_epub_image(
+    item: epub.EpubItem,
+    pub_uuid: str,
+    image_counter: int,
+) -> tuple[str, int, int, str]:
+    """Write an EPUB image item to disk and return (relative_path, width, height, mime)."""
+    content = item.get_content()
+    if not content:
+        return "", 0, 0, ""
+
+    mime = item.media_type or "image/jpeg"
+    rel_path, width, height = save_inline_image(content, pub_uuid, image_counter, mime)
+    return rel_path, width, height, mime
+
+
+def _replace_images_with_placeholders(
+    soup: BeautifulSoup,
+    image_items: dict[str, epub.EpubItem],
+    pub_uuid: str,
+    image_counter_start: int,
+    chapter_dir: str = "",
+) -> tuple[int, list[InlineImage]]:
+    """Replace <img> tags in soup with {{IMG_N}} placeholders.
+
+    Returns the next image counter value and a list of InlineImage references.
+    """
+    inline_images: list[InlineImage] = []
+    counter = image_counter_start
+
+    for img_tag in soup.find_all("img"):
+        src = img_tag.get("src", "")
+        if not src:
+            img_tag.decompose()
+            continue
+
+        # Resolve the image path relative to the chapter file's directory
+        # EPUBs use relative paths like "../images/fig1.png"
+        if chapter_dir and not src.startswith("/"):
+            resolved = os.path.normpath(os.path.join(chapter_dir, src))
+        else:
+            resolved = src
+
+        # Try to find the image item
+        item = image_items.get(resolved) or image_items.get(os.path.basename(src))
+
+        if item is None:
+            img_tag.decompose()
+            continue
+
+        alt = img_tag.get("alt", "")
+        placeholder = f"{{{{IMG_{counter}}}}}"
+
+        rel_path, width, height, mime = _extract_epub_image(item, pub_uuid, counter)
+        if not rel_path:
+            img_tag.decompose()
+            continue
+
+        inline_images.append(InlineImage(
+            placeholder=placeholder,
+            image_path=rel_path,
+            alt=alt,
+            width=width,
+            height=height,
+            mime_type=mime,
+        ))
+
+        # Replace the <img> tag with placeholder text
+        img_tag.replace_with(f" {placeholder} ")
+        counter += 1
+
+    return counter, inline_images
+
+
 def _decode_content(html_content: bytes | str) -> str:
     """Decode bytes to string, trying UTF-8 then Latin-1."""
     if isinstance(html_content, bytes):
@@ -56,13 +134,27 @@ def _decode_content(html_content: bytes | str) -> str:
     return html_content
 
 
-def _extract_text(html_content: bytes | str) -> tuple[str | None, str]:
+def _extract_text(
+    html_content: bytes | str,
+    image_items: dict[str, epub.EpubItem] | None = None,
+    pub_uuid: str = "",
+    image_counter_start: int = 0,
+    chapter_dir: str = "",
+) -> tuple[str | None, str, list[InlineImage], int]:
     """Extract heading title and body text from an HTML chapter.
 
-    Returns (title_or_none, plain_text).
+    Returns (title_or_none, plain_text, inline_images, next_image_counter).
     """
     html_str = _decode_content(html_content)
     soup = BeautifulSoup(html_str, "lxml")
+
+    # Replace images with placeholders before text extraction
+    inline_images: list[InlineImage] = []
+    next_counter = image_counter_start
+    if image_items and pub_uuid:
+        next_counter, inline_images = _replace_images_with_placeholders(
+            soup, image_items, pub_uuid, image_counter_start, chapter_dir,
+        )
 
     # Try to find a heading for the chapter title
     title: str | None = None
@@ -78,7 +170,7 @@ def _extract_text(html_content: bytes | str) -> tuple[str | None, str]:
     raw_text = soup.get_text(separator=" ")
     text = _WHITESPACE_RE.sub(" ", raw_text).strip()
 
-    return title, text
+    return title, text, inline_images, next_counter
 
 
 def _split_by_toc_fragments(
@@ -335,6 +427,11 @@ def parse_epub(file_path: str) -> ParsedBook:
         or "Unknown Author"
     )
 
+    # --- image items for inline image extraction -----------------------------
+    image_items = _get_image_items(book)
+    pub_uuid = str(uuid.uuid4())
+    image_counter = 0
+
     # --- TOC entries (with fragments) ---------------------------------------
     toc_entries = _build_toc_entries(book)
 
@@ -393,7 +490,10 @@ def parse_epub(file_path: str) -> ParsedBook:
                 continue
 
         # Strategy 2: Normal single-file chapter
-        heading_title, text = _extract_text(content)
+        chapter_dir = os.path.dirname(fname)
+        heading_title, text, inline_imgs, image_counter = _extract_text(
+            content, image_items, pub_uuid, image_counter, chapter_dir,
+        )
 
         if len(text) < _MIN_CHAPTER_LENGTH:
             continue
@@ -430,6 +530,6 @@ def parse_epub(file_path: str) -> ParsedBook:
             chapter_counter -= 1
             continue
 
-        chapters.append(ParsedChapter(title=final_title, text=text))
+        chapters.append(ParsedChapter(title=final_title, text=text, inline_images=inline_imgs))
 
     return ParsedBook(title=title, author=author, chapters=chapters)

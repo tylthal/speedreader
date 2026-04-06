@@ -1,7 +1,29 @@
 import { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback } from 'react';
-import type { Segment } from '../types';
+import type { Segment, InlineImage } from '../types';
 import type { ReadingMode } from '../types';
 import RsvpDisplay from './RsvpDisplay';
+
+/** Renders segment text with optional inline images above it. */
+function SegmentContent({ segment }: { segment: Segment }) {
+  const images = segment.inline_images;
+  if (!images || images.length === 0) {
+    return <>{segment.text}</>;
+  }
+  return (
+    <>
+      {images.map((img, i) => (
+        <img
+          key={i}
+          className="segment__inline-image"
+          src={img.image_url}
+          alt={img.alt || ''}
+          loading="lazy"
+        />
+      ))}
+      {segment.text}
+    </>
+  );
+}
 
 interface FocusChunkOverlayProps {
   segment: Segment | null;
@@ -180,7 +202,7 @@ function PausedScrollView({
           className="focus-scroll__item"
           onClick={() => onSeek(idx)}
         >
-          {seg.text}
+          <SegmentContent segment={seg} />
         </div>
       ))}
 
@@ -250,7 +272,7 @@ function ScrollPlayingView({
             ref={(el) => setItemRef(idx, el)}
             className="focus-scroll__item"
           >
-            {seg.text}
+            <SegmentContent segment={seg} />
           </div>
       ))}
 

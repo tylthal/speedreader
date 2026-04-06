@@ -123,7 +123,7 @@ export default function LibraryPage() {
         <input
           ref={fileInputRef}
           type="file"
-          accept=".epub"
+          accept=".epub,.pdf,.mobi,.azw3,.txt,.html,.htm,.md,.fb2,.rtf,.docx,.djvu,.cbz,.cbr"
           onChange={onInputChange}
           style={{ display: 'none' }}
         />
@@ -136,7 +136,7 @@ export default function LibraryPage() {
           >
             Tap to upload
           </button>{' '}
-          or drag an EPUB file here
+          or drag a book file here
         </p>
         {uploading && <p className="library__uploading">Uploading...</p>}
         {error && <p className="library__error">{error}</p>}
@@ -149,7 +149,7 @@ export default function LibraryPage() {
         <div className="library__empty">Loading library...</div>
       ) : publications.length === 0 ? (
         <div className="library__empty">
-          No books yet. Upload an EPUB to get started.
+          No books yet. Upload a book to get started.
         </div>
       ) : (
         <div className="library__list">
@@ -172,16 +172,39 @@ export default function LibraryPage() {
                   {deleting === pub.id ? '...' : '\u00D7'}
                 </button>
               </div>
-              <div className="library__card-author">{pub.author}</div>
+              <div className="library__card-author">
+                {pub.author}
+                {pub.filename && (
+                  <span className="library__card-format">
+                    {pub.filename.split('.').pop()?.toUpperCase()}
+                  </span>
+                )}
+              </div>
               <div className="library__card-meta">
-                {pub.total_segments.toLocaleString()} segments
-                {progressMap[pub.id] && (
+                {pub.content_type === 'image'
+                  ? `${pub.total_pages.toLocaleString()} pages`
+                  : `${pub.total_segments.toLocaleString()} segments`
+                }
+                {progressMap[pub.id] && pub.content_type === 'image' && pub.total_pages > 0 && (
+                  <span className="library__card-progress-text">
+                    {' · '}{Math.round(((progressMap[pub.id].segment_index + 1) / pub.total_pages) * 100)}% read
+                  </span>
+                )}
+                {progressMap[pub.id] && pub.content_type !== 'image' && pub.total_segments > 0 && (
                   <span className="library__card-progress-text">
                     {' · '}{Math.round((progressMap[pub.id].segments_read / pub.total_segments) * 100)}% read
                   </span>
                 )}
               </div>
-              {progressMap[pub.id] && (
+              {progressMap[pub.id] && pub.content_type === 'image' && pub.total_pages > 0 && (
+                <div className="library__card-progress-bar">
+                  <div
+                    className="library__card-progress-fill"
+                    style={{ width: `${Math.min(100, ((progressMap[pub.id].segment_index + 1) / pub.total_pages) * 100)}%` }}
+                  />
+                </div>
+              )}
+              {progressMap[pub.id] && pub.content_type !== 'image' && pub.total_segments > 0 && (
                 <div className="library__card-progress-bar">
                   <div
                     className="library__card-progress-fill"

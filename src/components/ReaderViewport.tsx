@@ -22,6 +22,8 @@ import FocusChunkOverlay from './FocusChunkOverlay';
 import ControlsBottomSheet from './ControlsBottomSheet';
 import GazeIndicator from './GazeIndicator';
 import TrackCalibration from './TrackCalibration';
+import ImageReader from './ImageReader';
+import type { ContentType } from '../api/client';
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -38,6 +40,7 @@ interface InitialPosition {
   wordIndex: number;
   wpm: number;
   readingMode: ReadingMode;
+  contentType: ContentType;
 }
 
 interface ActiveReaderProps {
@@ -138,7 +141,15 @@ export default function ReaderViewport({ publicationId }: ReaderViewportProps) {
 
         setInitState({
           status: 'ready',
-          position: { chapters: sorted, chapterIdx, segmentIndex, wordIndex, wpm, readingMode },
+          position: {
+            chapters: sorted,
+            chapterIdx,
+            segmentIndex,
+            wordIndex,
+            wpm,
+            readingMode: (pub.content_type === 'image') ? 'image' : readingMode,
+            contentType: (pub.content_type ?? 'text') as ContentType,
+          },
         });
       })
       .catch((err) => {
@@ -163,6 +174,18 @@ export default function ReaderViewport({ publicationId }: ReaderViewportProps) {
   }
 
   const { position } = initState;
+
+  if (position.contentType === 'image') {
+    return (
+      <ImageReader
+        publicationId={publicationId}
+        chapters={position.chapters}
+        initialChapterIdx={position.chapterIdx}
+        initialPageIndex={position.segmentIndex}
+      />
+    );
+  }
+
   return (
     <ActiveReader
       publicationId={publicationId}

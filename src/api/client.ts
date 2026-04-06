@@ -1,3 +1,5 @@
+export type ContentType = 'text' | 'image'
+
 export interface Publication {
   id: number
   title: string
@@ -5,7 +7,27 @@ export interface Publication {
   filename: string
   status: string
   total_segments: number
+  content_type: ContentType
+  total_pages: number
   created_at: string
+}
+
+export interface ImagePage {
+  id: number
+  chapter_id: number
+  page_index: number
+  image_path: string
+  width: number | null
+  height: number | null
+  mime_type: string
+}
+
+export interface ImagePageBatch {
+  chapter_id: number
+  start_index: number
+  end_index: number
+  pages: ImagePage[]
+  total_pages: number
 }
 
 export interface Chapter {
@@ -19,6 +41,13 @@ export interface PublicationDetail extends Publication {
   chapters: Chapter[]
 }
 
+export interface SegmentInlineImage {
+  image_url: string
+  alt: string
+  width: number
+  height: number
+}
+
 export interface Segment {
   id: number
   chapter_id: number
@@ -26,6 +55,7 @@ export interface Segment {
   text: string
   word_count: number
   duration_ms: number
+  inline_images?: SegmentInlineImage[] | null
 }
 
 export interface SegmentBatch {
@@ -129,6 +159,27 @@ export async function getSegments(
   })
   if (!res.ok) throw new Error(`Failed to fetch segments: ${res.status}`)
   return res.json()
+}
+
+export async function getImagePages(
+  pubId: number,
+  chapterId: number,
+  start: number,
+  end: number,
+): Promise<ImagePageBatch> {
+  const params = new URLSearchParams({
+    start: String(start),
+    end: String(end),
+  })
+  const res = await fetch(`${BASE}/publications/${pubId}/chapters/${chapterId}/pages?${params}`, {
+    headers: getSaveDataHeaders(),
+  })
+  if (!res.ok) throw new Error(`Failed to fetch pages: ${res.status}`)
+  return res.json()
+}
+
+export function getImageUrl(imagePath: string): string {
+  return `${BASE}/images/${imagePath}`
 }
 
 export async function getProgress(pubId: number): Promise<ReadingProgress | null> {

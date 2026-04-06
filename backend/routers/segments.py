@@ -1,8 +1,10 @@
+import json
+
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
 from backend.database import get_db
-from backend.models import SegmentOut, SegmentBatchOut
+from backend.models import InlineImageOut, SegmentOut, SegmentBatchOut
 
 DATA_SAVER_MAX_BATCH = 20
 
@@ -48,7 +50,27 @@ async def get_segments(
         )
         seg_rows = await seg_cursor.fetchall()
 
-    segments = [SegmentOut(**dict(r)) for r in seg_rows]
+    segments: list[SegmentOut] = []
+    for r in seg_rows:
+        d = dict(r)
+        # Parse inline_images JSON and convert paths to URLs
+        raw_images = d.pop("inline_images", None)
+        inline_images = None
+        if raw_images:
+            try:
+                imgs = json.loads(raw_images)
+                inline_images = [
+                    InlineImageOut(
+                        image_url=f"/api/v1/images/{img['image_path']}",
+                        alt=img.get("alt", ""),
+                        width=img.get("width", 0),
+                        height=img.get("height", 0),
+                    )
+                    for img in imgs
+                ]
+            except (json.JSONDecodeError, KeyError):
+                pass
+        segments.append(SegmentOut(**d, inline_images=inline_images))
 
     result = SegmentBatchOut(
         chapter_id=chapter_id,

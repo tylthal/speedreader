@@ -8,6 +8,8 @@ class PublicationOut(BaseModel):
     filename: str | None = None
     status: str = "ready"
     total_segments: int = 0
+    content_type: str = "text"
+    total_pages: int = 0
     created_at: str | None = None
 
 
@@ -18,6 +20,13 @@ class ChapterOut(BaseModel):
     title: str | None = None
 
 
+class InlineImageOut(BaseModel):
+    image_url: str
+    alt: str = ""
+    width: int = 0
+    height: int = 0
+
+
 class SegmentOut(BaseModel):
     id: int
     chapter_id: int
@@ -25,6 +34,7 @@ class SegmentOut(BaseModel):
     text: str
     word_count: int
     duration_ms: int
+    inline_images: list[InlineImageOut] | None = None
 
 
 class SegmentBatchOut(BaseModel):
@@ -56,6 +66,24 @@ class ReadingProgressOut(BaseModel):
     reading_mode: str = "phrase"
     updated_at: str
     segments_read: int = 0
+
+
+class ImagePageOut(BaseModel):
+    id: int
+    chapter_id: int
+    page_index: int
+    image_path: str
+    width: int | None = None
+    height: int | None = None
+    mime_type: str = "image/jpeg"
+
+
+class ImagePageBatchOut(BaseModel):
+    chapter_id: int
+    start_index: int
+    end_index: int
+    pages: list[ImagePageOut]
+    total_pages: int
 
 
 class BookmarkIn(BaseModel):

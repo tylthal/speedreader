@@ -749,6 +749,20 @@
 .library__card-author {
   font-size: 0.85rem;
   color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.library__card-format {
+  display: inline-block;
+  font-size: 0.65rem;
+  font-weight: 600;
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+  background: var(--bg-elevated, #e8e8e8);
+  color: var(--text-muted);
+  letter-spacing: 0.03em;
 }
 
 .library__card-meta {
@@ -1647,4 +1661,185 @@
 .theme-toggle__btn--active {
   background: var(--accent);
   color: white;
+}
+
+/* ====================================================================
+   Image Reader – Comic/Image-based content viewer
+   ==================================================================== */
+
+.image-reader {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  background: #000;
+  overflow: hidden;
+  user-select: none;
+}
+
+.image-page-viewer {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  touch-action: none;
+  position: relative;
+}
+
+.image-page-viewer__img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  transition: transform 0.1s ease-out;
+  will-change: transform;
+  pointer-events: none;
+}
+
+.image-page-viewer--fit-width .image-page-viewer__img {
+  width: 100%;
+  max-height: none;
+  object-fit: initial;
+}
+
+.image-page-viewer--fit-height .image-page-viewer__img {
+  height: 100%;
+  max-width: none;
+  object-fit: initial;
+}
+
+.image-page-viewer--fit-contain .image-page-viewer__img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.image-page-viewer__empty {
+  color: var(--text-muted, #888);
+  font-size: 1rem;
+}
+
+/* Page indicator */
+.image-controls__page-indicator {
+  position: absolute;
+  top: env(safe-area-inset-top, 8px);
+  right: 12px;
+  padding: 4px 10px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+  z-index: 10;
+}
+
+/* Controls overlay */
+.image-controls {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: rgba(0, 0, 0, 0.85);
+  backdrop-filter: blur(8px);
+  padding: 12px 16px calc(env(safe-area-inset-bottom, 8px) + 12px);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  transform: translateY(100%);
+  transition: transform 0.25s ease;
+  z-index: 20;
+}
+
+.image-controls--open {
+  transform: translateY(0);
+}
+
+.image-controls__chapter-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.image-controls__chapter-title {
+  flex: 1;
+  text-align: center;
+  font-size: 0.85rem;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.image-controls__slider-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.image-controls__page-slider {
+  flex: 1;
+  accent-color: var(--accent, #4a9eff);
+  height: 4px;
+}
+
+.image-controls__nav-btn {
+  background: none;
+  border: none;
+  color: #fff;
+  font-size: 1.3rem;
+  padding: 4px 10px;
+  cursor: pointer;
+  opacity: 0.8;
+  border-radius: 6px;
+}
+
+.image-controls__nav-btn:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.image-controls__nav-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.image-controls__actions-row {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+}
+
+.image-controls__action-btn {
+  background: rgba(255, 255, 255, 0.12);
+  border: none;
+  color: #fff;
+  font-size: 0.8rem;
+  padding: 6px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.image-controls__action-btn:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.image-controls__exit-btn {
+  background: rgba(255, 80, 80, 0.2);
+  color: #ff8888;
+}
+
+/* ---------- Inline images in text segments ---------- */
+.segment__inline-image {
+  display: block;
+  max-width: 90%;
+  max-height: 40vh;
+  margin: 0.5rem auto;
+  border-radius: 4px;
+  object-fit: contain;
+}
+
+.focus-scroll__item .segment__inline-image {
+  max-height: 30vh;
+  margin: 0.3rem auto;
 }
