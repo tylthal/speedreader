@@ -10,7 +10,7 @@ function readStored(): DisplayMode {
   } catch {
     /* localStorage unavailable */
   }
-  return 'plain' // PRD §4.1 — Plain text is the default
+  return 'formatted'
 }
 
 interface UseDefaultDisplayModeReturn {
