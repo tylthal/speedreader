@@ -79,14 +79,28 @@ export default function FormattedView({
   const sectionRefs = useRef<Map<number, HTMLElement>>(new Map())
   const isProgrammaticScrollRef = useRef(false)
 
-  // Resolve `opfs:` image markers to blob URLs after the HTML mounts.
-  // The created URL list lives in a ref (NOT a closure variable) so it
-  // survives effect re-runs without losing track of working URLs.
-  // resolveOpfsImages() preserves the original marker on data-opfs-src so
-  // it's idempotent across re-runs (StrictMode double-mount, or chapter
-  // prop reference changes).
+  // OPFS image resolution with StrictMode-safe URL lifecycle.
+  //
+  // The challenge: React StrictMode in dev intentionally double-mounts every
+  // effect (mount → cleanup → re-mount) to surface bugs. Naive cleanup
+  // revokes blob URLs that are still in use by the *real* mount on the
+  // other side of the simulated unmount.
+  //
+  // Solution: track URLs in a ref that survives re-mounts. On cleanup,
+  // schedule a deferred revoke via setTimeout(0) so a re-mount can cancel
+  // it. resolveOpfsImages() is also idempotent (preserves the original
+  // marker on data-opfs-src), so it can re-resolve any image whose URL was
+  // accidentally revoked.
   const createdUrlsRef = useRef<string[]>([])
+  const pendingRevokeRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
   useEffect(() => {
+    // Cancel any pending revoke from a prior strict-mode cleanup.
+    if (pendingRevokeRef.current) {
+      clearTimeout(pendingRevokeRef.current)
+      pendingRevokeRef.current = null
+    }
+
     let cancelled = false
     ;(async () => {
       for (const el of sectionRefs.current.values()) {
@@ -95,19 +109,19 @@ export default function FormattedView({
         createdUrlsRef.current.push(...urls)
       }
     })()
+
     return () => {
       cancelled = true
+      // Defer revoke. If a re-mount happens within this tick (StrictMode),
+      // it will cancel the timeout above.
+      const toRevoke = createdUrlsRef.current
+      createdUrlsRef.current = []
+      pendingRevokeRef.current = setTimeout(() => {
+        for (const url of toRevoke) URL.revokeObjectURL(url)
+        pendingRevokeRef.current = null
+      }, 0)
     }
   }, [publicationId, chapters])
-
-  // Revoke all created URLs only when the publication itself changes or the
-  // component unmounts. Don't revoke on every chapter-prop reference change.
-  useEffect(() => {
-    return () => {
-      for (const url of createdUrlsRef.current) URL.revokeObjectURL(url)
-      createdUrlsRef.current = []
-    }
-  }, [publicationId])
 
   // Scroll the current section into view whenever the cursor changes
   // externally (e.g. user toggled from plain → formatted).
