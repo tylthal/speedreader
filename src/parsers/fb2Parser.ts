@@ -7,16 +7,25 @@
  */
 
 import JSZip from 'jszip'
-import type { ParsedBook, ParsedSection, ParsedCover } from './types'
+import type { ParsedBook, ParsedSection, ParsedCover, ParsedImage } from './types'
 
 const FB2_NS = 'http://www.gribuser.ru/xml/fictionbook/2.0'
 const XLINK_NS = 'http://www.w3.org/1999/xlink'
 const WHITESPACE_RE = /\s+/g
 
+const EXT_BY_MIME: Record<string, string> = {
+  'image/jpeg': '.jpg',
+  'image/png': '.png',
+  'image/gif': '.gif',
+  'image/webp': '.webp',
+  'image/svg+xml': '.svg',
+}
+
 interface BinaryEntry {
   blob: Blob
   mimeType: string
-  url: string
+  /** Stable basename used as both the OPFS filename and the `opfs:{name}` marker. */
+  name: string
 }
 
 function base64ToBlob(b64: string, mimeType: string): Blob {
@@ -26,8 +35,9 @@ function base64ToBlob(b64: string, mimeType: string): Blob {
   return new Blob([bytes], { type: mimeType })
 }
 
-function extractBinaries(root: Document): Map<string, BinaryEntry> {
-  const out = new Map<string, BinaryEntry>()
+function extractBinaries(root: Document): { byHref: Map<string, BinaryEntry>; images: ParsedImage[] } {
+  const byHref = new Map<string, BinaryEntry>()
+  const images: ParsedImage[] = []
   const binaryEls = root.getElementsByTagNameNS(FB2_NS, 'binary')
   for (const el of Array.from(binaryEls)) {
     const id = el.getAttribute('id') ?? ''
@@ -36,12 +46,16 @@ function extractBinaries(root: Document): Map<string, BinaryEntry> {
     if (!id || !dataB64) continue
     const blob = base64ToBlob(dataB64, contentType)
     if (!blob.size) continue
-    const url = URL.createObjectURL(blob)
-    const entry: BinaryEntry = { blob, mimeType: contentType, url }
-    out.set(id, entry)
-    out.set(`#${id}`, entry)
+    // Use the FB2 binary id as the OPFS basename, with a sensible extension.
+    const ext = EXT_BY_MIME[contentType] ?? '.bin'
+    const safeId = id.replace(/[^a-zA-Z0-9._-]/g, '_')
+    const name = safeId.includes('.') ? safeId : `${safeId}${ext}`
+    const entry: BinaryEntry = { blob, mimeType: contentType, name }
+    byHref.set(id, entry)
+    byHref.set(`#${id}`, entry)
+    images.push({ name, blob, mimeType: contentType })
   }
-  return out
+  return { byHref, images }
 }
 
 function getSectionTitle(section: Element): string {
@@ -68,7 +82,7 @@ function elementToHtml(el: Element, binaries: Map<string, BinaryEntry>): string 
       ''
     const entry = binaries.get(href)
     if (!entry) return ''
-    return `<img src="${entry.url}" alt="" />`
+    return `<img src="opfs:${entry.name}" alt="" />`
   }
 
   // FB2 → HTML mapping
@@ -119,6 +133,7 @@ function elementToHtml(el: Element, binaries: Map<string, BinaryEntry>): string 
 function elementToText(el: Element, binaries: Map<string, BinaryEntry>): string {
   if (el.localName === 'binary') return ''
   if (el.localName === 'image') return ''
+  void binaries
   const parts: string[] = []
   for (const node of Array.from(el.childNodes)) {
     if (node.nodeType === Node.TEXT_NODE) {
@@ -164,7 +179,7 @@ export async function parseFb2(data: ArrayBuffer, filename?: string): Promise<Pa
     if (parts.length) author = parts.join(' ')
   }
 
-  const binaries = extractBinaries(doc)
+  const { byHref: binaries, images: parsedImages } = extractBinaries(doc)
 
   // Cover: try <coverpage> first, then first available binary.
   let cover: ParsedCover | undefined
@@ -178,9 +193,8 @@ export async function parseFb2(data: ArrayBuffer, filename?: string): Promise<Pa
       if (entry) cover = { blob: entry.blob, mimeType: entry.mimeType }
     }
   }
-  if (!cover) {
-    const first = binaries.values().next().value
-    if (first) cover = { blob: first.blob, mimeType: first.mimeType }
+  if (!cover && parsedImages.length) {
+    cover = { blob: parsedImages[0].blob, mimeType: parsedImages[0].mimeType }
   }
 
   // Body sections
@@ -211,5 +225,6 @@ export async function parseFb2(data: ArrayBuffer, filename?: string): Promise<Pa
     contentType: 'text',
     sections,
     cover,
+    parsedImages,
   }
 }
