@@ -119,23 +119,30 @@ export default function FormattedView({
   }, [])
 
   // Pre-rewrite each section's HTML by string-replacing every `opfs:NAME`
-  // src with its resolved blob URL. Memoized on (chapters, imageMap) so
-  // we don't re-build on every parent re-render.
+  // src with its resolved blob URL. We DELAY the rewrite until imageMap is
+  // populated so the unresolved HTML never reaches the DOM (otherwise the
+  // browser would briefly fire ERR_UNKNOWN_URL_SCHEME for every opfs: src
+  // and the user would see broken-image icons until the load completes).
+  // Memoized on (chapters, imageMap).
+  const imagesReady = imageMap.size > 0 || collectOpfsNames(chapters).length === 0
   const rewrittenSections = useMemo(() => {
+    if (!imagesReady) return null
     return chapters.map((ch) => {
       const html = ch.html ?? ''
-      if (!html || imageMap.size === 0) return { ch, html }
-      const rewritten = html.replace(
-        /(<img\s[^>]*?src=["'])opfs:([^"']+)(["'])/gi,
-        (match, head: string, name: string, tail: string) => {
-          const url = imageMap.get(name)
-          if (!url) return match // leave the marker; the broken-img icon
-          return `${head}${url}${tail}`
-        },
-      )
+      if (!html) return { ch, html }
+      const rewritten = imageMap.size === 0
+        ? html
+        : html.replace(
+            /(<img\s[^>]*?src=["'])opfs:([^"']+)(["'])/gi,
+            (match, head: string, name: string, tail: string) => {
+              const url = imageMap.get(name)
+              if (!url) return match
+              return `${head}${url}${tail}`
+            },
+          )
       return { ch, html: rewritten }
     })
-  }, [chapters, imageMap])
+  }, [chapters, imageMap, imagesReady])
 
   // We set the section body innerHTML *imperatively* via a ref, NOT through
   // dangerouslySetInnerHTML. React 19's reconciler appears to track img
@@ -145,6 +152,7 @@ export default function FormattedView({
   // takes the inner DOM out of React's hands entirely.
   const bodyRefs = useRef<Map<number, HTMLDivElement>>(new Map())
   useEffect(() => {
+    if (!rewrittenSections) return
     for (const { ch, html } of rewrittenSections) {
       const idx = chapters.indexOf(ch)
       const el = bodyRefs.current.get(idx)
