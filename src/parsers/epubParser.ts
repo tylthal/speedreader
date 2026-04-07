@@ -12,6 +12,15 @@ import JSZip from 'jszip'
 import type { ParsedBook, ParsedChapter, InlineImage } from './types'
 import { getImageDimensions } from './types'
 
+// DOMParser polyfill for web worker environments where it's not available
+function getDOMParser(): { new(): DOMParser } {
+  if (typeof DOMParser !== 'undefined') return DOMParser
+  throw new Error(
+    'DOMParser is not available in this environment. ' +
+    'EPUB parsing requires a browser with DOMParser support in Web Workers (Chrome 100+, Firefox 100+, Safari 15.4+).'
+  )
+}
+
 const WHITESPACE_RE = /\s+/g
 const HEADING_TAGS = new Set(['H1', 'H2', 'H3'])
 const MIN_CHAPTER_LENGTH = 50
@@ -56,7 +65,7 @@ function dirname(path: string): string {
 async function readContainerXml(zip: JSZip): Promise<string> {
   const containerXml = await zip.file('META-INF/container.xml')?.async('text')
   if (!containerXml) throw new Error('Missing META-INF/container.xml')
-  const doc = new DOMParser().parseFromString(containerXml, 'application/xml')
+  const doc = new (getDOMParser())().parseFromString(containerXml, 'application/xml')
   const rootfile = doc.querySelector('rootfile')
   const path = rootfile?.getAttribute('full-path')
   if (!path) throw new Error('Cannot find OPF path in container.xml')
@@ -228,7 +237,7 @@ function splitByTocFragments(
   htmlStr: string,
   fragmentEntries: [string, string][],
 ): ParsedChapter[] {
-  const doc = new DOMParser().parseFromString(htmlStr, 'text/html')
+  const doc = new (getDOMParser())().parseFromString(htmlStr, 'text/html')
   const body = doc.body ?? doc.documentElement
   const fullText = (body.textContent ?? '').replace(WHITESPACE_RE, ' ').trim()
   if (!fullText) return []
@@ -301,7 +310,7 @@ function splitByTocFragments(
 }
 
 function splitByHeadings(htmlStr: string): ParsedChapter[] {
-  const doc = new DOMParser().parseFromString(htmlStr, 'text/html')
+  const doc = new (getDOMParser())().parseFromString(htmlStr, 'text/html')
   const body = doc.body ?? doc.documentElement
   const headings = Array.from(body.querySelectorAll('h1, h2, h3'))
 
@@ -347,7 +356,7 @@ export async function parseEpub(data: ArrayBuffer): Promise<ParsedBook> {
   const opfDir = dirname(opfPath)
   const opfXml = await zip.file(opfPath)?.async('text')
   if (!opfXml) throw new Error('Cannot read OPF file')
-  const opfDoc = new DOMParser().parseFromString(opfXml, 'application/xml')
+  const opfDoc = new (getDOMParser())().parseFromString(opfXml, 'application/xml')
 
   // 2. Metadata
   const { title, author } = parseOpfMetadata(opfDoc)
@@ -366,7 +375,7 @@ export async function parseEpub(data: ArrayBuffer): Promise<ParsedBook> {
     if (item.mediaType === 'application/x-dtbncx+xml') {
       const tocXml = await zip.file(item.href)?.async('text')
       if (tocXml) {
-        const tocDoc = new DOMParser().parseFromString(tocXml, 'application/xml')
+        const tocDoc = new (getDOMParser())().parseFromString(tocXml, 'application/xml')
         tocEntries = parseToc(tocDoc, item.href, true)
       }
       break
@@ -378,7 +387,7 @@ export async function parseEpub(data: ArrayBuffer): Promise<ParsedBook> {
       if (item.mediaType === 'application/xhtml+xml') {
         const navXml = await zip.file(item.href)?.async('text')
         if (navXml && navXml.includes('epub:type="toc"')) {
-          const navDoc = new DOMParser().parseFromString(navXml, 'text/html')
+          const navDoc = new (getDOMParser())().parseFromString(navXml, 'text/html')
           tocEntries = parseToc(navDoc, item.href, false)
           if (tocEntries.length) break
         }
@@ -435,7 +444,7 @@ export async function parseEpub(data: ArrayBuffer): Promise<ParsedBook> {
     }
 
     // Parse HTML for text + images
-    const htmlDoc = new DOMParser().parseFromString(content, 'text/html')
+    const htmlDoc = new (getDOMParser())().parseFromString(content, 'text/html')
     const imgResult = await replaceImagesWithPlaceholders(
       htmlDoc, imageMap, chapterDir, imageCounter,
     )

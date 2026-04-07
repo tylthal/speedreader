@@ -11,6 +11,7 @@ import BookCard from '../components/BookCard';
 import EmptyState from '../components/EmptyState';
 import UploadFAB from '../components/UploadFAB';
 import ActionSheet, { type ActionSheetOption } from '../components/ActionSheet';
+import ProcessingDialog from '../components/ProcessingDialog';
 
 export default function LibraryPage() {
   const [publications, setPublications] = useState<Publication[]>([]);
@@ -19,6 +20,7 @@ export default function LibraryPage() {
   const [uploading, setUploading] = useState(false);
   const [uploadPhase, setUploadPhase] = useState('');
   const [uploadPercent, setUploadPercent] = useState(0);
+  const [uploadFilename, setUploadFilename] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [actionSheet, setActionSheet] = useState<{
     pub: Publication;
@@ -67,6 +69,7 @@ export default function LibraryPage() {
     setUploading(true);
     setUploadPhase('');
     setUploadPercent(0);
+    setUploadFilename(file.name);
     setError(null);
     try {
       const pub = await uploadBook(file, (phase, percent) => {
@@ -234,6 +237,14 @@ export default function LibraryPage() {
           subtitle={actionSheet.pub.author || 'Unknown author'}
           options={getActionSheetOptions()}
           onClose={() => setActionSheet(null)}
+        />
+      )}
+
+      {uploading && (
+        <ProcessingDialog
+          filename={uploadFilename}
+          phase={uploadPhase}
+          percent={uploadPercent}
         />
       )}
     </div>

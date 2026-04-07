@@ -8,13 +8,12 @@
  */
 
 import * as pdfjsLib from 'pdfjs-dist'
+import pdfjsWorkerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url'
 import type { ParsedBook, ParsedChapter } from './types'
 
-// Configure pdf.js worker
-pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
-  'pdfjs-dist/build/pdf.worker.mjs',
-  import.meta.url,
-).href
+// Configure pdf.js worker — use Vite's ?url import for correct resolution
+// in both main thread and Web Worker contexts
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorkerUrl
 
 const WHITESPACE_RE = /\s+/g
 const BLANK_LINES_RE = /\n{3,}/g

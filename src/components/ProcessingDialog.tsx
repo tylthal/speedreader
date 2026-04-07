@@ -1,0 +1,117 @@
+import { useEffect, useRef, useState } from 'react';
+
+interface ProcessingDialogProps {
+  filename: string;
+  phase: string; // 'parsing' | 'chunking' | ''
+  percent: number;
+}
+
+const PHASE_LABELS: Record<string, { title: string; subtitle: string }> = {
+  '': { title: 'Preparing...', subtitle: 'Getting your book ready' },
+  parsing: { title: 'Reading', subtitle: 'Extracting text and structure' },
+  chunking: { title: 'Processing', subtitle: 'Splitting into reading segments' },
+};
+
+export default function ProcessingDialog({ filename, phase, percent }: ProcessingDialogProps) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const [displayPercent, setDisplayPercent] = useState(0);
+
+  // Smooth percentage animation
+  useEffect(() => {
+    const id = requestAnimationFrame(() => {
+      setDisplayPercent(percent);
+    });
+    return () => cancelAnimationFrame(id);
+  }, [percent]);
+
+  // Animate in
+  useEffect(() => {
+    requestAnimationFrame(() => {
+      dialogRef.current?.classList.add('processing-dialog--visible');
+    });
+  }, []);
+
+  const labels = PHASE_LABELS[phase] || PHASE_LABELS[''];
+  const format = filename.split('.').pop()?.toUpperCase() || 'FILE';
+
+  // Progress ring dimensions
+  const size = 120;
+  const strokeWidth = 4;
+  const radius = (size - strokeWidth) / 2;
+  const circumference = 2 * Math.PI * radius;
+  const dashOffset = circumference - (displayPercent / 100) * circumference;
+
+  return (
+    <div className="processing-dialog__overlay">
+      <div ref={dialogRef} className="processing-dialog" role="alertdialog" aria-label="Processing book">
+        {/* Animated progress ring */}
+        <div className="processing-dialog__ring-container">
+          <svg
+            className="processing-dialog__ring"
+            width={size}
+            height={size}
+            viewBox={`0 0 ${size} ${size}`}
+          >
+            {/* Track */}
+            <circle
+              cx={size / 2}
+              cy={size / 2}
+              r={radius}
+              fill="none"
+              stroke="var(--progress-track)"
+              strokeWidth={strokeWidth}
+            />
+            {/* Progress arc */}
+            <circle
+              cx={size / 2}
+              cy={size / 2}
+              r={radius}
+              fill="none"
+              stroke="var(--accent)"
+              strokeWidth={strokeWidth}
+              strokeLinecap="round"
+              strokeDasharray={circumference}
+              strokeDashoffset={dashOffset}
+              transform={`rotate(-90 ${size / 2} ${size / 2})`}
+              className="processing-dialog__ring-progress"
+            />
+          </svg>
+
+          {/* Center content: book icon + percentage */}
+          <div className="processing-dialog__ring-center">
+            <svg className="processing-dialog__book-icon" width="32" height="32" viewBox="0 0 32 32" fill="none">
+              <path
+                d="M6 4C6 2.9 6.9 2 8 2H20L26 8V28C26 29.1 25.1 30 24 30H8C6.9 30 6 29.1 6 28V4Z"
+                fill="var(--accent-subtle)"
+                stroke="var(--accent)"
+                strokeWidth="1.5"
+              />
+              <path d="M20 2V8H26" fill="var(--accent-subtle)" stroke="var(--accent)" strokeWidth="1.5" strokeLinejoin="round" />
+              <line x1="10" y1="14" x2="22" y2="14" stroke="var(--accent)" strokeWidth="1.2" strokeLinecap="round" opacity="0.5" />
+              <line x1="10" y1="18" x2="19" y2="18" stroke="var(--accent)" strokeWidth="1.2" strokeLinecap="round" opacity="0.5" />
+              <line x1="10" y1="22" x2="16" y2="22" stroke="var(--accent)" strokeWidth="1.2" strokeLinecap="round" opacity="0.5" />
+            </svg>
+            <span className="processing-dialog__percent">{Math.round(displayPercent)}%</span>
+          </div>
+        </div>
+
+        {/* Phase info */}
+        <h3 className="processing-dialog__title">{labels.title}</h3>
+        <p className="processing-dialog__subtitle">{labels.subtitle}</p>
+
+        {/* Filename pill */}
+        <div className="processing-dialog__file">
+          <span className="processing-dialog__format">{format}</span>
+          <span className="processing-dialog__filename">{filename}</span>
+        </div>
+
+        {/* Pulsing dots */}
+        <div className="processing-dialog__dots">
+          <span className="processing-dialog__dot" />
+          <span className="processing-dialog__dot" />
+          <span className="processing-dialog__dot" />
+        </div>
+      </div>
+    </div>
+  );
+}

@@ -20,19 +20,21 @@ export default function GestureLayer({
   enabled = true,
   children,
 }: GestureLayerProps) {
+  // Always listen for taps (so user can tap to resume when paused).
+  // Only listen for swipes when enabled.
   const pointerHandlers = useGestures({
     onTap,
-    onSwipeUp,
-    onSwipeDown,
-    onSwipeLeft,
-    onSwipeRight,
+    onSwipeUp: enabled ? onSwipeUp : undefined,
+    onSwipeDown: enabled ? onSwipeDown : undefined,
+    onSwipeLeft: enabled ? onSwipeLeft : undefined,
+    onSwipeRight: enabled ? onSwipeRight : undefined,
   });
 
   return (
     <div
       className={`gesture-layer ${!enabled ? 'gesture-layer--passthrough' : ''}`}
       aria-hidden="true"
-      {...(enabled ? pointerHandlers : {})}
+      {...pointerHandlers}
     >
       {children}
     </div>
