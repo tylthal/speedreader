@@ -14,7 +14,7 @@
  */
 
 import JSZip from 'jszip'
-import type { ParsedBook, ParsedSection, ParsedCover, TocNode } from './types'
+import type { ParsedBook, ParsedSection, ParsedCover, TocNode, ParsedImage } from './types'
 import { sanitizeDocument } from '../lib/sanitize'
 
 const WHITESPACE_RE = /\s+/g
@@ -176,28 +176,61 @@ function firstHeading(doc: Document): string | null {
   return null
 }
 
-async function buildImageBlobUrls(
+/**
+ * Walk the manifest, decode every image, and produce a basename-keyed map of
+ * `{ blob, mimeType }`. The returned ParsedImage[] becomes ParsedBook.parsedImages
+ * which uploadBook persists to OPFS at /images/{pubId}/{name}.
+ *
+ * Multiple images that share a basename get suffixed with their full path
+ * hash so collisions don't clobber each other.
+ */
+async function buildImageManifest(
   zip: JSZip,
   manifest: Map<string, ManifestItem>,
-): Promise<Map<string, string>> {
-  const out = new Map<string, string>()
+): Promise<{ images: ParsedImage[]; byHref: Map<string, string>; byBasename: Map<string, string> }> {
+  const images: ParsedImage[] = []
+  const byHref = new Map<string, string>()
+  const byBasename = new Map<string, string>()
+  const usedNames = new Set<string>()
+
+  function uniqueName(base: string): string {
+    if (!usedNames.has(base)) {
+      usedNames.add(base)
+      return base
+    }
+    // Suffix with a counter to avoid collisions.
+    let i = 1
+    while (usedNames.has(`${i}-${base}`)) i++
+    const next = `${i}-${base}`
+    usedNames.add(next)
+    return next
+  }
+
   for (const item of manifest.values()) {
     if (!item.mediaType.startsWith('image/')) continue
     const file = zip.file(item.href)
     if (!file) continue
     const data = await file.async('arraybuffer')
     const blob = new Blob([data], { type: item.mediaType })
-    const url = URL.createObjectURL(blob)
-    out.set(item.href, url)
-    const basename = item.href.split('/').pop()!
-    if (!out.has(basename)) out.set(basename, url)
+    const rawBasename = item.href.split('/').pop() ?? 'image'
+    const name = uniqueName(rawBasename)
+    images.push({ name, blob, mimeType: item.mediaType })
+    byHref.set(item.href, name)
+    if (!byBasename.has(rawBasename)) byBasename.set(rawBasename, name)
   }
-  return out
+
+  return { images, byHref, byBasename }
 }
 
+/**
+ * Rewrite every <img src> in the doc to an `opfs:{name}` marker that
+ * FormattedView will resolve at render time. Images that don't resolve to
+ * any manifest entry are removed.
+ */
 function rewriteImageSources(
   doc: Document,
-  imageUrls: Map<string, string>,
+  byHref: Map<string, string>,
+  byBasename: Map<string, string>,
   chapterDir: string,
 ): void {
   for (const img of Array.from(doc.querySelectorAll('img'))) {
@@ -211,12 +244,12 @@ function rewriteImageSources(
         ? resolvePath(chapterDir + '/dummy', src)
         : src
     const basename = src.split('/').pop()!
-    const url = imageUrls.get(resolved) ?? imageUrls.get(basename)
-    if (!url) {
+    const name = byHref.get(resolved) ?? byBasename.get(basename)
+    if (!name) {
       img.remove()
       continue
     }
-    img.setAttribute('src', url)
+    img.setAttribute('src', `opfs:${name}`)
   }
 }
 
@@ -271,7 +304,8 @@ export async function parseEpub(data: ArrayBuffer): Promise<ParsedBook> {
   const { title, author, coverMetaId } = parseOpfMetadata(opfDoc)
   const manifest = parseOpfManifest(opfDoc, opfDir)
   const spine = parseOpfSpine(opfDoc)
-  const imageUrls = await buildImageBlobUrls(zip, manifest)
+  const { images: parsedImages, byHref: imagesByHref, byBasename: imagesByBasename } =
+    await buildImageManifest(zip, manifest)
 
   // Resolve TOC (NCX preferred, nav fallback).
   let tocEntries: TocEntry[] = []
@@ -328,7 +362,7 @@ export async function parseEpub(data: ArrayBuffer): Promise<ParsedBook> {
 
     const chapterDir = dirname(item.href)
     const htmlDoc = new DOMParser().parseFromString(content, 'text/html')
-    rewriteImageSources(htmlDoc, imageUrls, chapterDir)
+    rewriteImageSources(htmlDoc, imagesByHref, imagesByBasename, chapterDir)
 
     const tocTitle = tocTitleByFile.get(item.href)
     const headingTitle = firstHeading(htmlDoc)
@@ -361,5 +395,6 @@ export async function parseEpub(data: ArrayBuffer): Promise<ParsedBook> {
     sections,
     cover,
     tocTree,
+    parsedImages,
   }
 }

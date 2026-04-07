@@ -718,6 +718,7 @@ function ActiveReader({
           />
         ) : (
           <FormattedView
+            publicationId={publicationId}
             chapters={chapters}
             currentSectionIndex={chapterIdx}
             onVisibleSectionChange={handleVisibleSectionChange}

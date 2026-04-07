@@ -26,6 +26,12 @@ export interface SerializedImagePage {
   mimeType: string
 }
 
+export interface SerializedParsedImage {
+  name: string
+  imageData: ArrayBuffer
+  mimeType: string
+}
+
 export interface SerializedSection {
   title: string
   text: string
@@ -47,6 +53,7 @@ export interface SerializedParsedBook {
   cover?: SerializedCover
   tocTree?: SerializedTocNode[]
   imagePages?: SerializedImagePage[]
+  parsedImages?: SerializedParsedImage[]
 }
 
 export interface ChunkedSegment {

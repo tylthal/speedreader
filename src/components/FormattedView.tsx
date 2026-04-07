@@ -1,12 +1,46 @@
 import { useEffect, useRef } from 'react'
 import type { Chapter } from '../api/client'
+import { getImageBlob } from '../lib/fileStorage'
 
 interface FormattedViewProps {
+  publicationId: number
   chapters: Chapter[]
   /** Index of the section the reader cursor is currently in. */
   currentSectionIndex: number
   /** Called when scrolling causes a different section to become visible. */
   onVisibleSectionChange: (sectionIndex: number) => void
+}
+
+/**
+ * Walk an article element and replace every `<img src="opfs:NAME">` with a
+ * fresh blob URL fetched from OPFS. Returns the array of created blob URLs
+ * so the caller can revoke them on unmount.
+ */
+async function resolveOpfsImages(
+  publicationId: number,
+  root: HTMLElement,
+): Promise<string[]> {
+  const created: string[] = []
+  const imgs = root.querySelectorAll('img[src^="opfs:"]')
+  for (const img of Array.from(imgs)) {
+    const src = img.getAttribute('src') ?? ''
+    const name = src.slice('opfs:'.length)
+    if (!name) continue
+    try {
+      const blob = await getImageBlob(publicationId, name)
+      if (blob) {
+        const url = URL.createObjectURL(blob)
+        img.setAttribute('src', url)
+        created.push(url)
+      } else {
+        console.warn('[formatted] image not found in OPFS', { publicationId, name })
+        img.removeAttribute('src')
+      }
+    } catch (err) {
+      console.warn('[formatted] image resolve failed', { name, err })
+    }
+  }
+  return created
 }
 
 /**
@@ -21,6 +55,7 @@ interface FormattedViewProps {
  * is PRD §10 future work.
  */
 export default function FormattedView({
+  publicationId,
   chapters,
   currentSectionIndex,
   onVisibleSectionChange,
@@ -28,6 +63,25 @@ export default function FormattedView({
   const containerRef = useRef<HTMLDivElement>(null)
   const sectionRefs = useRef<Map<number, HTMLElement>>(new Map())
   const isProgrammaticScrollRef = useRef(false)
+
+  // Resolve `opfs:` image markers to blob URLs after the HTML mounts.
+  // Re-runs whenever the chapter list changes; revokes previously-created
+  // URLs on unmount.
+  useEffect(() => {
+    let cancelled = false
+    const created: string[] = []
+    ;(async () => {
+      for (const el of sectionRefs.current.values()) {
+        if (cancelled) break
+        const urls = await resolveOpfsImages(publicationId, el)
+        created.push(...urls)
+      }
+    })()
+    return () => {
+      cancelled = true
+      for (const url of created) URL.revokeObjectURL(url)
+    }
+  }, [publicationId, chapters])
 
   // Scroll the current section into view whenever the cursor changes
   // externally (e.g. user toggled from plain → formatted).

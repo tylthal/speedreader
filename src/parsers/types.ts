@@ -49,6 +49,20 @@ export interface TocNode {
   children?: TocNode[]
 }
 
+/**
+ * An image referenced by section HTML. The section HTML uses
+ * `<img src="opfs:{name}">` markers; uploadBook persists each entry to OPFS
+ * at `/images/{pubId}/{name}`, and FormattedView resolves the `opfs:` srcs
+ * to fresh blob URLs at render time. This keeps images valid across reloads
+ * (URL.createObjectURL handles are session-bound).
+ */
+export interface ParsedImage {
+  /** Basename used both as the OPFS filename and the `opfs:{name}` marker. */
+  name: string
+  blob: Blob
+  mimeType: string
+}
+
 export interface ParsedBook {
   title: string
   author: string
@@ -65,6 +79,11 @@ export interface ParsedBook {
    * carries the page bitmaps. The reader treats one segment per page.
    */
   imagePages?: ImagePage[]
+  /**
+   * Inline images referenced by section HTML via `<img src="opfs:{name}">`.
+   * Persisted to OPFS at upload time so the URLs survive page reloads.
+   */
+  parsedImages?: ParsedImage[]
 }
 
 /**

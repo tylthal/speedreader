@@ -72,13 +72,13 @@ function serializeNode(node: Node): string {
       if (name === 'href' && !isSafeHref(value)) continue
       if (name === 'src') {
         // Allowed schemes for image src:
-        //   blob:        — URL.createObjectURL of in-memory blobs (EPUB images)
-        //   data:image/  — inline data URIs (rare but valid for SVG covers)
-        //   https?:      — remote images (we don't strip these even though
-        //                  the app is offline-first; sanitization is about
-        //                  XSS, not network policy)
+        //   opfs:        — `opfs:{name}` marker resolved by FormattedView
+        //                  at render time to a fresh OPFS-backed blob URL
+        //   blob:        — URL.createObjectURL of in-memory blobs (legacy)
+        //   data:image/  — inline data URIs
+        //   https?:      — remote images
         //   /, covers/, images/ — relative paths the renderer resolves
-        if (!/^(blob:|https?:|data:image\/|\/|covers\/|images\/)/.test(value)) continue
+        if (!/^(opfs:|blob:|https?:|data:image\/|\/|covers\/|images\/)/.test(value)) continue
       }
       attrs.push(`${name}="${escapeAttr(value)}"`)
     }

@@ -5,6 +5,7 @@ import {
   storeBookFile,
   deleteBookFiles,
   storeCover,
+  storeImage,
   isFileStorageAvailable,
   getCoverUrl as resolveCoverUrl,
 } from '../lib/fileStorage'
@@ -119,6 +120,19 @@ async function runParse(
     }
   }
 
+  type SerializedParsedImage = import('../workers/parserProtocol').SerializedParsedImage
+  let parsedImages: SerializedParsedImage[] | undefined
+  if (book.parsedImages?.length) {
+    parsedImages = []
+    for (const img of book.parsedImages) {
+      parsedImages.push({
+        name: img.name,
+        imageData: await img.blob.arrayBuffer(),
+        mimeType: img.mimeType,
+      })
+    }
+  }
+
   let imagePages: SerializedImagePage[] | undefined
   if (book.imagePages?.length) {
     imagePages = []
@@ -164,6 +178,7 @@ async function runParse(
       cover,
       tocTree,
       imagePages,
+      parsedImages,
     },
     chunkedSections,
   }
@@ -224,6 +239,23 @@ export class LocalClient implements SpeedReaderClient {
     }
     if (coverPath) {
       await db.publications.update(pubId, { cover_path: coverPath })
+    }
+
+    // Persist inline images (EPUB) to OPFS so the formatted view can resolve
+    // them across page reloads. Section HTML uses `<img src="opfs:{name}">`
+    // markers; FormattedView resolves them to fresh blob URLs at render time.
+    if (book.parsedImages?.length && isFileStorageAvailable()) {
+      let stored = 0
+      for (const img of book.parsedImages) {
+        try {
+          const blob = new Blob([img.imageData], { type: img.mimeType })
+          await storeImage(pubId, img.name, blob)
+          stored++
+        } catch (err) {
+          console.warn('[upload] failed to store image', img.name, err)
+        }
+      }
+      console.log('[upload] stored', stored, 'inline images for pub', pubId)
     }
 
     // Now insert sections + segments + image_pages in a single transaction.
