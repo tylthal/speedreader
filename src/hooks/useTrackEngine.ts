@@ -2,6 +2,11 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 import type { Segment } from '../types';
 import type { GazeDirection } from '../lib/gazeProcessor';
 import { useVisibilityPause } from './useVisibilityPause';
+import {
+  createLookupCache,
+  getPxPerWeight,
+  type VelocityProfile,
+} from '../lib/velocityProfile';
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -29,6 +34,22 @@ interface UseTrackEngineOptions {
   containerRef: React.RefObject<HTMLDivElement | null>;
   itemOffsetsRef: React.RefObject<Map<number, HTMLDivElement>>;
   gazeRef: React.RefObject<{ direction: GazeDirection; intensity: number }>;
+  /**
+   * Optional per-element velocity profile. See useScrollEngine for the
+   * full design notes — when present, the tick loop reads pxPerWeight
+   * from the profile each frame and the gaze multiplier composes on top.
+   * Reverse playback (negative multiplier) works naturally because
+   * pxPerWeight is direction-agnostic.
+   */
+  velocityProfileRef?: React.RefObject<VelocityProfile | null>;
+  /**
+   * Optional cursor mapping callback. Same contract as useScrollEngine —
+   * when supplied, the engine hands the parent the container-relative
+   * scroll center each segment-detection tick and adopts the returned
+   * array index. Used by the formatted-view path where there are no
+   * per-segment DOM elements to walk.
+   */
+  onScrollTick?: (centerY: number) => number | null;
   initialWpm?: number;
   onSegmentChange?: (index: number) => void;
   onComplete?: () => void;
@@ -78,10 +99,16 @@ export function useTrackEngine(
     containerRef,
     itemOffsetsRef,
     gazeRef,
+    velocityProfileRef,
+    onScrollTick,
     initialWpm = DEFAULT_WPM,
     onSegmentChange,
     onComplete,
   } = options;
+
+  // See useScrollEngine for the rationale behind these refs.
+  const profileLookupCacheRef = useRef(createLookupCache());
+  const lastProfileGenerationRef = useRef(-1);
 
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -116,14 +143,32 @@ export function useTrackEngine(
     }
   }, []);
 
+  // Stable ref to onScrollTick so the rAF loop never captures a stale closure.
+  const onScrollTickRef = useRef(onScrollTick);
+  onScrollTickRef.current = onScrollTick;
+
   /**
    * Determine which segment is closest to the vertical center of the
-   * scroll container and update currentIndex if it changed.
+   * scroll container and update currentIndex if it changed. See
+   * useScrollEngine.updateCurrentIndexFromScroll for the two-path design.
    */
   const updateCurrentIndexFromScroll = useCallback(() => {
     const container = containerRef.current;
+    if (!container) return;
+
+    if (onScrollTickRef.current) {
+      const centerY = container.scrollTop + container.clientHeight / 2;
+      const newIdx = onScrollTickRef.current(centerY);
+      if (newIdx != null && newIdx !== currentIndexRef.current) {
+        setCurrentIndex(newIdx);
+        currentIndexRef.current = newIdx;
+        onSegmentChangeRef.current?.(newIdx);
+      }
+      return;
+    }
+
     const items = itemOffsetsRef.current;
-    if (!container || !items || items.size === 0) return;
+    if (!items || items.size === 0) return;
 
     const containerRect = container.getBoundingClientRect();
     const centerY = containerRect.top + containerRect.height / 2;
@@ -185,12 +230,21 @@ export function useTrackEngine(
       return;
     }
 
-    if (pxPerSecPerWpmRef.current === 0) {
+    // Pick velocity model — see useScrollEngine for the design.
+    const profile = velocityProfileRef?.current ?? null;
+    const useProfile = profile !== null && profile.entries.length > 0;
+    if (useProfile && profile.generation !== lastProfileGenerationRef.current) {
+      profileLookupCacheRef.current.lastIdx = 0;
+      lastProfileGenerationRef.current = profile.generation;
+    }
+
+    if (!useProfile && pxPerSecPerWpmRef.current === 0) {
       computeAverageSpeed();
       scrollPositionRef.current = container.scrollTop;
     }
 
-    if (lastTimestampRef.current > 0 && pxPerSecPerWpmRef.current > 0) {
+    const haveModel = useProfile || pxPerSecPerWpmRef.current > 0;
+    if (lastTimestampRef.current > 0 && haveModel) {
       const dt = (timestamp - lastTimestampRef.current) / 1000;
       const gaze = gazeRef.current;
 
@@ -228,8 +282,25 @@ export function useTrackEngine(
       const lerpRate = 1 - Math.exp(-dt / tau);
       speedMultiplierRef.current += (targetMultiplier - speedMultiplierRef.current) * lerpRate;
 
-      // Base speed from WPM
-      const basePxPerSec = pxPerSecPerWpmRef.current * wpmRef.current;
+      // Base speed from WPM. With a velocity profile, the per-element
+      // pxPerWeight varies across the page; without one, fall back to the
+      // chapter-average constant. The gaze multiplier composes on top of
+      // either model, so a 2.5× speed-up still means 2.5× regardless of
+      // whether we're inside a code block or a paragraph.
+      let basePxPerSec = 0;
+      if (useProfile) {
+        const centerY = container.scrollTop + container.clientHeight / 2;
+        const pxPerWeight = getPxPerWeight(
+          profile,
+          centerY,
+          profileLookupCacheRef.current,
+        );
+        if (pxPerWeight > 0) {
+          basePxPerSec = pxPerWeight * (wpmRef.current / 60);
+        }
+      } else {
+        basePxPerSec = pxPerSecPerWpmRef.current * wpmRef.current;
+      }
 
       // Accumulate in high-precision float, snap to physical pixel grid
       scrollPositionRef.current += basePxPerSec * speedMultiplierRef.current * dt;
@@ -254,7 +325,7 @@ export function useTrackEngine(
     }
 
     rafRef.current = requestAnimationFrame(tick);
-  }, [containerRef, gazeRef, stopLoop, updateCurrentIndexFromScroll, computeAverageSpeed, dpr]);
+  }, [containerRef, gazeRef, velocityProfileRef, stopLoop, updateCurrentIndexFromScroll, computeAverageSpeed, dpr]);
 
   /* ---- Actions ---- */
   const play = useCallback(() => {
