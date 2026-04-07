@@ -255,7 +255,9 @@ export class LocalClient implements SpeedReaderClient {
           totalSegments += section.segments.length
         }
 
-        // CBZ image pages — attach to the (single) section row.
+        // CBZ image pages — attach to the (single) section row, AND
+        // synthesize one segment per page so the unified reader's segment
+        // cursor can step through the comic in any reading mode (PRD §4.5).
         if (book.contentType === 'image' && book.imagePages?.length) {
           const sectionRow = await db.chapters
             .where('publication_id')
@@ -273,8 +275,25 @@ export class LocalClient implements SpeedReaderClient {
                 height: page.height,
                 mime_type: page.mimeType,
               })
+              // One synthetic segment per page. text is empty, duration is
+              // a generous default (5 s) so Phrase/RSVP step pages slowly.
+              await db.segments.add({
+                chapter_id: sectionRow.id,
+                segment_index: page.pageIndex,
+                text: '',
+                word_count: 0,
+                duration_ms: 5000,
+                inline_images: null,
+                kind: 'text',
+                html_anchor: `page-${page.pageIndex}`,
+              })
             }
             totalPages = book.imagePages.length
+            totalSegments = book.imagePages.length
+            // Update the section row's segment_count too.
+            await db.chapters.update(sectionRow.id, {
+              segment_count: book.imagePages.length,
+            })
           }
         }
 

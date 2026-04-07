@@ -1,4 +1,4 @@
-export type ReadingMode = 'phrase' | 'rsvp' | 'scroll' | 'track' | 'image';
+export type ReadingMode = 'phrase' | 'rsvp' | 'scroll' | 'track';
 
 export interface InlineImage {
   image_url: string;

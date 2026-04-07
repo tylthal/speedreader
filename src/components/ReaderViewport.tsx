@@ -27,7 +27,6 @@ import TocSidebar from './TocSidebar';
 import FormattedView from './FormattedView';
 import PdfFormattedView from './PdfFormattedView';
 import CbzFormattedView from './CbzFormattedView';
-import ImageReader from './ImageReader';
 import type { ContentType } from '../api/client';
 
 /* ------------------------------------------------------------------ */
@@ -163,7 +162,7 @@ export default function ReaderViewport({ publicationId }: ReaderViewportProps) {
             segmentIndex,
             wordIndex,
             wpm,
-            readingMode: (pub.content_type === 'image') ? 'image' : readingMode,
+            readingMode,
             contentType: (pub.content_type ?? 'text') as ContentType,
             bookTitle: pub.title,
             initialDisplayMode,
@@ -192,17 +191,6 @@ export default function ReaderViewport({ publicationId }: ReaderViewportProps) {
   }
 
   const { position } = initState;
-
-  if (position.contentType === 'image') {
-    return (
-      <ImageReader
-        publicationId={publicationId}
-        chapters={position.chapters}
-        initialChapterIdx={position.chapterIdx}
-        initialPageIndex={position.segmentIndex}
-      />
-    );
-  }
 
   return (
     <ActiveReader
