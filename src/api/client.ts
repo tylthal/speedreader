@@ -99,3 +99,7 @@ export function saveProgress(
 ) {
   return getClient().saveProgress(pubId, data)
 }
+
+export function setDisplayModePref(pubId: number, mode: 'plain' | 'formatted' | null) {
+  return getClient().setDisplayModePref(pubId, mode)
+}

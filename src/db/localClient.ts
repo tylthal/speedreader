@@ -235,6 +235,11 @@ export class LocalClient implements SpeedReaderClient {
             meta: section.meta ? JSON.stringify(section.meta) : null,
           })
 
+          // Anchor convention: every segment gets `section-{N}` so the
+          // formatted view can scroll to its containing section. P5
+          // intentionally lands at section-level precision; per-paragraph
+          // anchors are PRD §10 future work.
+          const anchor = `section-${sIdx}`
           for (const seg of section.segments) {
             await db.segments.add({
               chapter_id: sectionId as number,
@@ -244,7 +249,7 @@ export class LocalClient implements SpeedReaderClient {
               duration_ms: seg.duration_ms,
               inline_images: null,
               kind: seg.kind ?? 'text',
-              html_anchor: null,
+              html_anchor: anchor,
             })
           }
           totalSegments += section.segments.length
@@ -372,14 +377,26 @@ export class LocalClient implements SpeedReaderClient {
     const base = await pubRowToPublication(pub)
     return {
       ...base,
-      chapters: chapters.map((c) => ({
-        id: c.id!,
-        publication_id: c.publication_id,
-        chapter_index: c.chapter_index,
-        title: c.title,
-      })),
+      chapters: chapters.map((c) => {
+        let meta: Record<string, unknown> | null = null
+        if (c.meta) {
+          try { meta = JSON.parse(c.meta) } catch { meta = null }
+        }
+        return {
+          id: c.id!,
+          publication_id: c.publication_id,
+          chapter_index: c.chapter_index,
+          title: c.title,
+          html: c.html ?? null,
+          meta,
+        }
+      }),
       toc_tree: tocTree,
     }
+  }
+
+  async setDisplayModePref(pubId: number, mode: 'plain' | 'formatted' | null): Promise<void> {
+    await db.publications.update(pubId, { display_mode_pref: mode })
   }
 
   async getSegments(

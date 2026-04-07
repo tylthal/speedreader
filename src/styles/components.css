@@ -304,6 +304,137 @@
   white-space: nowrap;
 }
 
+/* ---------- Formatted view (PRD §4.3) ---------- */
+.formatted-view {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+  background: var(--bg);
+  -webkit-overflow-scrolling: touch;
+}
+
+.formatted-view__column {
+  max-width: 680px;
+  margin: 0 auto;
+  padding: 1.25rem 1.25rem 4rem;
+  font-family: var(--font-display);
+  font-size: 1.05rem;
+  line-height: 1.65;
+  color: var(--text);
+}
+
+.formatted-view__column--cbz {
+  max-width: 100%;
+  padding: 0 0 4rem;
+}
+
+.formatted-view__section {
+  margin: 0 0 2.5rem;
+}
+
+.formatted-view__title {
+  font-family: var(--font-display);
+  font-size: 1.6rem;
+  font-weight: 600;
+  line-height: 1.2;
+  margin: 1.5rem 0 0.85rem;
+  color: var(--text);
+}
+
+.formatted-view__body p {
+  margin: 0 0 0.85rem;
+}
+
+.formatted-view__body h1,
+.formatted-view__body h2,
+.formatted-view__body h3 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  margin: 1.5rem 0 0.75rem;
+  line-height: 1.2;
+  color: var(--text);
+}
+
+.formatted-view__body h1 { font-size: 1.5rem; }
+.formatted-view__body h2 { font-size: 1.3rem; }
+.formatted-view__body h3 { font-size: 1.15rem; }
+
+.formatted-view__body blockquote {
+  border-left: 3px solid var(--accent);
+  padding-left: 1rem;
+  margin: 1rem 0;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.formatted-view__body img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 1.25rem auto;
+  border-radius: var(--radius-sm);
+}
+
+.formatted-view__body ul,
+.formatted-view__body ol {
+  margin: 0.5rem 0 1rem 1.25rem;
+  padding-left: 0.5rem;
+}
+
+.formatted-view__body code {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.9em;
+  background: var(--surface-hover);
+  padding: 0.05em 0.3em;
+  border-radius: 3px;
+}
+
+.formatted-view__body pre {
+  background: var(--surface-hover);
+  padding: 0.85rem 1rem;
+  border-radius: var(--radius-sm);
+  overflow-x: auto;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.formatted-view__empty {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.formatted-view--error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  padding: 2rem;
+  text-align: center;
+}
+
+.formatted-view__pdf-page {
+  margin: 0 auto 1rem;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
+}
+
+.formatted-view__pdf-page canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.formatted-view__cbz-page {
+  width: 100%;
+}
+
+.formatted-view__cbz-img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
 /* ---------- GestureLayer ---------- */
 .gesture-layer {
   flex: 1;

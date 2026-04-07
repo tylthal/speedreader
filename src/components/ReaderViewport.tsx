@@ -11,7 +11,7 @@ import { useOrientationResilience } from '../hooks/useOrientationResilience';
 import { useKeyboardHandling } from '../hooks/useKeyboardHandling';
 import { useWakeLock } from '../hooks/useWakeLock';
 import { useNavigate } from 'react-router-dom';
-import { getPublication, getProgress } from '../api/client';
+import { getPublication, getProgress, setDisplayModePref } from '../api/client';
 import { useDataSaver } from '../hooks/useDataSaver';
 import { markNavigationStart, markFirstChunkRendered } from '../lib/ttfcMetric';
 import type { Chapter, ReadingProgress, TocNode, DisplayMode } from '../api/client';
@@ -24,6 +24,9 @@ import GazeIndicator from './GazeIndicator';
 import TrackCalibration from './TrackCalibration';
 import ReaderHeader from './ReaderHeader';
 import TocSidebar from './TocSidebar';
+import FormattedView from './FormattedView';
+import PdfFormattedView from './PdfFormattedView';
+import CbzFormattedView from './CbzFormattedView';
 import ImageReader from './ImageReader';
 import type { ContentType } from '../api/client';
 
@@ -237,8 +240,25 @@ function ActiveReader({
 }: ActiveReaderProps) {
   const [readingMode, setReadingMode] = useState<ReadingMode>(initialReadingMode);
   const [chapterIdx, setChapterIdx] = useState(initialChapterIdx);
-  const [displayMode] = useState<DisplayMode>(initialDisplayMode);
+  const [displayMode, setDisplayMode] = useState<DisplayMode>(initialDisplayMode);
   const [tocOpen, setTocOpen] = useState(false);
+
+  // CBZ never shows the formatted-view toggle (PRD §4.5).
+  const isImageBook = contentType === 'image';
+  // Phrase/RSVP force plain rendering (PRD §4.4) — they have no formatted
+  // representation. We don't change displayMode here; we just don't render
+  // the formatted view component.
+  const phraseLikeMode = readingMode === 'phrase' || readingMode === 'rsvp';
+  const showFormattedView = (isImageBook || displayMode === 'formatted') && !phraseLikeMode;
+
+  const handleToggleDisplayMode = useCallback(() => {
+    setDisplayMode((prev) => {
+      const next: DisplayMode = prev === 'plain' ? 'formatted' : 'plain';
+      // Persist per-book preference (best-effort).
+      setDisplayModePref(publicationId, next).catch(() => { /* ignore */ });
+      return next;
+    });
+  }, [publicationId]);
   const [saverEnabled, setSaverEnabled] = useState(false);
   const [stopAtChapterEnd, setStopAtChapterEnd] = useState(() => {
     try {
@@ -639,8 +659,23 @@ function ActiveReader({
   }, [activeState.isPlaying]);
 
   /* ---- Render ---- */
-  // CBZ hides the display-mode toggle entirely (PRD §4.5).
-  const isImage = contentType === 'image';
+  // Detect PDF vs HTML formatted view by checking section meta.
+  const isPdfBook =
+    !isImageBook &&
+    chapters.length > 0 &&
+    chapters[0].meta != null &&
+    typeof (chapters[0].meta as Record<string, unknown>).startPage === 'number';
+
+  // Visible-section callback used by the formatted views.
+  const handleVisibleSectionChange = useCallback(
+    (idx: number) => {
+      if (idx !== chapterIdx) {
+        setChapterIdx(idx);
+        activeActions.seekTo(0);
+      }
+    },
+    [chapterIdx, activeActions],
+  );
 
   return (
     <div className="reader-viewport" role="main" aria-label="Book reader" id="main-content">
@@ -648,8 +683,8 @@ function ActiveReader({
         bookTitle={bookTitle}
         sectionTitle={currentChapter?.title ?? 'Untitled'}
         displayMode={displayMode}
-        onToggleDisplayMode={undefined /* P5 wires this up */}
-        hideDisplayToggle={isImage}
+        onToggleDisplayMode={isImageBook ? undefined : handleToggleDisplayMode}
+        hideDisplayToggle={isImageBook}
         onOpenToc={() => setTocOpen(true)}
         onExit={() => navigate('/')}
       />
@@ -669,6 +704,39 @@ function ActiveReader({
           Data Saver
         </div>
       )}
+
+      {showFormattedView && (
+        isImageBook ? (
+          <CbzFormattedView
+            publicationId={publicationId}
+            chapterId={currentChapterId}
+            totalPages={chapters[0]?.meta && typeof (chapters[0].meta as any).pageCount === 'number'
+              ? (chapters[0].meta as any).pageCount as number
+              : 9999}
+            currentPageIndex={currentSegmentRealIndex}
+            onVisiblePageChange={(idx) => {
+              if (idx !== currentSegmentRealIndex) {
+                activeActions.seekTo(idx);
+              }
+            }}
+          />
+        ) : isPdfBook ? (
+          <PdfFormattedView
+            publicationId={publicationId}
+            chapters={chapters}
+            currentSectionIndex={chapterIdx}
+            onVisibleSectionChange={handleVisibleSectionChange}
+          />
+        ) : (
+          <FormattedView
+            chapters={chapters}
+            currentSectionIndex={chapterIdx}
+            onVisibleSectionChange={handleVisibleSectionChange}
+          />
+        )
+      )}
+
+      {!showFormattedView && (
       <GestureLayer
         onTap={activeActions.togglePlayPause}
         onSwipeLeft={activeState.isPlaying ? handleNextChapter : undefined}
@@ -692,6 +760,7 @@ function ActiveReader({
           scrollItemRefs={scrollItemRefsMap}
         />
       </GestureLayer>
+      )}
 
       {readingMode === 'track' && gazeState.status !== 'idle' && activeState.isPlaying && (
         <GazeIndicator

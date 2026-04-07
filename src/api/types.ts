@@ -49,6 +49,10 @@ export interface Chapter {
   publication_id: number
   chapter_index: number
   title: string
+  /** Sanitized HTML for the formatted view (PRD §4.3). Empty for PDF/CBZ. */
+  html?: string | null
+  /** Format-specific metadata (e.g. PDF page range). */
+  meta?: Record<string, unknown> | null
 }
 
 export interface PublicationDetail extends Publication {

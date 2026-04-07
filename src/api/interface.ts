@@ -5,6 +5,7 @@ import type {
   ImagePageBatch,
   ReadingProgress,
   ProgressInput,
+  DisplayMode,
 } from './types'
 
 export interface SpeedReaderClient {
@@ -20,4 +21,5 @@ export interface SpeedReaderClient {
   getImageUrl(imagePath: string): string
   getProgress(pubId: number): Promise<ReadingProgress | null>
   saveProgress(pubId: number, data: ProgressInput): Promise<ReadingProgress>
+  setDisplayModePref(pubId: number, mode: DisplayMode | null): Promise<void>
 }
