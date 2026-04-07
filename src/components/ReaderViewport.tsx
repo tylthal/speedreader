@@ -716,6 +716,7 @@ function ActiveReader({
                 activeActions.seekTo(idx);
               }
             }}
+            onTap={activeActions.togglePlayPause}
           />
         ) : isPdfBook ? (
           <PdfFormattedView
@@ -723,6 +724,7 @@ function ActiveReader({
             chapters={chapters}
             currentSectionIndex={chapterIdx}
             onVisibleSectionChange={handleVisibleSectionChange}
+            onTap={activeActions.togglePlayPause}
           />
         ) : (
           <FormattedView
@@ -730,6 +732,7 @@ function ActiveReader({
             chapters={chapters}
             currentSectionIndex={chapterIdx}
             onVisibleSectionChange={handleVisibleSectionChange}
+            onTap={activeActions.togglePlayPause}
           />
         )
       )}

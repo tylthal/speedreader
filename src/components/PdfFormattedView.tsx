@@ -1,12 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
 import { getBookFile } from '../lib/fileStorage'
 import type { Chapter } from '../api/client'
+import { useContentTap } from '../hooks/useContentTap'
 
 interface PdfFormattedViewProps {
   publicationId: number
   chapters: Chapter[]
   currentSectionIndex: number
   onVisibleSectionChange: (sectionIndex: number) => void
+  /** Tap-to-toggle-playback. Bare taps only — links/buttons keep working. */
+  onTap?: () => void
 }
 
 interface PdfSectionMeta {
@@ -36,7 +39,9 @@ export default function PdfFormattedView({
   chapters,
   currentSectionIndex,
   onVisibleSectionChange,
+  onTap,
 }: PdfFormattedViewProps) {
+  const tapHandlers = useContentTap(onTap)
   const containerRef = useRef<HTMLDivElement>(null)
   const pageRefs = useRef<Map<number, HTMLDivElement>>(new Map())
   const sectionFirstPageRef = useRef<Map<number, number>>(new Map())
@@ -220,7 +225,7 @@ export default function PdfFormattedView({
   }
 
   return (
-    <div className="formatted-view formatted-view--pdf" ref={containerRef}>
+    <div className="formatted-view formatted-view--pdf" ref={containerRef} {...tapHandlers}>
       <div className="formatted-view__column">
         {pages.map((p) => (
           <div

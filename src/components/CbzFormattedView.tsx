@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { getImagePages } from '../api/client'
 import type { ImagePage } from '../api/client'
+import { useContentTap } from '../hooks/useContentTap'
 
 interface CbzFormattedViewProps {
   publicationId: number
@@ -10,6 +11,8 @@ interface CbzFormattedViewProps {
   /** Index of the page the reader is currently on. */
   currentPageIndex: number
   onVisiblePageChange: (pageIndex: number) => void
+  /** Tap-to-toggle-playback. */
+  onTap?: () => void
 }
 
 /**
@@ -23,7 +26,9 @@ export default function CbzFormattedView({
   totalPages,
   currentPageIndex,
   onVisiblePageChange,
+  onTap,
 }: CbzFormattedViewProps) {
+  const tapHandlers = useContentTap(onTap)
   const containerRef = useRef<HTMLDivElement>(null)
   const pageRefs = useRef<Map<number, HTMLDivElement>>(new Map())
   const isProgrammaticScrollRef = useRef(false)
@@ -84,7 +89,7 @@ export default function CbzFormattedView({
   }, [currentPageIndex, pages.length])
 
   return (
-    <div className="formatted-view formatted-view--cbz" ref={containerRef}>
+    <div className="formatted-view formatted-view--cbz" ref={containerRef} {...tapHandlers}>
       <div className="formatted-view__column formatted-view__column--cbz">
         {pages.map((p) => (
           <div

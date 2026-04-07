@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Chapter } from '../api/client'
 import { getImageBlob } from '../lib/fileStorage'
+import { useContentTap } from '../hooks/useContentTap'
 
 interface FormattedViewProps {
   publicationId: number
@@ -9,6 +10,8 @@ interface FormattedViewProps {
   currentSectionIndex: number
   /** Called when scrolling causes a different section to become visible. */
   onVisibleSectionChange: (sectionIndex: number) => void
+  /** Tap-to-toggle-playback. Fires for bare taps that don't land on a link/button. */
+  onTap?: () => void
 }
 
 const OPFS_SRC_RE = /<img\s[^>]*?src=["']opfs:([^"']+)["']/gi
@@ -108,7 +111,9 @@ export default function FormattedView({
   chapters,
   currentSectionIndex,
   onVisibleSectionChange,
+  onTap,
 }: FormattedViewProps) {
+  const tapHandlers = useContentTap(onTap)
   const containerRef = useRef<HTMLDivElement>(null)
   const sectionRefs = useRef<Map<number, HTMLElement>>(new Map())
   const isProgrammaticScrollRef = useRef(false)
@@ -248,7 +253,7 @@ export default function FormattedView({
   }, [chapters])
 
   return (
-    <div className="formatted-view" ref={containerRef}>
+    <div className="formatted-view" ref={containerRef} {...tapHandlers}>
       <div className="formatted-view__column">
         {chapters.map((ch, idx) => (
           <article
