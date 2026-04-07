@@ -688,6 +688,22 @@
   flex-direction: column;
   gap: 6px;
   color: var(--text);
+  /* Whole pane fades out during playback. Tap-to-pause on the reading
+     surface remains the way back; the bottom controls vanish entirely
+     so the page is unobstructed. */
+  transition: opacity 0.4s ease, transform 0.4s ease;
+}
+
+.controls--playing {
+  opacity: 0;
+  transform: translateY(100%);
+  pointer-events: none;
+  /* Drop the chrome along with the content so there's no faint edge or
+     background bleed-through left behind. */
+  border-top-color: transparent;
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 
 .controls__chapter-row,
