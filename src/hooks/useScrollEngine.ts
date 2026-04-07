@@ -1,6 +1,11 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import type { Segment } from '../types';
 import { useVisibilityPause } from './useVisibilityPause';
+import {
+  createLookupCache,
+  getPxPerWeight,
+  type VelocityProfile,
+} from '../lib/velocityProfile';
 
 interface ScrollState {
   currentIndex: number;
@@ -23,6 +28,25 @@ interface UseScrollEngineOptions {
   totalSegments: number;
   containerRef: React.RefObject<HTMLDivElement | null>;
   itemOffsetsRef: React.RefObject<Map<number, HTMLDivElement>>;
+  /**
+   * Optional per-element velocity profile. When present and non-empty, the
+   * tick loop reads pxPerWeight from the profile at each scroll center
+   * instead of using the constant `pxPerSecPerWpm` model. This is how the
+   * formatted-view scroll mode varies speed across paragraphs / code blocks
+   * / images. Focus-mode call sites omit this option and keep the original
+   * behavior unchanged.
+   */
+  velocityProfileRef?: React.RefObject<VelocityProfile | null>;
+  /**
+   * Optional cursor mapping callback. When supplied, the engine calls this
+   * each tick with the current scroll center; if it returns an array index
+   * different from the engine's currentIndex, the engine adopts the new
+   * index and fires onSegmentChange. This is how the formatted-view path
+   * derives "which segment is the user looking at" from a scroll position
+   * in a DOM that doesn't have per-segment elements. Focus-mode call sites
+   * omit this and keep the existing item-rect-based mapping.
+   */
+  onScrollTick?: (centerY: number) => number | null;
   initialWpm?: number;
   onSegmentChange?: (index: number) => void;
   onComplete?: () => void;
@@ -44,10 +68,18 @@ export function useScrollEngine(
     totalSegments,
     containerRef,
     itemOffsetsRef,
+    velocityProfileRef,
+    onScrollTick,
     initialWpm = DEFAULT_WPM,
     onSegmentChange,
     onComplete,
   } = options;
+
+  // Adjacency cache for the velocity-profile lookup. One per engine instance
+  // so consecutive ticks usually resolve in O(1). Reset when the profile
+  // generation bumps so we don't carry a stale index across rebuilds.
+  const profileLookupCacheRef = useRef(createLookupCache());
+  const lastProfileGenerationRef = useRef(-1);
 
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -77,14 +109,42 @@ export function useScrollEngine(
     }
   }, []);
 
+  // Stable ref to onScrollTick so the rAF loop doesn't capture a stale
+  // closure when the parent re-renders.
+  const onScrollTickRef = useRef(onScrollTick);
+  onScrollTickRef.current = onScrollTick;
+
   /**
    * Determine which segment is closest to the vertical center of the
    * scroll container and update currentIndex if it changed.
+   *
+   * Two paths:
+   *   - Formatted-view path (onScrollTick supplied): the parent owns the
+   *     mapping from scroll position to segment index, since the formatted
+   *     DOM doesn't have per-segment elements. We just hand the parent the
+   *     scroll center in container-relative coordinates and let it return
+   *     an array index.
+   *   - Focus-view path (itemOffsetsRef populated): walk the segment item
+   *     refs and pick the one whose center is nearest the viewport center.
    */
   const updateCurrentIndexFromScroll = useCallback(() => {
     const container = containerRef.current;
+    if (!container) return;
+
+    if (onScrollTickRef.current) {
+      // Formatted-view path: container-relative scroll center.
+      const centerY = container.scrollTop + container.clientHeight / 2;
+      const newIdx = onScrollTickRef.current(centerY);
+      if (newIdx != null && newIdx !== currentIndexRef.current) {
+        setCurrentIndex(newIdx);
+        currentIndexRef.current = newIdx;
+        onSegmentChangeRef.current?.(newIdx);
+      }
+      return;
+    }
+
     const items = itemOffsetsRef.current;
-    if (!container || !items || items.size === 0) return;
+    if (!items || items.size === 0) return;
 
     const containerRect = container.getBoundingClientRect();
     const centerY = containerRect.top + containerRect.height / 2;
@@ -141,24 +201,54 @@ export function useScrollEngine(
       return;
     }
 
-    // Compute average speed once on first tick (elements are rendered by then)
-    if (pxPerSecPerWpmRef.current === 0) {
+    // Pick a velocity model:
+    //   - Profile present and non-empty → per-element pxPerWeight (formatted view)
+    //   - Otherwise → constant pxPerSecPerWpm averaged across the chapter (focus view)
+    // The profile is read from a ref so rebuilds picked up between frames
+    // require zero React renders. We reset the lookup adjacency cache when
+    // the profile generation bumps so a stale lastIdx can't outlive a rebuild.
+    const profile = velocityProfileRef?.current ?? null;
+    const useProfile = profile !== null && profile.entries.length > 0;
+    if (useProfile && profile.generation !== lastProfileGenerationRef.current) {
+      profileLookupCacheRef.current.lastIdx = 0;
+      lastProfileGenerationRef.current = profile.generation;
+    }
+
+    // Constant-model first-tick warmup is only meaningful when we're NOT
+    // using a profile.
+    if (!useProfile && pxPerSecPerWpmRef.current === 0) {
       computeAverageSpeed();
     }
 
-    if (lastTimestampRef.current > 0 && pxPerSecPerWpmRef.current > 0) {
+    if (lastTimestampRef.current > 0) {
       const delta = timestamp - lastTimestampRef.current;
-      const pxPerSec = pxPerSecPerWpmRef.current * wpmRef.current;
-      const scrollDelta = pxPerSec * (delta / 1000);
-      container.scrollTop += scrollDelta;
+      let pxPerSec = 0;
+      if (useProfile) {
+        const centerY = container.scrollTop + container.clientHeight / 2;
+        const pxPerWeight = getPxPerWeight(
+          profile,
+          centerY,
+          profileLookupCacheRef.current,
+        );
+        if (pxPerWeight > 0) {
+          pxPerSec = pxPerWeight * (wpmRef.current / 60);
+        }
+      } else if (pxPerSecPerWpmRef.current > 0) {
+        pxPerSec = pxPerSecPerWpmRef.current * wpmRef.current;
+      }
 
-      // Check if we've hit the bottom
-      const maxScroll = container.scrollHeight - container.clientHeight;
-      if (container.scrollTop >= maxScroll - 1) {
-        setIsPlaying(false);
-        stopLoop();
-        onCompleteRef.current?.();
-        return;
+      if (pxPerSec > 0) {
+        const scrollDelta = pxPerSec * (delta / 1000);
+        container.scrollTop += scrollDelta;
+
+        // Check if we've hit the bottom
+        const maxScroll = container.scrollHeight - container.clientHeight;
+        if (container.scrollTop >= maxScroll - 1) {
+          setIsPlaying(false);
+          stopLoop();
+          onCompleteRef.current?.();
+          return;
+        }
       }
     }
     lastTimestampRef.current = timestamp;
@@ -167,7 +257,7 @@ export function useScrollEngine(
     updateCurrentIndexFromScroll();
 
     rafRef.current = requestAnimationFrame(tick);
-  }, [containerRef, stopLoop, updateCurrentIndexFromScroll, computeAverageSpeed]);
+  }, [containerRef, velocityProfileRef, stopLoop, updateCurrentIndexFromScroll, computeAverageSpeed]);
 
   const play = useCallback(() => {
     if (segmentsRef.current.length === 0) return;
