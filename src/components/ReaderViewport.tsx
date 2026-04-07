@@ -233,11 +233,11 @@ function ActiveReader({
 
   // CBZ never shows the formatted-view toggle (PRD §4.5).
   const isImageBook = contentType === 'image';
-  // Phrase/RSVP force plain rendering (PRD §4.4) — they have no formatted
-  // representation. We don't change displayMode here; we just don't render
-  // the formatted view component.
+  // Phrase/RSVP show the phrase/word display only while playing — this is
+  // a deliberate refinement of PRD §4.4: when paused in formatted mode, the
+  // user gets the full formatted page to browse, then hitting Play snaps
+  // back to the phrase/word display from the same segment cursor.
   const phraseLikeMode = readingMode === 'phrase' || readingMode === 'rsvp';
-  const showFormattedView = (isImageBook || displayMode === 'formatted') && !phraseLikeMode;
 
   const handleToggleDisplayMode = useCallback(() => {
     setDisplayMode((prev) => {
@@ -445,6 +445,15 @@ function ActiveReader({
     : readingMode === 'track'
     ? trackActions
     : playbackActions;
+
+  // Render the formatted view whenever displayMode is 'formatted' (or this
+  // is a CBZ book), EXCEPT in Phrase/RSVP while playback is active — those
+  // modes show the phrase/word display only while playing. When paused they
+  // fall back to the formatted page so the user can browse/read at their
+  // own pace, then hit Play to resume speed-reading from the same cursor.
+  const showFormattedView =
+    (isImageBook || displayMode === 'formatted') &&
+    !(phraseLikeMode && activeState.isPlaying);
 
   // trackedSegmentIndexRef declared earlier, before chapter change reset
 
@@ -673,7 +682,6 @@ function ActiveReader({
         displayMode={displayMode}
         onToggleDisplayMode={isImageBook ? undefined : handleToggleDisplayMode}
         hideDisplayToggle={isImageBook}
-        formattedSuppressed={displayMode === 'formatted' && phraseLikeMode}
         onOpenToc={() => setTocOpen(true)}
         onExit={() => navigate('/')}
       />
