@@ -16,7 +16,7 @@ const themeOptions: ThemeOption[] = [
   { value: 'light', label: 'Light', description: 'Warm paper feel', preview: '#FAF9F6', icon: '\u2600' },
   { value: 'dark', label: 'Dark', description: 'Easy on the eyes', preview: '#1C1C1E', icon: '\u263E' },
   { value: 'evening', label: 'Evening', description: 'Reduces eye strain', preview: '#1A1A2E', icon: '\uD83C\uDF19' },
-  { value: 'bedtime', label: 'Bedtime', description: 'No blue light', preview: '#1a0f0a', icon: '\u2B50' },
+  { value: 'bedtime', label: 'Bedtime', description: 'No blue light', preview: '#1a0f0a', icon: '\uD83D\uDECF' },
   { value: 'forest', label: 'Forest', description: 'Earthy & calm', preview: '#1A2118', icon: '\uD83C\uDF3F' },
   { value: 'ocean', label: 'Ocean', description: 'Deep & tranquil', preview: '#0F1923', icon: '\uD83C\uDF0A' },
 ];
