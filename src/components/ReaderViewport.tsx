@@ -673,6 +673,7 @@ function ActiveReader({
         displayMode={displayMode}
         onToggleDisplayMode={isImageBook ? undefined : handleToggleDisplayMode}
         hideDisplayToggle={isImageBook}
+        formattedSuppressed={displayMode === 'formatted' && phraseLikeMode}
         onOpenToc={() => setTocOpen(true)}
         onExit={() => navigate('/')}
       />

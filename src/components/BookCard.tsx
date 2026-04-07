@@ -140,6 +140,7 @@ export default function BookCard({
               className="book-card__cover-img"
               loading="lazy"
               decoding="async"
+              onError={() => console.warn('[card] cover img failed to load', { pubId: pub.id, src: pub.cover_url })}
             />
           </div>
         ) : (

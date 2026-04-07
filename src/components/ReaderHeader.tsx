@@ -4,12 +4,13 @@ interface ReaderHeaderProps {
   bookTitle: string
   sectionTitle: string
   displayMode: DisplayMode
-  /** Plain↔Formatted toggle is wired up in P5; pass undefined to disable. */
   onToggleDisplayMode?: () => void
   onOpenToc: () => void
   onExit: () => void
   /** Hide the display-mode toggle entirely (e.g. for CBZ — PRD §4.5). */
   hideDisplayToggle?: boolean
+  /** True when displayMode is set but the active reading mode forces plain. */
+  formattedSuppressed?: boolean
 }
 
 /**
@@ -26,6 +27,7 @@ export default function ReaderHeader({
   onOpenToc,
   onExit,
   hideDisplayToggle,
+  formattedSuppressed = false,
 }: ReaderHeaderProps) {
   const toggleEnabled = !hideDisplayToggle && Boolean(onToggleDisplayMode)
   return (
@@ -49,13 +51,15 @@ export default function ReaderHeader({
 
       {!hideDisplayToggle && (
         <button
-          className={`reader-header__btn reader-header__toggle${displayMode === 'formatted' ? ' reader-header__toggle--formatted' : ''}`}
+          className={`reader-header__btn reader-header__toggle${displayMode === 'formatted' ? ' reader-header__toggle--formatted' : ''}${formattedSuppressed ? ' reader-header__toggle--suppressed' : ''}`}
           onClick={toggleEnabled ? onToggleDisplayMode : undefined}
           disabled={!toggleEnabled}
-          aria-label={`Display mode: ${displayMode === 'formatted' ? 'Formatted' : 'Plain text'}`}
+          aria-label={`Display mode: ${displayMode === 'formatted' ? 'Formatted' : 'Plain text'}${formattedSuppressed ? ' (forced plain in this reading mode)' : ''}`}
           aria-pressed={displayMode === 'formatted'}
           title={
-            toggleEnabled
+            formattedSuppressed
+              ? 'Switch to Scroll or Track mode to see the formatted view'
+              : toggleEnabled
               ? `Switch to ${displayMode === 'formatted' ? 'plain text' : 'formatted'}`
               : 'Formatted view coming soon'
           }

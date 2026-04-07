@@ -71,8 +71,14 @@ function serializeNode(node: Node): string {
       if (value == null) continue
       if (name === 'href' && !isSafeHref(value)) continue
       if (name === 'src') {
-        // Allow data: only for image data URIs (rare but valid for SVG covers).
-        if (!/^(https?:|data:image\/|\/|covers\/|images\/)/.test(value)) continue
+        // Allowed schemes for image src:
+        //   blob:        — URL.createObjectURL of in-memory blobs (EPUB images)
+        //   data:image/  — inline data URIs (rare but valid for SVG covers)
+        //   https?:      — remote images (we don't strip these even though
+        //                  the app is offline-first; sanitization is about
+        //                  XSS, not network policy)
+        //   /, covers/, images/ — relative paths the renderer resolves
+        if (!/^(blob:|https?:|data:image\/|\/|covers\/|images\/)/.test(value)) continue
       }
       attrs.push(`${name}="${escapeAttr(value)}"`)
     }

@@ -33,7 +33,11 @@ async function pubRowToPublication(r: DBPublication): Promise<Publication> {
   if (r.cover_path) {
     try {
       coverUrl = await resolveCoverUrl(r.cover_path)
-    } catch {
+      if (!coverUrl) {
+        console.warn('[lib] cover_path set but blob missing', { pubId: r.id, cover_path: r.cover_path })
+      }
+    } catch (err) {
+      console.error('[lib] resolveCoverUrl failed', { pubId: r.id, cover_path: r.cover_path, err })
       coverUrl = null
     }
   }
@@ -201,14 +205,22 @@ export class LocalClient implements SpeedReaderClient {
 
     // Persist cover to OPFS (best-effort).
     let coverPath: string | null = null
-    if (book.cover && isFileStorageAvailable()) {
-      try {
-        const blob = new Blob([book.cover.imageData], { type: book.cover.mimeType })
-        const ext = getExtForMime(book.cover.mimeType)
-        coverPath = await storeCover(pubId, blob, ext)
-      } catch {
-        coverPath = null
+    if (book.cover) {
+      if (!isFileStorageAvailable()) {
+        console.warn('[upload] cover present but file storage unavailable')
+      } else {
+        try {
+          const blob = new Blob([book.cover.imageData], { type: book.cover.mimeType })
+          const ext = getExtForMime(book.cover.mimeType)
+          coverPath = await storeCover(pubId, blob, ext)
+          console.log('[upload] cover stored', { pubId, coverPath, mime: book.cover.mimeType, bytes: book.cover.imageData.byteLength })
+        } catch (err) {
+          console.error('[upload] storeCover failed', err)
+          coverPath = null
+        }
       }
+    } else {
+      console.warn('[upload] no cover extracted from', file.name)
     }
     if (coverPath) {
       await db.publications.update(pubId, { cover_path: coverPath })

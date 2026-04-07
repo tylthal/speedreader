@@ -170,6 +170,12 @@
   color: var(--accent);
 }
 
+.reader-header__toggle--suppressed {
+  outline: 1px dashed var(--text-muted);
+  outline-offset: -2px;
+  opacity: 0.65;
+}
+
 /* ---------- TOC sidebar (PRD §6.4) ---------- */
 .toc-sidebar {
   position: fixed;
