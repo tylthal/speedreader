@@ -26,6 +26,7 @@ import ReaderHeader from './ReaderHeader';
 import TocSidebar from './TocSidebar';
 import FormattedView from './FormattedView';
 import type { FormattedViewHandle } from './FormattedView';
+import VelocityProfileDebugOverlay from './VelocityProfileDebugOverlay';
 import PdfFormattedView from './PdfFormattedView';
 import CbzFormattedView from './CbzFormattedView';
 import type { ContentType } from '../api/client';
@@ -974,15 +975,22 @@ function ActiveReader({
             onTap={activeActions.togglePlayPause}
           />
         ) : (
-          <FormattedView
-            ref={formattedViewRef}
-            publicationId={publicationId}
-            chapters={chapters}
-            currentSectionIndex={chapterIdx}
-            onVisibleSectionChange={handleVisibleSectionChange}
-            onTap={activeActions.togglePlayPause}
-            velocityProfileRef={velocityProfileRef}
-          />
+          <>
+            <FormattedView
+              ref={formattedViewRef}
+              publicationId={publicationId}
+              chapters={chapters}
+              currentSectionIndex={chapterIdx}
+              onVisibleSectionChange={handleVisibleSectionChange}
+              onTap={activeActions.togglePlayPause}
+              velocityProfileRef={velocityProfileRef}
+            />
+            <VelocityProfileDebugOverlay
+              formattedViewRef={formattedViewRef}
+              velocityProfileRef={velocityProfileRef}
+              wpm={activeState.wpm}
+            />
+          </>
         )
       )}
 
