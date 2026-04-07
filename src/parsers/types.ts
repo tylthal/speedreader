@@ -14,12 +14,6 @@ export interface InlineImage {
   mimeType: string
 }
 
-export interface ParsedChapter {
-  title: string
-  text: string
-  inlineImages: InlineImage[]
-}
-
 export interface ImagePage {
   pageIndex: number
   blob: Blob
@@ -28,16 +22,8 @@ export interface ImagePage {
   mimeType: string
 }
 
-export interface ParsedImageChapter {
-  title: string
-  pages: ImagePage[]
-}
-
 // ---------------------------------------------------------------------------
-// New shape (PRD §7) — populated by P2-rewritten parsers.
-// During P1 the legacy `chapters`/`imageChapters` fields are still required
-// so the old parsers continue to compile. P2 will flip every parser to emit
-// `sections` and these legacy fields will be removed.
+// Reader redesign content model (PRD §7)
 // ---------------------------------------------------------------------------
 
 export interface ParsedSection {
@@ -67,13 +53,18 @@ export interface ParsedBook {
   title: string
   author: string
   contentType: ContentType
-  chapters: ParsedChapter[]
-  imageChapters: ParsedImageChapter[]
-  // --- Reader redesign additions (P2 will populate these) ---
-  sections?: ParsedSection[]
+  /** PRD §3.1 — ordered list of sections derived from the source. */
+  sections: ParsedSection[]
+  /** Cover image extracted at parse time (PRD §3.4). */
   cover?: ParsedCover
-  /** Hierarchical TOC for the sidebar (PRD §6.4). Flat list if absent. */
+  /** Hierarchical TOC for the sidebar (PRD §6.4). Falsy = use sections list. */
   tocTree?: TocNode[]
+  /**
+   * For image-format books (CBZ): the ordered list of page images. Sections
+   * still exists with one entry whose text/html are empty; this sidecar
+   * carries the page bitmaps. The reader treats one segment per page.
+   */
+  imagePages?: ImagePage[]
 }
 
 /**

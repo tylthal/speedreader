@@ -1,13 +1,26 @@
 /**
  * Phrase-based text chunker for speed-reading segments.
- * Direct port of backend/chunker.py.
+ *
+ * Two public entry points:
+ *  - chunkText(text)        — flat phrase chunking (legacy / single-section).
+ *  - chunkSections(sections) — section-aware chunking that emits synthetic
+ *    section_title segments at boundaries (PRD §6.3) and tags every segment
+ *    with its section_index for the segment↔HTML mapping (PRD §5.3).
  */
+
+import type { ParsedSection } from './types'
+
+export type SegmentKind = 'text' | 'section_title'
 
 export interface Segment {
   index: number
   text: string
   word_count: number
   duration_ms: number
+  /** Index into ParsedBook.sections that this segment belongs to. */
+  section_index?: number
+  /** 'section_title' for synthetic title segments at section boundaries. */
+  kind?: SegmentKind
 }
 
 // ---------------------------------------------------------------------------
@@ -199,4 +212,82 @@ export function chunkText(text: string, wpm = 250): Segment[] {
   }
 
   return segments
+}
+
+// ---------------------------------------------------------------------------
+// Section-aware chunking (PRD §5.1, §6.3)
+// ---------------------------------------------------------------------------
+
+/**
+ * The result of chunking a single section: the per-section flat segment list,
+ * with a fresh index that resets at 0 inside each section. The caller is
+ * expected to flatten these into a global segment stream during DB insertion.
+ */
+export interface ChunkedSection {
+  title: string
+  text: string
+  html: string
+  meta?: Record<string, unknown>
+  segments: Segment[]
+}
+
+/**
+ * Chunk a list of ParsedSections into per-section segment streams.
+ *
+ * For every section, the first emitted segment is a synthetic
+ * `section_title` segment carrying the section title (PRD §6.3). Phrase/RSVP
+ * modes will display this for one tick at the section boundary; the formatted
+ * view simply ignores it because the title is already in the HTML's heading.
+ *
+ * Synthetic title segments use the body-text WPM but get a small bonus pause
+ * so the title is readable.
+ */
+export function chunkSections(
+  sections: ParsedSection[],
+  wpm = 250,
+): ChunkedSection[] {
+  if (wpm <= 0) throw new Error('wpm must be positive')
+
+  return sections.map((section, sectionIdx) => {
+    const segs: Segment[] = []
+    let idx = 0
+
+    // Synthetic section-title segment (PRD §6.3).
+    const title = (section.title || '').trim()
+    if (title) {
+      const wc = title.split(/\s+/).length
+      const baseMs = (wc / wpm) * 60_000
+      segs.push({
+        index: idx++,
+        text: title,
+        word_count: wc,
+        duration_ms: Math.max(800, Math.round(baseMs + 500)),
+        section_index: sectionIdx,
+        kind: 'section_title',
+      })
+    }
+
+    // Body segments. Skip if this section has no plain text (e.g. CBZ pages).
+    if (section.text && section.text.trim()) {
+      const bodySegs = chunkText(section.text, wpm)
+      for (const s of bodySegs) {
+        segs.push({
+          index: idx++,
+          text: s.text,
+          word_count: s.word_count,
+          duration_ms: s.duration_ms,
+          section_index: sectionIdx,
+          kind: 'text',
+        })
+      }
+    }
+
+    return {
+      title: section.title,
+      text: section.text,
+      html: section.html,
+      meta: section.meta,
+      segments: segs,
+    }
+  })
 }

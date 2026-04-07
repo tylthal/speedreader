@@ -4,9 +4,16 @@
 
 import type { ParsedBook } from './types'
 
-export type { ParsedBook, ParsedChapter, InlineImage, ImagePage, ParsedImageChapter } from './types'
-export { chunkText } from './chunker'
-export type { Segment } from './chunker'
+export type {
+  ParsedBook,
+  ParsedSection,
+  ParsedCover,
+  TocNode,
+  ImagePage,
+  InlineImage,
+} from './types'
+export { chunkText, chunkSections } from './chunker'
+export type { Segment, ChunkedSection, SegmentKind } from './chunker'
 
 const UNSUPPORTED_FORMATS: Record<string, string> = {
   '.mobi': 'MOBI files must be converted to EPUB first (use Calibre).',

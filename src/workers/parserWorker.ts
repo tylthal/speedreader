@@ -1,20 +1,24 @@
 /**
- * Web Worker that runs file parsing + text chunking off the main thread.
+ * Web Worker that runs file parsing + section chunking off the main thread.
  *
- * Receives an ArrayBuffer + filename, returns a fully parsed and chunked book.
- * Images are serialized as ArrayBuffers and transferred (zero-copy).
+ * Note: this worker is currently not invoked — runParse() in localClient.ts
+ * always uses the main-thread fallback because Safari/WebKit doesn't expose
+ * DOMParser in workers. The protocol is kept in lock-step with the
+ * main-thread implementation so we can re-enable workers if Safari ships the
+ * fix.
  */
 
 import { parseFile } from '../parsers'
-import { chunkText } from '../parsers/chunker'
-import type { ParsedBook, InlineImage, ImagePage } from '../parsers/types'
+import { chunkSections } from '../parsers/chunker'
+import type { ParsedBook, ImagePage, ParsedCover } from '../parsers/types'
 import type {
   ParseRequest,
   WorkerOutMessage,
-  SerializedInlineImage,
-  SerializedChapter,
-  SerializedImageChapter,
-  ChunkedChapter,
+  SerializedCover,
+  SerializedImagePage,
+  SerializedSection,
+  SerializedTocNode,
+  ChunkedSection,
   WorkerResult,
 } from './parserProtocol'
 
@@ -22,19 +26,12 @@ function post(msg: WorkerOutMessage, transfer?: Transferable[]) {
   self.postMessage(msg, { transfer: transfer ?? [] })
 }
 
-async function serializeInlineImage(img: InlineImage): Promise<SerializedInlineImage> {
-  const buf = await img.blob.arrayBuffer()
-  return {
-    placeholder: img.placeholder,
-    imageData: buf,
-    alt: img.alt,
-    width: img.width,
-    height: img.height,
-    mimeType: img.mimeType,
-  }
+async function serializeCover(cover: ParsedCover): Promise<{ serialized: SerializedCover; buffer: ArrayBuffer }> {
+  const buf = await cover.blob.arrayBuffer()
+  return { serialized: { imageData: buf, mimeType: cover.mimeType }, buffer: buf }
 }
 
-async function serializeImagePage(page: ImagePage): Promise<{ serialized: import('./parserProtocol').SerializedImagePage; buffer: ArrayBuffer }> {
+async function serializeImagePage(page: ImagePage): Promise<{ serialized: SerializedImagePage; buffer: ArrayBuffer }> {
   const buf = await page.blob.arrayBuffer()
   return {
     serialized: {
@@ -50,80 +47,63 @@ async function serializeImagePage(page: ImagePage): Promise<{ serialized: import
 
 async function handleParse(req: ParseRequest) {
   const { id, data, filename } = req
-
   try {
-    // Phase 1: Parse
     post({ type: 'progress', id, phase: 'parsing', percent: 0 })
     const book: ParsedBook = await parseFile(data, filename)
     post({ type: 'progress', id, phase: 'parsing', percent: 100 })
 
-    // Collect all ArrayBuffers to transfer (zero-copy)
     const transferables: ArrayBuffer[] = []
 
-    // Serialize chapters (text content)
-    const serializedChapters: SerializedChapter[] = []
-    const chunkedChapters: ChunkedChapter[] = []
-
-    if (book.contentType === 'text') {
-      post({ type: 'progress', id, phase: 'chunking', percent: 0 })
-      const total = book.chapters.length
-
-      for (let i = 0; i < total; i++) {
-        const chapter = book.chapters[i]
-
-        // Serialize inline images
-        const serializedImages: SerializedInlineImage[] = []
-        for (const img of chapter.inlineImages) {
-          const s = await serializeInlineImage(img)
-          transferables.push(s.imageData)
-          serializedImages.push(s)
-        }
-
-        serializedChapters.push({
-          title: chapter.title,
-          text: chapter.text,
-          inlineImages: serializedImages,
-        })
-
-        // Chunk text
-        const segments = chunkText(chapter.text)
-        chunkedChapters.push({
-          title: chapter.title,
-          text: chapter.text,
-          segments,
-          inlineImages: serializedImages,
-        })
-
-        post({
-          type: 'progress',
-          id,
-          phase: 'chunking',
-          percent: Math.round(((i + 1) / total) * 100),
-        })
-      }
+    let cover: SerializedCover | undefined
+    if (book.cover) {
+      const { serialized, buffer } = await serializeCover(book.cover)
+      cover = serialized
+      transferables.push(buffer)
     }
 
-    // Serialize image chapters (CBZ etc)
-    const serializedImageChapters: SerializedImageChapter[] = []
-    for (const imgChapter of book.imageChapters) {
-      const pages = []
-      for (const page of imgChapter.pages) {
+    let imagePages: SerializedImagePage[] | undefined
+    if (book.imagePages?.length) {
+      imagePages = []
+      for (const page of book.imagePages) {
         const { serialized, buffer } = await serializeImagePage(page)
+        imagePages.push(serialized)
         transferables.push(buffer)
-        pages.push(serialized)
       }
-      serializedImageChapters.push({ title: imgChapter.title, pages })
     }
+
+    const sections: SerializedSection[] = book.sections.map((s) => ({
+      title: s.title,
+      text: s.text,
+      html: s.html,
+      meta: s.meta,
+    }))
+
+    post({ type: 'progress', id, phase: 'chunking', percent: 0 })
+    const chunked = chunkSections(book.sections)
+    const chunkedSections: ChunkedSection[] = chunked.map((c) => ({
+      title: c.title,
+      text: c.text,
+      html: c.html,
+      meta: c.meta,
+      segments: c.segments,
+    }))
+    post({ type: 'progress', id, phase: 'chunking', percent: 100 })
+
+    const tocTree: SerializedTocNode[] | undefined = book.tocTree?.map(function map(n): SerializedTocNode {
+      return { title: n.title, sectionIndex: n.sectionIndex, children: n.children?.map(map) }
+    })
 
     const result: WorkerResult = {
       book: {
         title: book.title,
         author: book.author,
         contentType: book.contentType,
-        chapters: serializedChapters,
-        imageChapters: serializedImageChapters,
+        sections,
+        cover,
+        tocTree,
+        imagePages,
       },
-      chunkedChapters,
+      chunkedSections,
     }
 
     post({ type: 'done', id, result }, transferables)

@@ -4,15 +4,11 @@ import type { SpeedReaderClient } from '../api/interface'
 import {
   storeBookFile,
   deleteBookFiles,
+  storeCover,
   isFileStorageAvailable,
   getCoverUrl as resolveCoverUrl,
 } from '../lib/fileStorage'
-import type {
-  ParseRequest,
-  WorkerOutMessage,
-  WorkerResult,
-  SerializedInlineImage,
-} from '../workers/parserProtocol'
+import type { WorkerResult } from '../workers/parserProtocol'
 import type {
   Publication,
   PublicationDetail,
@@ -22,6 +18,7 @@ import type {
   ProgressInput,
   SegmentInlineImage,
 } from '../api/types'
+import { getExtForMime } from '../parsers/types'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -87,199 +84,85 @@ function toProgress(row: DBReadingProgress, segmentsRead: number): ReadingProgre
 }
 
 // ---------------------------------------------------------------------------
-// Worker-based parsing
+// Parsing (main-thread only — Safari/WebKit lacks DOMParser in workers)
 // ---------------------------------------------------------------------------
-
-/**
- * Detect whether Web Workers can use DOMParser. Safari/WebKit (including the
- * iOS Capacitor WebView) does not expose DOMParser in workers, which breaks
- * EPUB/HTML/FB2/MD parsing. We probe once and cache the result.
- *
- * The probe uses a module worker to match the actual parserWorker.ts.
- */
-let workerDomParserSupported: Promise<boolean> | null = null
-function checkWorkerDomParserSupport(): Promise<boolean> {
-  if (workerDomParserSupported) return workerDomParserSupported
-  workerDomParserSupported = new Promise((resolve) => {
-    let probe: Worker | null = null
-    let url: string | null = null
-    const cleanup = () => {
-      if (probe) probe.terminate()
-      if (url) URL.revokeObjectURL(url)
-    }
-    const finish = (result: boolean) => {
-      cleanup()
-      resolve(result)
-    }
-    try {
-      const code = `
-        try {
-          const ok = typeof DOMParser !== "undefined" &&
-                     !!new DOMParser().parseFromString("<x/>", "application/xml");
-          self.postMessage(ok);
-        } catch (e) {
-          self.postMessage(false);
-        }
-      `
-      const blob = new Blob([code], { type: 'application/javascript' })
-      url = URL.createObjectURL(blob)
-      probe = new Worker(url, { type: 'module' })
-      probe.onmessage = (e) => finish(Boolean(e.data))
-      probe.onerror = () => finish(false)
-      // Safety timeout — if the worker never responds, assume unsupported.
-      setTimeout(() => finish(false), 1500)
-    } catch {
-      finish(false)
-    }
-  })
-  return workerDomParserSupported
-}
-
-function runParseWorker(
-  data: ArrayBuffer,
-  filename: string,
-  onProgress?: (phase: string, percent: number) => void,
-): Promise<WorkerResult> {
-  return new Promise((resolve, reject) => {
-    const worker = new Worker(
-      new URL('../workers/parserWorker.ts', import.meta.url),
-      { type: 'module' },
-    )
-    const id = crypto.randomUUID()
-
-    worker.onmessage = (e: MessageEvent<WorkerOutMessage>) => {
-      const msg = e.data
-      if (msg.id !== id) return
-
-      switch (msg.type) {
-        case 'progress':
-          onProgress?.(msg.phase, msg.percent)
-          break
-        case 'done':
-          worker.terminate()
-          resolve(msg.result)
-          break
-        case 'error':
-          worker.terminate()
-          reject(new Error(msg.message))
-          break
-      }
-    }
-
-    worker.onerror = (e) => {
-      worker.terminate()
-      reject(new Error(e.message ?? 'Worker failed'))
-    }
-
-    const req: ParseRequest = { type: 'parse', id, data, filename }
-    worker.postMessage(req, [data])
-  })
-}
-
-/**
- * Main-thread parsing fallback for environments where the worker can't run
- * DOMParser-based parsers (Safari/WebKit). Mirrors parserWorker.ts.
- */
-async function runParseMainThread(
-  data: ArrayBuffer,
-  filename: string,
-  onProgress?: (phase: string, percent: number) => void,
-): Promise<WorkerResult> {
-  const { parseFile } = await import('../parsers')
-  const { chunkText } = await import('../parsers/chunker')
-  type LocalInlineImage = import('../parsers/types').InlineImage
-  type LocalImagePage = import('../parsers/types').ImagePage
-  type LocalParsedBook = import('../parsers/types').ParsedBook
-  type SerializedChapter = import('../workers/parserProtocol').SerializedChapter
-  type SerializedImageChapter = import('../workers/parserProtocol').SerializedImageChapter
-  type ChunkedChapter = import('../workers/parserProtocol').ChunkedChapter
-  type SerializedImagePage = import('../workers/parserProtocol').SerializedImagePage
-
-  onProgress?.('parsing', 0)
-  const book: LocalParsedBook = await parseFile(data, filename)
-  onProgress?.('parsing', 100)
-
-  const serializeImg = async (img: LocalInlineImage): Promise<SerializedInlineImage> => ({
-    placeholder: img.placeholder,
-    imageData: await img.blob.arrayBuffer(),
-    alt: img.alt,
-    width: img.width,
-    height: img.height,
-    mimeType: img.mimeType,
-  })
-
-  const serializeImgPage = async (page: LocalImagePage): Promise<SerializedImagePage> => ({
-    pageIndex: page.pageIndex,
-    imageData: await page.blob.arrayBuffer(),
-    width: page.width,
-    height: page.height,
-    mimeType: page.mimeType,
-  })
-
-  const serializedChapters: SerializedChapter[] = []
-  const chunkedChapters: ChunkedChapter[] = []
-
-  if (book.contentType === 'text') {
-    onProgress?.('chunking', 0)
-    const total = book.chapters.length
-    for (let i = 0; i < total; i++) {
-      const chapter = book.chapters[i]
-      const serializedImages: SerializedInlineImage[] = []
-      for (const img of chapter.inlineImages) serializedImages.push(await serializeImg(img))
-
-      serializedChapters.push({
-        title: chapter.title,
-        text: chapter.text,
-        inlineImages: serializedImages,
-      })
-
-      const segments = chunkText(chapter.text)
-      chunkedChapters.push({
-        title: chapter.title,
-        text: chapter.text,
-        segments,
-        inlineImages: serializedImages,
-      })
-
-      onProgress?.('chunking', Math.round(((i + 1) / total) * 100))
-    }
-  }
-
-  const serializedImageChapters: SerializedImageChapter[] = []
-  for (const imgChapter of book.imageChapters) {
-    const pages: SerializedImagePage[] = []
-    for (const page of imgChapter.pages) pages.push(await serializeImgPage(page))
-    serializedImageChapters.push({ title: imgChapter.title, pages })
-  }
-
-  return {
-    book: {
-      title: book.title,
-      author: book.author,
-      contentType: book.contentType,
-      chapters: serializedChapters,
-      imageChapters: serializedImageChapters,
-    },
-    chunkedChapters,
-  }
-}
 
 async function runParse(
   data: ArrayBuffer,
   filename: string,
   onProgress?: (phase: string, percent: number) => void,
 ): Promise<WorkerResult> {
-  // Always parse on the main thread. The worker-based approach failed on
-  // Safari/WebKit (no DOMParser in workers) and the probe-based fallback
-  // proved unreliable. Main-thread parsing is slightly slower but works
-  // everywhere, and most files are small enough that the difference is
-  // imperceptible.
-  console.log('[parse] running on main thread:', filename)
-  return runParseMainThread(data, filename, onProgress)
-}
+  const { parseFile } = await import('../parsers')
+  const { chunkSections } = await import('../parsers/chunker')
+  type LocalParsedBook = import('../parsers/types').ParsedBook
+  type SerializedCover = import('../workers/parserProtocol').SerializedCover
+  type SerializedImagePage = import('../workers/parserProtocol').SerializedImagePage
+  type SerializedSection = import('../workers/parserProtocol').SerializedSection
+  type SerializedTocNode = import('../workers/parserProtocol').SerializedTocNode
+  type ChunkedSection = import('../workers/parserProtocol').ChunkedSection
 
-function imgBlobFromSerialized(img: SerializedInlineImage): Blob {
-  return new Blob([img.imageData], { type: img.mimeType })
+  console.log('[parse] running on main thread:', filename)
+
+  onProgress?.('parsing', 0)
+  const book: LocalParsedBook = await parseFile(data, filename)
+  onProgress?.('parsing', 100)
+
+  let cover: SerializedCover | undefined
+  if (book.cover) {
+    cover = {
+      imageData: await book.cover.blob.arrayBuffer(),
+      mimeType: book.cover.mimeType,
+    }
+  }
+
+  let imagePages: SerializedImagePage[] | undefined
+  if (book.imagePages?.length) {
+    imagePages = []
+    for (const page of book.imagePages) {
+      imagePages.push({
+        pageIndex: page.pageIndex,
+        imageData: await page.blob.arrayBuffer(),
+        width: page.width,
+        height: page.height,
+        mimeType: page.mimeType,
+      })
+    }
+  }
+
+  const sections: SerializedSection[] = book.sections.map((s) => ({
+    title: s.title,
+    text: s.text,
+    html: s.html,
+    meta: s.meta,
+  }))
+
+  onProgress?.('chunking', 0)
+  const chunked = chunkSections(book.sections)
+  onProgress?.('chunking', 100)
+  const chunkedSections: ChunkedSection[] = chunked.map((c) => ({
+    title: c.title,
+    text: c.text,
+    html: c.html,
+    meta: c.meta,
+    segments: c.segments,
+  }))
+
+  const tocTree: SerializedTocNode[] | undefined = book.tocTree?.map(function map(n): SerializedTocNode {
+    return { title: n.title, sectionIndex: n.sectionIndex, children: n.children?.map(map) }
+  })
+
+  return {
+    book: {
+      title: book.title,
+      author: book.author,
+      contentType: book.contentType,
+      sections,
+      cover,
+      tocTree,
+      imagePages,
+    },
+    chunkedSections,
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -296,111 +179,89 @@ export class LocalClient implements SpeedReaderClient {
   async uploadBook(file: File): Promise<Publication> {
     const data = await file.arrayBuffer()
 
-    // Parse + chunk (Web Worker if supported, else main thread)
     const result = await runParse(data, file.name, this.onUploadProgress)
-    const { book, chunkedChapters } = result
+    const { book, chunkedSections } = result
 
-    const IMG_PLACEHOLDER_RE = /\{\{IMG_(\d+)\}\}/g
+    // Insert publication first (outside the rw transaction) so we have a
+    // pubId for OPFS cover storage. Cover bytes go to OPFS, not Dexie.
+    const initialPubId = await db.publications.add({
+      title: book.title,
+      author: book.author,
+      filename: file.name,
+      status: 'ready',
+      total_segments: 0,
+      content_type: book.contentType,
+      total_pages: 0,
+      created_at: nowIso(),
+      cover_path: null,
+      display_mode_pref: null,
+      toc_json: book.tocTree ? JSON.stringify(book.tocTree) : null,
+    })
+    const pubId = initialPubId as number
 
-    const pubId = await db.transaction(
+    // Persist cover to OPFS (best-effort).
+    let coverPath: string | null = null
+    if (book.cover && isFileStorageAvailable()) {
+      try {
+        const blob = new Blob([book.cover.imageData], { type: book.cover.mimeType })
+        const ext = getExtForMime(book.cover.mimeType)
+        coverPath = await storeCover(pubId, blob, ext)
+      } catch {
+        coverPath = null
+      }
+    }
+    if (coverPath) {
+      await db.publications.update(pubId, { cover_path: coverPath })
+    }
+
+    // Now insert sections + segments + image_pages in a single transaction.
+    await db.transaction(
       'rw',
       [db.publications, db.chapters, db.segments, db.image_pages],
       async () => {
-        const id = await db.publications.add({
-          title: book.title,
-          author: book.author,
-          filename: file.name,
-          status: 'ready',
-          total_segments: 0,
-          content_type: book.contentType,
-          total_pages: 0,
-          created_at: nowIso(),
-        })
+        let totalSegments = 0
+        let totalPages = 0
 
-        if (book.contentType === 'text') {
-          let totalSegments = 0
+        for (let sIdx = 0; sIdx < chunkedSections.length; sIdx++) {
+          const section = chunkedSections[sIdx]
 
-          for (let chIdx = 0; chIdx < chunkedChapters.length; chIdx++) {
-            const chapter = chunkedChapters[chIdx]
+          const sectionId = await db.chapters.add({
+            publication_id: pubId,
+            chapter_index: sIdx,
+            title: section.title,
+            text_content: section.text || null,
+            segment_count: section.segments.length,
+            html: section.html || null,
+            meta: section.meta ? JSON.stringify(section.meta) : null,
+          })
 
-            // Build placeholder → image mapping
-            const imgMap = new Map(
-              chapter.inlineImages.map((img) => [img.placeholder, img]),
-            )
-
-            const chapterId = await db.chapters.add({
-              publication_id: id as number,
-              chapter_index: chIdx,
-              title: chapter.title,
-              text_content: chapter.text,
-              segment_count: chapter.segments.length,
+          for (const seg of section.segments) {
+            await db.segments.add({
+              chapter_id: sectionId as number,
+              segment_index: seg.index,
+              text: seg.text,
+              word_count: seg.word_count,
+              duration_ms: seg.duration_ms,
+              inline_images: null,
+              kind: seg.kind ?? 'text',
+              html_anchor: null,
             })
-
-            for (const seg of chapter.segments) {
-              let segImagesJson: string | null = null
-              const matches = [...seg.text.matchAll(IMG_PLACEHOLDER_RE)]
-
-              if (matches.length && imgMap.size) {
-                const segImages: object[] = []
-                for (const m of matches) {
-                  const placeholder = `{{IMG_${m[1]}}}`
-                  const img = imgMap.get(placeholder)
-                  if (img) {
-                    const blob = imgBlobFromSerialized(img)
-                    const url = URL.createObjectURL(blob)
-                    segImages.push({
-                      image_url: url,
-                      alt: img.alt,
-                      width: img.width,
-                      height: img.height,
-                    })
-                  }
-                }
-                if (segImages.length) {
-                  segImagesJson = JSON.stringify(segImages)
-                  let cleanText = seg.text.replace(IMG_PLACEHOLDER_RE, '').trim()
-                  cleanText = cleanText.replace(/\s{2,}/g, ' ')
-                  if (cleanText) {
-                    seg.text = cleanText
-                    seg.word_count = cleanText.split(/\s+/).length
-                  }
-                }
-              }
-
-              await db.segments.add({
-                chapter_id: chapterId as number,
-                segment_index: seg.index,
-                text: seg.text,
-                word_count: seg.word_count,
-                duration_ms: seg.duration_ms,
-                inline_images: segImagesJson,
-              })
-            }
-
-            totalSegments += chapter.segments.length
           }
+          totalSegments += section.segments.length
+        }
 
-          await db.publications.update(id as number, { total_segments: totalSegments })
-        } else {
-          // Image content (CBZ)
-          let totalPages = 0
-
-          for (let chIdx = 0; chIdx < book.imageChapters.length; chIdx++) {
-            const imgChapter = book.imageChapters[chIdx]
-
-            const chapterId = await db.chapters.add({
-              publication_id: id as number,
-              chapter_index: chIdx,
-              title: imgChapter.title,
-              text_content: null,
-              segment_count: 0,
-            })
-
-            for (const page of imgChapter.pages) {
+        // CBZ image pages — attach to the (single) section row.
+        if (book.contentType === 'image' && book.imagePages?.length) {
+          const sectionRow = await db.chapters
+            .where('publication_id')
+            .equals(pubId)
+            .first()
+          if (sectionRow?.id) {
+            for (const page of book.imagePages) {
               const blob = new Blob([page.imageData], { type: page.mimeType })
               const url = URL.createObjectURL(blob)
               await db.image_pages.add({
-                chapter_id: chapterId as number,
+                chapter_id: sectionRow.id,
                 page_index: page.pageIndex,
                 image_path: url,
                 width: page.width,
@@ -408,18 +269,17 @@ export class LocalClient implements SpeedReaderClient {
                 mime_type: page.mimeType,
               })
             }
-
-            totalPages += imgChapter.pages.length
+            totalPages = book.imagePages.length
           }
-
-          await db.publications.update(id as number, { total_pages: totalPages })
         }
 
-        return id as number
+        await db.publications.update(pubId, {
+          total_segments: totalSegments,
+          total_pages: totalPages,
+        })
       },
     )
 
-    // Store raw file in OPFS for re-export / re-parse
     if (isFileStorageAvailable()) {
       try {
         await storeBookFile(pubId, file)

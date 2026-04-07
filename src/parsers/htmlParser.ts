@@ -1,45 +1,20 @@
 /**
- * HTML parser. Port of backend/html_parser.py.
+ * HTML parser (PRD §3.1) — emits a single ParsedSection containing the
+ * sanitized document body.
  */
 
-import type { ParsedBook } from './types'
+import type { ParsedBook, ParsedSection } from './types'
+import { sanitizeDocument } from '../lib/sanitize'
 
 const WHITESPACE_RE = /\s+/g
-const HEADING_SELECTOR = 'h1, h2, h3'
-const MIN_CHAPTER_LENGTH = 50
 
-function splitByHeadings(doc: Document): { title: string; text: string }[] {
-  const body = doc.body ?? doc.documentElement
-  const headings = Array.from(body.querySelectorAll(HEADING_SELECTOR))
-
-  if (headings.length <= 1) return []
-
-  const chapters: { title: string; text: string }[] = []
-
-  for (let i = 0; i < headings.length; i++) {
-    const heading = headings[i]
-    const title = heading.textContent?.trim() || `Section ${i + 1}`
-    const texts: string[] = [heading.textContent ?? '']
-
-    let sibling = heading.nextSibling
-    while (sibling) {
-      if (sibling instanceof Element) {
-        if (sibling.matches(HEADING_SELECTOR)) break
-        if (sibling.querySelector(HEADING_SELECTOR)) break
-        texts.push(sibling.textContent ?? '')
-      } else if (sibling.textContent) {
-        texts.push(sibling.textContent)
-      }
-      sibling = sibling.nextSibling
-    }
-
-    const text = texts.join(' ').replace(WHITESPACE_RE, ' ').trim()
-    if (text.length >= MIN_CHAPTER_LENGTH) {
-      chapters.push({ title, text })
-    }
+function firstHeading(doc: Document): string | null {
+  for (const tag of ['h1', 'h2', 'h3']) {
+    const h = doc.querySelector(tag)
+    const t = h?.textContent?.trim()
+    if (t) return t
   }
-
-  return chapters
+  return null
 }
 
 export function parseHtml(data: ArrayBuffer): ParsedBook {
@@ -50,33 +25,30 @@ export function parseHtml(data: ArrayBuffer): ParsedBook {
     content = new TextDecoder('windows-1252').decode(data)
   }
 
-  const parser = new DOMParser()
-  const doc = parser.parseFromString(content, 'text/html')
+  const doc = new DOMParser().parseFromString(content, 'text/html')
 
-  // Metadata
   const titleEl = doc.querySelector('title')
-  let title = titleEl?.textContent?.trim() || 'Untitled'
-  if (!title) title = 'Untitled'
+  const metaTitle = titleEl?.textContent?.trim()
+  const headingTitle = firstHeading(doc)
+  const title = metaTitle || headingTitle || 'Untitled'
 
   const authorEl = doc.querySelector('meta[name="author"]')
-  let author = authorEl?.getAttribute('content')?.trim() || 'Unknown Author'
-  if (!author) author = 'Unknown Author'
+  const author = authorEl?.getAttribute('content')?.trim() || 'Unknown Author'
 
-  let chapters = splitByHeadings(doc)
+  const body = doc.body ?? doc.documentElement
+  const text = (body.textContent ?? '').replace(WHITESPACE_RE, ' ').trim()
+  const html = sanitizeDocument(doc)
 
-  if (!chapters.length) {
-    const body = doc.body ?? doc.documentElement
-    const text = (body.textContent ?? '').replace(WHITESPACE_RE, ' ').trim()
-    if (text.length >= MIN_CHAPTER_LENGTH) {
-      chapters = [{ title, text }]
-    }
-  }
+  // PRD §3.2 — section title is NCX/heading/Untitled. For a single-document
+  // HTML the section title is the document's first heading, or "Untitled".
+  const sectionTitle = headingTitle || 'Untitled'
+
+  const section: ParsedSection = { title: sectionTitle, text, html }
 
   return {
     title,
     author,
     contentType: 'text',
-    chapters: chapters.map((c) => ({ ...c, inlineImages: [] })),
-    imageChapters: [],
+    sections: [section],
   }
 }

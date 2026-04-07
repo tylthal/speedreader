@@ -1,10 +1,11 @@
 /**
- * CBZ parser. Port of backend/cbz_cbr_parser.py (CBZ portion only).
- * CBR (RAR) is not supported client-side — users must convert to CBZ.
+ * CBZ parser (PRD §3.1, §4.5) — one ParsedSection (empty text/html) plus an
+ * imagePages sidecar carrying the page bitmaps. Always rendered in formatted
+ * view by the reader.
  */
 
 import JSZip from 'jszip'
-import type { ParsedBook, ParsedImageChapter, ImagePage } from './types'
+import type { ParsedBook, ParsedSection, ParsedCover, ImagePage } from './types'
 import { getImageDimensions } from './types'
 
 const IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.tiff'])
@@ -60,36 +61,22 @@ function parseComicInfo(xml: string): { title: string; author: string } {
     const doc = new DOMParser().parseFromString(xml, 'application/xml')
     let title = ''
     let author = ''
-
     const titleEl = doc.querySelector('Title')
-    if (titleEl?.textContent?.trim()) {
-      title = titleEl.textContent.trim()
-    }
+    if (titleEl?.textContent?.trim()) title = titleEl.textContent.trim()
     if (!title) {
       const series = doc.querySelector('Series')
       const number = doc.querySelector('Number')
       if (series?.textContent?.trim()) {
         title = series.textContent.trim()
-        if (number?.textContent?.trim()) {
-          title += ` #${number.textContent.trim()}`
-        }
+        if (number?.textContent?.trim()) title += ` #${number.textContent.trim()}`
       }
     }
-
     const writer = doc.querySelector('Writer')
-    if (writer?.textContent?.trim()) {
-      author = writer.textContent.trim()
-    }
-
+    if (writer?.textContent?.trim()) author = writer.textContent.trim()
     return { title: title || 'Untitled', author: author || 'Unknown Author' }
   } catch {
     return { title: 'Untitled', author: 'Unknown Author' }
   }
-}
-
-function getDirname(path: string): string {
-  const i = path.lastIndexOf('/')
-  return i >= 0 ? path.slice(0, i) : ''
 }
 
 export async function parseCbz(data: ArrayBuffer, filename: string): Promise<ParsedBook> {
@@ -105,7 +92,6 @@ export async function parseCbz(data: ArrayBuffer, filename: string): Promise<Par
   let title = 'Untitled'
   let author = 'Unknown Author'
 
-  // Check for ComicInfo.xml
   for (const name of Object.keys(zip.files)) {
     if (name.toLowerCase() === 'comicinfo.xml') {
       const xml = await zip.files[name].async('text')
@@ -116,7 +102,6 @@ export async function parseCbz(data: ArrayBuffer, filename: string): Promise<Par
     }
   }
 
-  // Get all image files
   const imageNames = Object.keys(zip.files)
     .filter((n) => !zip.files[n].dir && isImageFile(n))
     .sort(naturalCompare)
@@ -125,67 +110,45 @@ export async function parseCbz(data: ArrayBuffer, filename: string): Promise<Par
     throw new Error('No image files found in the archive.')
   }
 
-  // Group by directory
-  const dirGroups = new Map<string, string[]>()
-  for (const name of imageNames) {
-    const dir = getDirname(name)
-    const list = dirGroups.get(dir) ?? []
-    list.push(name)
-    dirGroups.set(dir, list)
-  }
-
-  const chapters: ParsedImageChapter[] = []
-
-  if (dirGroups.size > 1) {
-    const sortedDirs = [...dirGroups.keys()].sort(naturalCompare)
-    for (const dir of sortedDirs) {
-      const files = dirGroups.get(dir)!
-      const chapterTitle = dir.split('/').pop() || 'Chapter 1'
-      const pages: ImagePage[] = []
-
-      for (let i = 0; i < files.length; i++) {
-        const imgData = await zip.files[files[i]].async('arraybuffer')
-        const mime = getMimeType(files[i])
-        const blob = new Blob([imgData], { type: mime })
-        const dims = await getImageDimensions(blob)
-        pages.push({
-          pageIndex: i,
-          blob,
-          width: dims.width,
-          height: dims.height,
-          mimeType: mime,
-        })
-      }
-
-      chapters.push({ title: chapterTitle, pages })
-    }
-  } else {
-    const pages: ImagePage[] = []
-    for (let i = 0; i < imageNames.length; i++) {
-      const imgData = await zip.files[imageNames[i]].async('arraybuffer')
-      const mime = getMimeType(imageNames[i])
-      const blob = new Blob([imgData], { type: mime })
-      const dims = await getImageDimensions(blob)
-      pages.push({
-        pageIndex: i,
-        blob,
-        width: dims.width,
-        height: dims.height,
-        mimeType: mime,
-      })
-    }
-    chapters.push({ title: 'Full Comic', pages })
+  // PRD §3.1 — CBZ is one section. We ignore directory grouping.
+  const pages: ImagePage[] = []
+  for (let i = 0; i < imageNames.length; i++) {
+    const imgData = await zip.files[imageNames[i]].async('arraybuffer')
+    const mime = getMimeType(imageNames[i])
+    const blob = new Blob([imgData], { type: mime })
+    const dims = await getImageDimensions(blob)
+    pages.push({
+      pageIndex: i,
+      blob,
+      width: dims.width,
+      height: dims.height,
+      mimeType: mime,
+    })
   }
 
   if (title === 'Untitled') {
     title = filename.replace(/\.[^.]+$/, '')
   }
 
+  // PRD §3.4 — first image is the cover.
+  let cover: ParsedCover | undefined
+  if (pages.length) {
+    cover = { blob: pages[0].blob, mimeType: pages[0].mimeType }
+  }
+
+  const section: ParsedSection = {
+    title: title || 'Untitled',
+    text: '',
+    html: '',
+    meta: { pageCount: pages.length },
+  }
+
   return {
     title,
     author,
     contentType: 'image',
-    chapters: [],
-    imageChapters: chapters,
+    sections: [section],
+    imagePages: pages,
+    cover,
   }
 }

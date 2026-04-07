@@ -1,26 +1,24 @@
 /**
- * PDF parser. Port of backend/pdf_parser.py.
- * Uses pdfjs-dist (Mozilla's pdf.js).
+ * PDF parser (PRD §3.1).
  *
- * Note: pdf.js does not expose per-image extraction like PyMuPDF,
- * so inline image extraction is skipped in this port.
- * Text extraction works fully.
+ *  - One section per *top-level* outline entry. We do not flatten nested
+ *    outlines into more sections; nested entries are emitted as a hierarchical
+ *    TOC tree for the sidebar (PRD §6.4).
+ *  - If the PDF has no outline, the entire document becomes a single section
+ *    titled with the PDF metadata title (or filename).
+ *  - The cover is page 1 rendered to a canvas at thumbnail size.
+ *  - PDFs render via pdf.js on the original file in formatted view, so the
+ *    section's `html` field stays empty; the page range goes into `meta`.
  */
 
-// Use the legacy build of pdfjs-dist for broader browser compatibility.
 import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs'
-// Custom worker wrapper that polyfills ReadableStream async iteration
-// before loading pdf.js's worker (needed for WebKit browsers).
 import PdfWorker from '../workers/pdfWorker.ts?worker'
-import type { ParsedBook, ParsedChapter } from './types'
+import type { ParsedBook, ParsedSection, ParsedCover, TocNode } from './types'
 
-// Use a worker port from our wrapper instead of workerSrc.
 pdfjsLib.GlobalWorkerOptions.workerPort = new PdfWorker()
 
 const WHITESPACE_RE = /\s+/g
 const BLANK_LINES_RE = /\n{3,}/g
-const MIN_PAGE_TEXT_LENGTH = 50
-const PAGES_PER_FALLBACK_CHAPTER = 10
 
 function normalizeText(text: string): string {
   text = text.replace(BLANK_LINES_RE, '\n\n')
@@ -39,44 +37,100 @@ async function extractPageText(page: pdfjsLib.PDFPageProxy): Promise<string> {
   return normalizeText(raw)
 }
 
-interface OutlineEntry {
+interface OutlineLeaf {
   title: string
   pageIndex: number
 }
 
-async function resolveOutline(
+/** Resolve only top-level outline entries to (title, pageIndex) pairs. */
+async function resolveTopLevelOutline(
   doc: pdfjsLib.PDFDocumentProxy,
-): Promise<OutlineEntry[]> {
+): Promise<OutlineLeaf[]> {
   const outline = await doc.getOutline()
   if (!outline?.length) return []
 
-  const entries: OutlineEntry[] = []
+  const out: OutlineLeaf[] = []
+  for (const item of outline) {
+    if (!item.dest) continue
+    try {
+      let dest: unknown = item.dest
+      if (typeof dest === 'string') dest = await doc.getDestination(dest)
+      if (Array.isArray(dest) && dest.length) {
+        const ref = dest[0]
+        const pageIndex = await doc.getPageIndex(ref)
+        out.push({ title: (item.title ?? '').trim() || 'Untitled', pageIndex })
+      }
+    } catch {
+      // skip unresolvable destinations
+    }
+  }
+  return out
+}
 
-  async function walk(items: typeof outline) {
+/** Walk the full outline tree (including nested children) into a TocNode tree. */
+async function buildTocTree(
+  doc: pdfjsLib.PDFDocumentProxy,
+  topLeaves: OutlineLeaf[],
+): Promise<TocNode[]> {
+  const outline = await doc.getOutline()
+  if (!outline?.length) return []
+
+  // Map a (title, pageIndex) tuple back to its index in topLeaves so children
+  // can reference the section index correctly.
+  const findSectionIdx = (title: string, pageIndex: number): number => {
+    return topLeaves.findIndex((l) => l.title === title && l.pageIndex === pageIndex)
+  }
+
+  async function walk(items: typeof outline, isTop: boolean): Promise<TocNode[]> {
+    const nodes: TocNode[] = []
     for (const item of items) {
+      let pageIndex = -1
       if (item.dest) {
         try {
           let dest: unknown = item.dest
-          if (typeof dest === 'string') {
-            dest = await doc.getDestination(dest)
-          }
+          if (typeof dest === 'string') dest = await doc.getDestination(dest)
           if (Array.isArray(dest) && dest.length) {
-            const ref = dest[0]
-            const pageIndex = await doc.getPageIndex(ref)
-            entries.push({ title: item.title.trim(), pageIndex })
+            pageIndex = await doc.getPageIndex(dest[0])
           }
         } catch {
-          // Skip unresolvable destinations
+          /* ignore */
         }
       }
-      if (item.items?.length) {
-        await walk(item.items)
-      }
+      const title = (item.title ?? '').trim() || 'Untitled'
+      const sectionIndex = isTop ? findSectionIdx(title, pageIndex) : -1
+      const children = item.items?.length ? await walk(item.items, false) : undefined
+      nodes.push({ title, sectionIndex, children })
     }
+    return nodes
   }
 
-  await walk(outline)
-  return entries
+  return walk(outline, true)
+}
+
+async function renderPageToBlob(
+  doc: pdfjsLib.PDFDocumentProxy,
+  pageNum: number,
+  maxWidth = 600,
+): Promise<{ blob: Blob; mimeType: string } | null> {
+  try {
+    const page = await doc.getPage(pageNum)
+    const baseViewport = page.getViewport({ scale: 1 })
+    const scale = Math.min(maxWidth / baseViewport.width, 2)
+    const viewport = page.getViewport({ scale })
+    const canvas = document.createElement('canvas')
+    canvas.width = Math.ceil(viewport.width)
+    canvas.height = Math.ceil(viewport.height)
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return null
+    await page.render({ canvasContext: ctx, viewport, canvas } as any).promise
+    const blob: Blob | null = await new Promise((resolve) =>
+      canvas.toBlob((b) => resolve(b), 'image/jpeg', 0.85),
+    )
+    if (!blob) return null
+    return { blob, mimeType: 'image/jpeg' }
+  } catch {
+    return null
+  }
 }
 
 export async function parsePdf(
@@ -85,83 +139,66 @@ export async function parsePdf(
 ): Promise<ParsedBook> {
   const doc = await pdfjsLib.getDocument({ data }).promise
 
-  // Metadata
   const meta = await doc.getMetadata()
   const info = (meta?.info as Record<string, string>) ?? {}
   const title = info.Title?.trim() || 'Untitled'
   const author = info.Author?.trim() || 'Unknown Author'
 
-  // Extract text per page
+  // Page texts (still needed for plain-text view).
   const pageTexts: string[] = []
   for (let i = 1; i <= doc.numPages; i++) {
     const page = await doc.getPage(i)
-    const text = await extractPageText(page)
-    pageTexts.push(text)
-    onProgress?.(Math.round((i / doc.numPages) * 80))
+    pageTexts.push(await extractPageText(page))
+    onProgress?.(Math.round((i / doc.numPages) * 70))
   }
 
-  // Resolve TOC
-  const toc = await resolveOutline(doc)
-  const chapters: ParsedChapter[] = []
+  const topLeaves = await resolveTopLevelOutline(doc)
+  const sections: ParsedSection[] = []
 
-  if (toc.length) {
-    for (let i = 0; i < toc.length; i++) {
-      const { title: entryTitle, pageIndex: startPage } = toc[i]
-      const endPage = i + 1 < toc.length ? toc[i + 1].pageIndex : pageTexts.length
-
+  if (topLeaves.length) {
+    for (let i = 0; i < topLeaves.length; i++) {
+      const { title: entryTitle, pageIndex: startPage } = topLeaves[i]
+      const endPage = i + 1 < topLeaves.length ? topLeaves[i + 1].pageIndex : pageTexts.length
       const parts: string[] = []
       for (let p = startPage; p < endPage && p < pageTexts.length; p++) {
-        if (pageTexts[p].length >= MIN_PAGE_TEXT_LENGTH) {
-          parts.push(pageTexts[p])
-        }
+        parts.push(pageTexts[p])
       }
-
-      const combined = parts.join('\n\n').trim()
-      if (combined.length < MIN_PAGE_TEXT_LENGTH) continue
-
-      chapters.push({
-        title: entryTitle || `Chapter ${chapters.length + 1}`,
-        text: combined,
-        inlineImages: [],
+      sections.push({
+        title: entryTitle || 'Untitled',
+        text: parts.join('\n\n').trim(),
+        html: '',
+        meta: { startPage, endPage },
       })
     }
   } else {
-    // No TOC — group by page count
-    const meaningfulPages = pageTexts
-      .map((text, idx) => ({ idx, text }))
-      .filter((p) => p.text.length >= MIN_PAGE_TEXT_LENGTH)
+    // PRD §3.1 — no outline → one section, name from PDF metadata title.
+    sections.push({
+      title: title || 'Untitled',
+      text: pageTexts.join('\n\n').trim(),
+      html: '',
+      meta: { startPage: 0, endPage: pageTexts.length },
+    })
+  }
 
-    if (meaningfulPages.length < 20) {
-      for (let i = 0; i < meaningfulPages.length; i++) {
-        chapters.push({
-          title: `Section ${i + 1}`,
-          text: meaningfulPages[i].text,
-          inlineImages: [],
-        })
-      }
-    } else {
-      const chunkTexts: string[] = []
-      let chapterCounter = 0
-      for (let i = 0; i < meaningfulPages.length; i++) {
-        chunkTexts.push(meaningfulPages[i].text)
-        if (chunkTexts.length >= PAGES_PER_FALLBACK_CHAPTER || i === meaningfulPages.length - 1) {
-          const combined = chunkTexts.join('\n\n').trim()
-          if (combined.length >= MIN_PAGE_TEXT_LENGTH) {
-            chapterCounter++
-            chapters.push({
-              title: `Chapter ${chapterCounter}`,
-              text: combined,
-              inlineImages: [],
-            })
-          }
-          chunkTexts.length = 0
-        }
-      }
-    }
+  const tocTree = topLeaves.length ? await buildTocTree(doc, topLeaves) : undefined
+
+  // Cover: render page 1 (PRD §3.4).
+  let cover: ParsedCover | undefined
+  if (doc.numPages > 0) {
+    onProgress?.(85)
+    const rendered = await renderPageToBlob(doc, 1)
+    if (rendered) cover = rendered
   }
 
   onProgress?.(100)
   doc.destroy()
 
-  return { title, author, contentType: 'text', chapters, imageChapters: [] }
+  return {
+    title,
+    author,
+    contentType: 'text',
+    sections,
+    cover,
+    tocTree,
+  }
 }

@@ -1,16 +1,23 @@
 /**
- * FictionBook2 (.fb2) parser. Port of backend/fb2_parser.py.
- * Uses DOMParser for XML + JSZip for .fb2.zip files.
+ * FictionBook2 (.fb2) parser (PRD §3.1).
+ *
+ * One ParsedSection per top-level <section> in the source. Section title
+ * comes from the FB2 <title>; "Untitled" if absent. Inline images are
+ * preserved in the section HTML; the first one becomes the book cover.
  */
 
 import JSZip from 'jszip'
-import type { ParsedBook, ParsedChapter, InlineImage } from './types'
-import { getImageDimensions } from './types'
+import type { ParsedBook, ParsedSection, ParsedCover } from './types'
 
 const FB2_NS = 'http://www.gribuser.ru/xml/fictionbook/2.0'
 const XLINK_NS = 'http://www.w3.org/1999/xlink'
 const WHITESPACE_RE = /\s+/g
-const MIN_CHAPTER_LENGTH = 50
+
+interface BinaryEntry {
+  blob: Blob
+  mimeType: string
+  url: string
+}
 
 function base64ToBlob(b64: string, mimeType: string): Blob {
   const binary = atob(b64.replace(/\s/g, ''))
@@ -19,144 +26,116 @@ function base64ToBlob(b64: string, mimeType: string): Blob {
   return new Blob([bytes], { type: mimeType })
 }
 
-async function extractBinaries(
-  root: Document,
-): Promise<Map<string, InlineImage>> {
-  const binaries = new Map<string, InlineImage>()
-  let counter = 0
-
-  // DOMParser with XML doesn't handle namespaces in querySelectorAll well,
-  // so use getElementsByTagNameNS
+function extractBinaries(root: Document): Map<string, BinaryEntry> {
+  const out = new Map<string, BinaryEntry>()
   const binaryEls = root.getElementsByTagNameNS(FB2_NS, 'binary')
-
   for (const el of Array.from(binaryEls)) {
-    const binId = el.getAttribute('id') ?? ''
+    const id = el.getAttribute('id') ?? ''
     const contentType = el.getAttribute('content-type') ?? 'image/jpeg'
     const dataB64 = el.textContent
-    if (!binId || !dataB64) continue
-
+    if (!id || !dataB64) continue
     const blob = base64ToBlob(dataB64, contentType)
-    if (blob.size < 500) continue // skip tiny decorations
-
-    const dims = await getImageDimensions(blob)
-    const placeholder = `{{IMG_${counter}}}`
-
-    const img: InlineImage = {
-      placeholder,
-      blob,
-      alt: '',
-      width: dims.width,
-      height: dims.height,
-      mimeType: contentType,
-    }
-
-    binaries.set(binId, img)
-    binaries.set(`#${binId}`, img)
-    counter++
+    if (!blob.size) continue
+    const url = URL.createObjectURL(blob)
+    const entry: BinaryEntry = { blob, mimeType: contentType, url }
+    out.set(id, entry)
+    out.set(`#${id}`, entry)
   }
-
-  return binaries
+  return out
 }
 
-function getTextWithImages(
-  el: Element,
-  binaries: Map<string, InlineImage>,
-  collected: InlineImage[],
-): string {
-  if (el.localName === 'binary') return ''
+function getSectionTitle(section: Element): string {
+  const titleEl = section.getElementsByTagNameNS(FB2_NS, 'title')[0]
+  if (!titleEl) return ''
+  const parts: string[] = []
+  for (const p of Array.from(titleEl.getElementsByTagNameNS(FB2_NS, 'p'))) {
+    const t = p.textContent?.trim()
+    if (t) parts.push(t)
+  }
+  const joined = parts.join(' ').replace(WHITESPACE_RE, ' ').trim()
+  return joined || (titleEl.textContent ?? '').replace(WHITESPACE_RE, ' ').trim()
+}
 
-  if (el.localName === 'image') {
-    const href = el.getAttributeNS(XLINK_NS, 'href') ?? el.getAttribute('href') ?? ''
-    if (href && binaries.has(href)) {
-      const img = binaries.get(href)!
-      if (!collected.includes(img)) collected.push(img)
-      return ` ${img.placeholder} `
-    }
-    return ''
+/** Recursively serialize an FB2 element into sanitized HTML. */
+function elementToHtml(el: Element, binaries: Map<string, BinaryEntry>): string {
+  const local = el.localName
+  if (local === 'binary') return ''
+
+  if (local === 'image') {
+    const href =
+      el.getAttributeNS(XLINK_NS, 'href') ??
+      el.getAttribute('href') ??
+      ''
+    const entry = binaries.get(href)
+    if (!entry) return ''
+    return `<img src="${entry.url}" alt="" />`
   }
 
+  // FB2 → HTML mapping
+  let tag: string | null
+  switch (local) {
+    case 'p':
+    case 'cite':
+    case 'epigraph':
+      tag = 'p'
+      break
+    case 'emphasis':
+      tag = 'em'
+      break
+    case 'strong':
+      tag = 'strong'
+      break
+    case 'subtitle':
+      tag = 'h3'
+      break
+    case 'title':
+      tag = 'h2'
+      break
+    case 'poem':
+    case 'stanza':
+      tag = 'blockquote'
+      break
+    case 'v':
+      tag = 'p'
+      break
+    default:
+      // Unknown — unwrap children
+      tag = null
+  }
+
+  let inner = ''
+  for (const node of Array.from(el.childNodes)) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      inner += escapeHtml(node.textContent ?? '')
+    } else if (node.nodeType === Node.ELEMENT_NODE) {
+      inner += elementToHtml(node as Element, binaries)
+    }
+  }
+
+  if (!tag) return inner
+  return `<${tag}>${inner}</${tag}>`
+}
+
+function elementToText(el: Element, binaries: Map<string, BinaryEntry>): string {
+  if (el.localName === 'binary') return ''
+  if (el.localName === 'image') return ''
   const parts: string[] = []
   for (const node of Array.from(el.childNodes)) {
     if (node.nodeType === Node.TEXT_NODE) {
       parts.push(node.textContent ?? '')
     } else if (node.nodeType === Node.ELEMENT_NODE) {
-      parts.push(getTextWithImages(node as Element, binaries, collected))
+      parts.push(elementToText(node as Element, binaries))
     }
   }
   return parts.join(' ')
 }
 
-function extractSectionTitle(section: Element): string {
-  const titleEl = section.getElementsByTagNameNS(FB2_NS, 'title')[0]
-  if (!titleEl) return ''
-
-  const parts: string[] = []
-  const pEls = titleEl.getElementsByTagNameNS(FB2_NS, 'p')
-  for (const p of Array.from(pEls)) {
-    const t = p.textContent?.trim()
-    if (t) parts.push(t)
-  }
-  const result = parts.join(' ').replace(WHITESPACE_RE, ' ').trim()
-  if (result) return result
-
-  return (titleEl.textContent ?? '').replace(WHITESPACE_RE, ' ').trim()
-}
-
-function parseSections(
-  body: Element,
-  binaries: Map<string, InlineImage>,
-): ParsedChapter[] {
-  const chapters: ParsedChapter[] = []
-  const sections = body.getElementsByTagNameNS(FB2_NS, 'section')
-
-  // Only top-level sections (direct children of body)
-  const topSections = Array.from(sections).filter((s) => s.parentElement === body)
-
-  if (!topSections.length) {
-    const collected: InlineImage[] = []
-    const text = getTextWithImages(body, binaries, collected).replace(WHITESPACE_RE, ' ').trim()
-    if (text.length >= MIN_CHAPTER_LENGTH) {
-      chapters.push({ title: 'Chapter 1', text, inlineImages: collected })
-    }
-    return chapters
-  }
-
-  for (let i = 0; i < topSections.length; i++) {
-    const section = topSections[i]
-    const title = extractSectionTitle(section) || `Chapter ${i + 1}`
-
-    // Check for subsections
-    const subsections = Array.from(
-      section.getElementsByTagNameNS(FB2_NS, 'section'),
-    ).filter((s) => s.parentElement === section)
-
-    if (subsections.length) {
-      for (let j = 0; j < subsections.length; j++) {
-        const sub = subsections[j]
-        const subTitle = extractSectionTitle(sub)
-        const collected: InlineImage[] = []
-        const subText = getTextWithImages(sub, binaries, collected).replace(WHITESPACE_RE, ' ').trim()
-        if (subText.length >= MIN_CHAPTER_LENGTH) {
-          const fullTitle = subTitle ? `${title} - ${subTitle}` : `${title} (${j + 1})`
-          chapters.push({ title: fullTitle, text: subText, inlineImages: collected })
-        }
-      }
-    } else {
-      const collected: InlineImage[] = []
-      const text = getTextWithImages(section, binaries, collected).replace(WHITESPACE_RE, ' ').trim()
-      if (text.length >= MIN_CHAPTER_LENGTH) {
-        chapters.push({ title, text, inlineImages: collected })
-      }
-    }
-  }
-
-  return chapters
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
 export async function parseFb2(data: ArrayBuffer, filename?: string): Promise<ParsedBook> {
   let xmlData: ArrayBuffer = data
-
-  // Handle .fb2.zip
   const fn = (filename ?? '').toLowerCase()
   if (fn.endsWith('.fb2.zip') || fn.endsWith('.zip')) {
     const zip = await JSZip.loadAsync(data)
@@ -166,19 +145,15 @@ export async function parseFb2(data: ArrayBuffer, filename?: string): Promise<Pa
   }
 
   const xmlText = new TextDecoder('utf-8').decode(xmlData)
-  const parser = new DOMParser()
-  const doc = parser.parseFromString(xmlText, 'application/xml')
-
+  const doc = new DOMParser().parseFromString(xmlText, 'application/xml')
   const parseError = doc.querySelector('parsererror')
   if (parseError) throw new Error(`Invalid FB2 XML: ${parseError.textContent}`)
 
   // Metadata
   let title = 'Untitled'
   let author = 'Unknown Author'
-
   const bookTitle = doc.getElementsByTagNameNS(FB2_NS, 'book-title')[0]
   if (bookTitle?.textContent?.trim()) title = bookTitle.textContent.trim()
-
   const authorEl = doc.getElementsByTagNameNS(FB2_NS, 'author')[0]
   if (authorEl) {
     const first = authorEl.getElementsByTagNameNS(FB2_NS, 'first-name')[0]
@@ -189,14 +164,52 @@ export async function parseFb2(data: ArrayBuffer, filename?: string): Promise<Pa
     if (parts.length) author = parts.join(' ')
   }
 
-  // Extract binary images
-  const binaries = await extractBinaries(doc)
+  const binaries = extractBinaries(doc)
 
-  // Parse body sections
+  // Cover: try <coverpage> first, then first available binary.
+  let cover: ParsedCover | undefined
+  const coverpage = doc.getElementsByTagNameNS(FB2_NS, 'coverpage')[0]
+  if (coverpage) {
+    const img = coverpage.getElementsByTagNameNS(FB2_NS, 'image')[0]
+    if (img) {
+      const href =
+        img.getAttributeNS(XLINK_NS, 'href') ?? img.getAttribute('href') ?? ''
+      const entry = binaries.get(href)
+      if (entry) cover = { blob: entry.blob, mimeType: entry.mimeType }
+    }
+  }
+  if (!cover) {
+    const first = binaries.values().next().value
+    if (first) cover = { blob: first.blob, mimeType: first.mimeType }
+  }
+
+  // Body sections
   const body = doc.getElementsByTagNameNS(FB2_NS, 'body')[0]
-  if (!body) return { title, author, contentType: 'text', chapters: [], imageChapters: [] }
+  const sections: ParsedSection[] = []
+  if (body) {
+    const topSections = Array.from(
+      body.getElementsByTagNameNS(FB2_NS, 'section'),
+    ).filter((s) => s.parentElement === body)
 
-  const chapters = parseSections(body, binaries)
+    if (!topSections.length) {
+      const text = elementToText(body, binaries).replace(WHITESPACE_RE, ' ').trim()
+      const html = elementToHtml(body, binaries)
+      sections.push({ title: 'Untitled', text, html })
+    } else {
+      for (const sec of topSections) {
+        const sectionTitle = getSectionTitle(sec) || 'Untitled'
+        const text = elementToText(sec, binaries).replace(WHITESPACE_RE, ' ').trim()
+        const html = elementToHtml(sec, binaries)
+        sections.push({ title: sectionTitle, text, html })
+      }
+    }
+  }
 
-  return { title, author, contentType: 'text', chapters, imageChapters: [] }
+  return {
+    title,
+    author,
+    contentType: 'text',
+    sections,
+    cover,
+  }
 }

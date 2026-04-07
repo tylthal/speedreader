@@ -1,27 +1,21 @@
 /**
  * Message protocol between main thread and parser Web Worker.
  *
- * Images are transferred as ArrayBuffers (zero-copy) since Blobs
- * can't be transferred. The main thread wraps them back into Blobs.
+ * Images are transferred as ArrayBuffers (zero-copy) since Blobs can't be
+ * transferred. The main thread wraps them back into Blobs and stores them
+ * (cover into OPFS, image pages into image_pages, etc.).
+ *
+ * Reader-redesign shape: parsers emit `sections`, optionally a `cover`, an
+ * optional `tocTree`, and (for CBZ) an `imagePages` sidecar.
  */
 
 // ---------------------------------------------------------------------------
-// Serialized types (no Blobs — ArrayBuffers instead)
+// Serialized leaves (no Blobs — ArrayBuffers instead)
 // ---------------------------------------------------------------------------
 
-export interface SerializedInlineImage {
-  placeholder: string
+export interface SerializedCover {
   imageData: ArrayBuffer
-  alt: string
-  width: number
-  height: number
   mimeType: string
-}
-
-export interface SerializedChapter {
-  title: string
-  text: string
-  inlineImages: SerializedInlineImage[]
 }
 
 export interface SerializedImagePage {
@@ -32,17 +26,27 @@ export interface SerializedImagePage {
   mimeType: string
 }
 
-export interface SerializedImageChapter {
+export interface SerializedSection {
   title: string
-  pages: SerializedImagePage[]
+  text: string
+  html: string
+  meta?: Record<string, unknown>
+}
+
+export interface SerializedTocNode {
+  title: string
+  sectionIndex: number
+  children?: SerializedTocNode[]
 }
 
 export interface SerializedParsedBook {
   title: string
   author: string
   contentType: 'text' | 'image'
-  chapters: SerializedChapter[]
-  imageChapters: SerializedImageChapter[]
+  sections: SerializedSection[]
+  cover?: SerializedCover
+  tocTree?: SerializedTocNode[]
+  imagePages?: SerializedImagePage[]
 }
 
 export interface ChunkedSegment {
@@ -50,24 +54,26 @@ export interface ChunkedSegment {
   text: string
   word_count: number
   duration_ms: number
+  section_index?: number
+  kind?: 'text' | 'section_title'
 }
 
-export interface ChunkedChapter {
+export interface ChunkedSection {
   title: string
   text: string
+  html: string
+  meta?: Record<string, unknown>
   segments: ChunkedSegment[]
-  inlineImages: SerializedInlineImage[]
 }
 
-/** Final result: parsed + chunked, ready for DB insertion */
+/** Final result: parsed + chunked, ready for DB insertion. */
 export interface WorkerResult {
   book: SerializedParsedBook
-  /** Only present for text content — chapters with segments pre-computed */
-  chunkedChapters: ChunkedChapter[]
+  chunkedSections: ChunkedSection[]
 }
 
 // ---------------------------------------------------------------------------
-// Messages: Main → Worker
+// Messages
 // ---------------------------------------------------------------------------
 
 export interface ParseRequest {
@@ -76,10 +82,6 @@ export interface ParseRequest {
   data: ArrayBuffer
   filename: string
 }
-
-// ---------------------------------------------------------------------------
-// Messages: Worker → Main
-// ---------------------------------------------------------------------------
 
 export interface ProgressMessage {
   type: 'progress'

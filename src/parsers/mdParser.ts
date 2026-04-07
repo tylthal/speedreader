@@ -1,28 +1,25 @@
 /**
- * Markdown parser. Port of backend/md_parser.py.
+ * Markdown parser (PRD §3.1) — emits a single ParsedSection. We do not split
+ * MD by H1/H2 boundaries; the PRD says "the whole document is one section".
  */
 
-import type { ParsedBook } from './types'
+import type { ParsedBook, ParsedSection } from './types'
+import { paragraphsToHtml, sanitizeHtml } from '../lib/sanitize'
 
-const MIN_CHAPTER_LENGTH = 50
-
-const ATX_HEADING_RE = /^(#{1,3})\s+(.+)$/gm
-const SETEXT_H1_RE = /^(.+)\n={3,}\s*$/gm
-const SETEXT_H2_RE = /^(.+)\n-{3,}\s*$/gm
-
+const ATX_HEADING_RE = /^(#{1,3})\s+(.+)$/m
 const STRIP_PATTERNS: [RegExp, string][] = [
-  [/!\[([^\]]*)\]\([^)]+\)/g, '$1'],             // images
-  [/\[([^\]]+)\]\([^)]+\)/g, '$1'],               // links
-  [/`{3}[^`]*`{3}/gs, ''],                        // fenced code blocks
-  [/`([^`]+)`/g, '$1'],                            // inline code
-  [/\*{2}(.+?)\*{2}/g, '$1'],                     // bold
-  [/\*(.+?)\*/g, '$1'],                            // italic
-  [/_{2}(.+?)_{2}/g, '$1'],                        // bold underscore
-  [/_(.+?)_/g, '$1'],                              // italic underscore
-  [/^>\s?/gm, ''],                                 // blockquotes
-  [/^[-*+]\s+/gm, ''],                             // unordered lists
-  [/^\d+\.\s+/gm, ''],                             // ordered lists
-  [/^#{1,6}\s+/gm, ''],                            // heading markers
+  [/!\[([^\]]*)\]\([^)]+\)/g, '$1'],
+  [/\[([^\]]+)\]\([^)]+\)/g, '$1'],
+  [/`{3}[^`]*`{3}/gs, ''],
+  [/`([^`]+)`/g, '$1'],
+  [/\*{2}(.+?)\*{2}/g, '$1'],
+  [/\*(.+?)\*/g, '$1'],
+  [/_{2}(.+?)_{2}/g, '$1'],
+  [/_(.+?)_/g, '$1'],
+  [/^>\s?/gm, ''],
+  [/^[-*+]\s+/gm, ''],
+  [/^\d+\.\s+/gm, ''],
+  [/^#{1,6}\s+/gm, ''],
 ]
 
 function stripMarkdown(text: string): string {
@@ -32,60 +29,78 @@ function stripMarkdown(text: string): string {
   return text.trim()
 }
 
+/**
+ * Render markdown to a minimal HTML string. Intentionally simple — handles
+ * paragraphs, headings, and emphasis. Anything fancier is out of scope for the
+ * formatted view; the source markdown text remains the canonical content.
+ */
+function markdownToHtml(md: string): string {
+  const lines = md.split('\n')
+  const out: string[] = []
+  let para: string[] = []
+
+  const flushPara = () => {
+    if (para.length) {
+      out.push(`<p>${para.join(' ')}</p>`)
+      para = []
+    }
+  }
+
+  for (const line of lines) {
+    const trimmed = line.trim()
+    if (!trimmed) {
+      flushPara()
+      continue
+    }
+    const heading = /^(#{1,6})\s+(.+)$/.exec(trimmed)
+    if (heading) {
+      flushPara()
+      const level = Math.min(heading[1].length, 6)
+      out.push(`<h${level}>${escapeHtml(heading[2])}</h${level}>`)
+      continue
+    }
+    if (/^[-*+]\s+/.test(trimmed)) {
+      flushPara()
+      out.push(`<ul><li>${escapeHtml(trimmed.replace(/^[-*+]\s+/, ''))}</li></ul>`)
+      continue
+    }
+    if (/^>\s?/.test(trimmed)) {
+      flushPara()
+      out.push(`<blockquote>${escapeHtml(trimmed.replace(/^>\s?/, ''))}</blockquote>`)
+      continue
+    }
+    para.push(escapeHtml(trimmed))
+  }
+  flushPara()
+
+  return sanitizeHtml(out.join('\n'))
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
 export function parseMd(data: ArrayBuffer, filename?: string): ParsedBook {
   const content = new TextDecoder('utf-8').decode(data)
 
-  // Find all headings with positions
-  const headings: { pos: number; level: number; title: string }[] = []
-
-  for (const m of content.matchAll(ATX_HEADING_RE)) {
-    headings.push({ pos: m.index!, level: m[1].length, title: m[2].trim() })
-  }
-  for (const m of content.matchAll(SETEXT_H1_RE)) {
-    headings.push({ pos: m.index!, level: 1, title: m[1].trim() })
-  }
-  for (const m of content.matchAll(SETEXT_H2_RE)) {
-    headings.push({ pos: m.index!, level: 2, title: m[1].trim() })
-  }
-
-  headings.sort((a, b) => a.pos - b.pos)
-
-  // Title from first h1 or filename
+  // Title from first H1, otherwise filename, otherwise "Untitled".
   let title = 'Untitled'
-  for (const h of headings) {
-    if (h.level === 1) { title = h.title; break }
-  }
+  const m = ATX_HEADING_RE.exec(content)
+  if (m && m[1].length === 1) title = m[2].trim()
   if (title === 'Untitled' && filename) {
     title = filename.replace(/\.[^.]+$/, '')
   }
 
-  // Split at h1/h2 boundaries
-  const chapterHeadings = headings.filter((h) => h.level <= 2)
-  const chapters: { title: string; text: string }[] = []
+  const sectionTitle = (m && m[2].trim()) || 'Untitled'
+  const text = stripMarkdown(content)
+  const html = markdownToHtml(content) || paragraphsToHtml(text)
 
-  if (chapterHeadings.length) {
-    for (let i = 0; i < chapterHeadings.length; i++) {
-      const start = chapterHeadings[i].pos
-      const end = i + 1 < chapterHeadings.length ? chapterHeadings[i + 1].pos : content.length
-      const text = stripMarkdown(content.slice(start, end))
-      if (text.length >= MIN_CHAPTER_LENGTH) {
-        chapters.push({ title: chapterHeadings[i].title, text })
-      }
-    }
-  }
-
-  if (!chapters.length) {
-    const text = stripMarkdown(content)
-    if (text.length >= MIN_CHAPTER_LENGTH) {
-      chapters.push({ title, text })
-    }
-  }
+  const section: ParsedSection = { title: sectionTitle, text, html }
 
   return {
     title,
     author: 'Unknown Author',
     contentType: 'text',
-    chapters: chapters.map((c) => ({ ...c, inlineImages: [] })),
-    imageChapters: [],
+    sections: [section],
   }
 }
