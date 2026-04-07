@@ -137,6 +137,24 @@ export default function FormattedView({
     })
   }, [chapters, imageMap])
 
+  // We set the section body innerHTML *imperatively* via a ref, NOT through
+  // dangerouslySetInnerHTML. React 19's reconciler appears to track img
+  // elements inside dangerouslySetInnerHTML and "fix" their src attributes
+  // back to the original (unresolved) opfs: markers during commit, which
+  // breaks the images on every re-render. Setting innerHTML imperatively
+  // takes the inner DOM out of React's hands entirely.
+  const bodyRefs = useRef<Map<number, HTMLDivElement>>(new Map())
+  useEffect(() => {
+    for (const { ch, html } of rewrittenSections) {
+      const idx = chapters.indexOf(ch)
+      const el = bodyRefs.current.get(idx)
+      if (!el) continue
+      if (el.dataset.lastHtml === html) continue
+      el.innerHTML = html
+      el.dataset.lastHtml = html
+    }
+  }, [rewrittenSections, chapters])
+
   // Scroll the current section into view whenever the cursor changes
   // externally (e.g. user toggled from plain → formatted).
   useEffect(() => {
@@ -189,7 +207,7 @@ export default function FormattedView({
   return (
     <div className="formatted-view" ref={containerRef}>
       <div className="formatted-view__column">
-        {rewrittenSections.map(({ ch, html }, idx) => (
+        {chapters.map((ch, idx) => (
           <article
             key={ch.id}
             id={`section-${idx}`}
@@ -201,12 +219,13 @@ export default function FormattedView({
             className="formatted-view__section"
           >
             <h1 className="formatted-view__title">{ch.title || 'Untitled'}</h1>
-            {html ? (
+            {ch.html ? (
               <div
                 className="formatted-view__body"
-                // The HTML was sanitized at parse time (src/lib/sanitize.ts)
-                // and image opfs: markers have been pre-resolved to blob URLs.
-                dangerouslySetInnerHTML={{ __html: html }}
+                ref={(el) => {
+                  if (el) bodyRefs.current.set(idx, el)
+                  else bodyRefs.current.delete(idx)
+                }}
               />
             ) : (
               <p className="formatted-view__empty">No formatted content available for this section.</p>
