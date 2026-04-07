@@ -1,7 +1,16 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import {
+  forwardRef,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
+import type { RefObject } from 'react'
 import type { Chapter } from '../api/client'
 import { getImageBlob } from '../lib/fileStorage'
 import { useContentTap } from '../hooks/useContentTap'
+import { buildProfile, type VelocityProfile } from '../lib/velocityProfile'
 
 interface FormattedViewProps {
   publicationId: number
@@ -12,6 +21,38 @@ interface FormattedViewProps {
   onVisibleSectionChange: (sectionIndex: number) => void
   /** Tap-to-toggle-playback. Fires for bare taps that don't land on a link/button. */
   onTap?: () => void
+  /**
+   * When supplied, FormattedView populates this ref with the latest
+   * velocity profile any time it rebuilds (post innerHTML write, ResizeObserver
+   * fire, manual `rebuildProfile()` call). The owning component (ReaderViewport)
+   * passes the same ref into useScrollEngine / useTrackEngine so the engines
+   * can read the profile each tick without a React re-render.
+   */
+  velocityProfileRef?: RefObject<VelocityProfile | null>
+}
+
+/**
+ * Imperative handle exposed via forwardRef. ReaderViewport reaches in for
+ * the things the engines and the formatted-mode play adapter need:
+ *   - Scroll container, for the engines' containerRef
+ *   - Section element, for the section-proportional cursor mapping
+ *   - setEngineDriving — flips isProgrammaticScrollRef so the IntersectionObserver
+ *     doesn't fight engine-driven scrollTop writes (the same defense the
+ *     internal section-jump effect uses)
+ *   - markReported — keeps lastReportedIdxRef in sync so the section-jump
+ *     effect doesn't yank the user's position
+ *   - rebuildProfile — synchronous rebuild, used by ResizeObserver and the
+ *     play adapter after image decode settles
+ *   - settleImages — async, awaits HTMLImageElement.decode() for every img
+ *     in the given section so layout is stable before the engine starts
+ */
+export interface FormattedViewHandle {
+  getScrollContainer: () => HTMLElement | null
+  getSectionEl: (idx: number) => HTMLElement | null
+  setEngineDriving: (driving: boolean) => void
+  markReported: (idx: number) => void
+  rebuildProfile: () => void
+  settleImages: (sectionIdx: number) => Promise<void>
 }
 
 const OPFS_SRC_RE = /<img\s[^>]*?src=["']opfs:([^"']+)["']/gi
@@ -106,17 +147,26 @@ function loadPublicationImages(
  * the fragile post-render DOM-mutation pattern that broke under StrictMode
  * and on subsequent re-renders triggered by scrolling.
  */
-export default function FormattedView({
-  publicationId,
-  chapters,
-  currentSectionIndex,
-  onVisibleSectionChange,
-  onTap,
-}: FormattedViewProps) {
+const FormattedView = forwardRef<FormattedViewHandle, FormattedViewProps>(function FormattedView(
+  {
+    publicationId,
+    chapters,
+    currentSectionIndex,
+    onVisibleSectionChange,
+    onTap,
+    velocityProfileRef,
+  },
+  ref,
+) {
   const tapHandlers = useContentTap(onTap)
   const containerRef = useRef<HTMLDivElement>(null)
   const sectionRefs = useRef<Map<number, HTMLElement>>(new Map())
   const isProgrammaticScrollRef = useRef(false)
+
+  // Generation counter bumped on every profile rebuild — engines compare
+  // against their cached value to know when to reset the lookup adjacency
+  // cache after a layout change.
+  const profileGenerationRef = useRef(0)
 
   // Resolved name → blob URL. Pulled from a module-level cache so the URLs
   // persist across mounts/unmounts (StrictMode, HMR, conditional rendering).
@@ -167,6 +217,7 @@ export default function FormattedView({
   const bodyRefs = useRef<Map<number, HTMLDivElement>>(new Map())
   useEffect(() => {
     if (!rewrittenSections) return
+    let didWrite = false
     for (const { ch, html } of rewrittenSections) {
       const idx = chapters.indexOf(ch)
       const el = bodyRefs.current.get(idx)
@@ -174,8 +225,89 @@ export default function FormattedView({
       if (el.dataset.lastHtml === html) continue
       el.innerHTML = html
       el.dataset.lastHtml = html
+      didWrite = true
+    }
+    if (didWrite) {
+      // Wait one frame for the browser to lay out the new HTML, then rebuild
+      // the velocity profile. Layout might not be final (images still
+      // decoding), but the ResizeObserver below will catch any subsequent
+      // shifts and rebuild again — and the play-time settleImages() path
+      // will force a rebuild before the engine starts.
+      requestAnimationFrame(() => {
+        rebuildProfileNow()
+      })
     }
   }, [rewrittenSections, chapters])
+
+  // ---- Velocity profile build ---------------------------------------------
+  //
+  // Builds happen on three triggers:
+  //   1. After the imperative innerHTML write completes (above), one rAF later
+  //   2. ResizeObserver fires on any tracked section after a meaningful
+  //      height change (late image load, font reflow)
+  //   3. ReaderViewport calls handle.rebuildProfile() before play() — usually
+  //      after handle.settleImages() has awaited every img.decode() in the
+  //      current section so layout is stable
+  //
+  // The build itself is a single querySelectorAll + bounded gBCR reads on
+  // top-level block elements; it's well under one frame even for large
+  // chapters. We mutate velocityProfileRef.current directly (no setState)
+  // because the engines read it from a ref each tick — they pick up the
+  // update on the very next rAF without any React re-render path.
+  const rebuildProfileNow = () => {
+    const container = containerRef.current
+    if (!container) return
+    if (!velocityProfileRef) return
+    profileGenerationRef.current += 1
+    velocityProfileRef.current = buildProfile(container, profileGenerationRef.current)
+  }
+
+  // ResizeObserver: watch every section for height changes and rebuild the
+  // profile when one shifts by >2% from its last observed height. The 2%
+  // threshold ignores sub-pixel jitter from font hinting / scrollbar
+  // reflow. Debounced to one rAF so a burst of late image loads collapses
+  // into a single rebuild.
+  useEffect(() => {
+    if (!velocityProfileRef) return
+    const container = containerRef.current
+    if (!container) return
+
+    const lastHeights = new Map<HTMLElement, number>()
+    let pendingRaf = 0
+    const scheduleRebuild = () => {
+      if (pendingRaf) return
+      pendingRaf = requestAnimationFrame(() => {
+        pendingRaf = 0
+        rebuildProfileNow()
+      })
+    }
+
+    const observer = new ResizeObserver((entries) => {
+      let significant = false
+      for (const entry of entries) {
+        const el = entry.target as HTMLElement
+        const newHeight = entry.contentRect.height
+        const prev = lastHeights.get(el) ?? 0
+        if (prev === 0 || Math.abs(newHeight - prev) / Math.max(prev, 1) > 0.02) {
+          lastHeights.set(el, newHeight)
+          significant = true
+        }
+      }
+      if (significant) scheduleRebuild()
+    })
+
+    for (const el of sectionRefs.current.values()) {
+      observer.observe(el)
+    }
+
+    return () => {
+      if (pendingRaf) cancelAnimationFrame(pendingRaf)
+      observer.disconnect()
+    }
+    // We intentionally re-run when chapters change so the observer attaches
+    // to whatever sections currently exist.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chapters, velocityProfileRef])
 
   // Track the last section index we *reported* to the parent. The parent
   // will then call setChapterIdx with this same value, propagate it back
@@ -252,6 +384,57 @@ export default function FormattedView({
     return () => observer.disconnect()
   }, [chapters])
 
+  // ---- Imperative handle ---------------------------------------------------
+  //
+  // ReaderViewport reaches in for the things the engines and the formatted-mode
+  // play adapter need. We expose only what the parent actually uses — no
+  // generic "getRef" escape hatches. See FormattedViewHandle for field docs.
+  useImperativeHandle(
+    ref,
+    () => ({
+      getScrollContainer: () => containerRef.current,
+      getSectionEl: (idx) => sectionRefs.current.get(idx) ?? null,
+      setEngineDriving: (driving) => {
+        // Reuse the same flag the section-jump effect uses to suppress the
+        // IntersectionObserver — when the engine is writing scrollTop on
+        // every rAF, we MUST NOT feed those programmatic scrolls back through
+        // onVisibleSectionChange or we'd loop. The flag is read inside the
+        // observer callback at the top of this file.
+        isProgrammaticScrollRef.current = driving
+      },
+      markReported: (idx) => {
+        // Lets the formatted-mode cursor advance update lastReportedIdxRef
+        // so the section-jump effect doesn't try to scrollIntoView when
+        // chapterIdx changes from inside the engine.
+        lastReportedIdxRef.current = idx
+      },
+      rebuildProfile: () => {
+        rebuildProfileNow()
+      },
+      settleImages: async (sectionIdx) => {
+        // Force every <img> in this section to fully decode before resolving.
+        // HTMLImageElement.decode() resolves once the image is parsed AND
+        // ready to paint, so layout is stable when we return. We swallow
+        // errors (broken-image src) so the engine can still start.
+        const sectionEl = sectionRefs.current.get(sectionIdx)
+        if (!sectionEl) return
+        const imgs = Array.from(sectionEl.querySelectorAll('img'))
+        await Promise.all(
+          imgs.map((img) => {
+            if (img.complete && img.naturalWidth > 0) return Promise.resolve()
+            return img.decode().catch(() => {
+              /* broken image — proceed anyway */
+            })
+          }),
+        )
+      },
+    }),
+    // velocityProfileRef is stable across renders (it's a ref) so we don't
+    // need to re-derive the handle when it changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  )
+
   return (
     <div className="formatted-view" ref={containerRef} {...tapHandlers}>
       <div className="formatted-view__column">
@@ -285,4 +468,6 @@ export default function FormattedView({
       </div>
     </div>
   )
-}
+})
+
+export default FormattedView
