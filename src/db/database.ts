@@ -83,6 +83,25 @@ export interface DBReadingProgress {
   updated_at: string
 }
 
+/**
+ * Generic blob fallback. Used when the primary storage backend (OPFS) refuses
+ * a write — most commonly mobile WebKit, where FileSystemFileHandle.createWritable()
+ * is unsupported or restricted. Keys are namespaced strings so callers can
+ * route by prefix:
+ *   image:{pubId}:{name}    — inline EPUB image
+ *   cover:{pubId}.{ext}     — book cover image
+ *   book:{pubId}            — original ebook file
+ */
+export interface DBBlobStorage {
+  /** Namespaced key, see above. */
+  key: string
+  blob: Blob
+  /** MIME type, kept so reads can rebuild a typed Blob if needed. */
+  mime?: string
+  /** Original filename for book entries; null otherwise. */
+  filename?: string | null
+}
+
 // ---------------------------------------------------------------------------
 // Database
 // ---------------------------------------------------------------------------
@@ -93,6 +112,7 @@ class SpeedReaderDB extends Dexie {
   segments!: Table<DBSegment, number>
   image_pages!: Table<DBImagePage, number>
   reading_progress!: Table<DBReadingProgress, number>
+  blob_storage!: Table<DBBlobStorage, string>
 
   constructor() {
     super('speedreader')
@@ -121,6 +141,20 @@ class SpeedReaderDB extends Dexie {
       reading_progress: '++id, &publication_id',
       bookmarks: null,
       highlights: null,
+    })
+
+    // v3: blob_storage table — fallback for OPFS writes that fail on mobile
+    // WebKit (FileSystemFileHandle.createWritable() is unsupported or
+    // restricted on iOS Safari before 18). The primary key is a namespaced
+    // string, see DBBlobStorage doc above. Existing rows in other tables are
+    // untouched by this version bump.
+    this.version(3).stores({
+      publications: '++id, status, content_type, created_at',
+      chapters: '++id, publication_id, [publication_id+chapter_index]',
+      segments: '++id, chapter_id, [chapter_id+segment_index]',
+      image_pages: '++id, chapter_id, [chapter_id+page_index]',
+      reading_progress: '++id, &publication_id',
+      blob_storage: '&key',
     })
   }
 }
