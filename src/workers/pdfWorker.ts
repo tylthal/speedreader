@@ -7,11 +7,9 @@
 
 if (
   typeof ReadableStream !== 'undefined' &&
-  // @ts-expect-error — checking for missing iterator method
-  !ReadableStream.prototype[Symbol.asyncIterator]
+  !(ReadableStream.prototype as any)[Symbol.asyncIterator]
 ) {
-  // @ts-expect-error — patching prototype
-  ReadableStream.prototype[Symbol.asyncIterator] = async function* () {
+  (ReadableStream.prototype as any)[Symbol.asyncIterator] = async function* () {
     const reader = this.getReader()
     try {
       while (true) {
