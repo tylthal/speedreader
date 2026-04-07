@@ -413,19 +413,21 @@ function ActiveReader({
   const formattedCursorMonoRef = useRef(0);
 
   /**
-   * Cursor mapping for the formatted-view engines. Given a container-relative
-   * vertical scroll center, return the array index of the segment the user
-   * is currently looking at. Section-proportional: find where the scroll
-   * center sits within the current section's bounding box and interpolate
-   * across the loaded segments.
+   * Pure cursor mapping: given a container-relative scroll center, return
+   * the segment array index the user is looking at — no monotonic clamp,
+   * no side effects. Used both by the engine's onScrollTick (with the
+   * clamp wrapper below) and by the manual-scroll listener (without it,
+   * because users may legitimately scroll backward while paused).
    *
-   * Why section-proportional rather than per-segment-DOM: segments come from
-   * a plain-text chunker pipeline, not from the EPUB HTML, so there's no
-   * reliable mapping from a DOM position to a specific segment. Proportional
-   * mapping is approximate but smooth and good enough for progress saving
-   * (which only cares about segment_index granularity).
+   * Section-proportional: find where the scroll center sits within the
+   * current section's bounding box and interpolate across the loaded
+   * segments. Segments come from a plain-text chunker pipeline, not from
+   * the EPUB HTML, so there's no reliable mapping from a DOM position to
+   * a specific segment. Proportional is approximate but smooth and good
+   * enough for progress saving (which only cares about segment_index
+   * granularity).
    */
-  const formattedScrollTick = useCallback(
+  const computeFormattedCursor = useCallback(
     (centerY: number): number | null => {
       const handle = formattedViewRef.current;
       if (!handle) return null;
@@ -442,16 +444,30 @@ function ActiveReader({
       const segs = loaderState.segments;
       if (segs.length === 0) return null;
       const progress = (centerY - sectionTop) / sectionRect.height;
-      const idx = Math.min(
+      return Math.min(
         segs.length - 1,
         Math.max(0, Math.floor(progress * segs.length)),
       );
-      // Monotonic clamp while playing — see formattedCursorMonoRef notes above.
+    },
+    [chapterIdx, loaderState.segments],
+  );
+
+  /**
+   * Engine-side wrapper that applies the monotonic forward clamp. While
+   * playing we never want the cursor to slide backward — late image loads
+   * grow the section height, the proportional mapping recomputes lower,
+   * and the cursor would otherwise rewind under the scroll. The clamp ref
+   * resets in startPlay() so each play session starts fresh.
+   */
+  const formattedScrollTick = useCallback(
+    (centerY: number): number | null => {
+      const idx = computeFormattedCursor(centerY);
+      if (idx == null) return null;
       const clamped = Math.max(idx, formattedCursorMonoRef.current);
       formattedCursorMonoRef.current = clamped;
       return clamped;
     },
-    [chapterIdx, loaderState.segments],
+    [computeFormattedCursor],
   );
 
   const [formattedScrollState, formattedScrollActionsRaw] = useScrollEngine({
@@ -656,6 +672,59 @@ function ActiveReader({
       formattedScrollContainerRef.current = handle.getScrollContainer();
     }
   }, [showFormattedView]);
+
+  /**
+   * Sync the active engine's segment cursor to the user's manual scroll
+   * position while paused in formatted view. Without this, the cursor
+   * stays wherever it was last set (TOC click, end of last play session,
+   * etc.) so pressing Play after a manual scroll resumes from the wrong
+   * place. The mapping reuses computeFormattedCursor — same math the
+   * engine uses while playing — but skips the monotonic clamp because the
+   * user is allowed to scroll backward when paused.
+   *
+   * The active engine is whichever activeActions.seekTo points at:
+   *   - playback mode → playbackActions.seekTo
+   *   - rsvp mode    → rsvpActions.seekToSegment
+   *   - scroll mode  → formattedScrollActions.seekTo (raw passthrough)
+   *   - track mode   → formattedTrackActions.seekTo (raw passthrough)
+   * So this works "regardless of mode" as long as the user is in
+   * formatted view.
+   *
+   * rAF-throttled so a flick scroll doesn't fire dozens of seekTo calls
+   * per frame; the comparison against the latest currentIndex via a ref
+   * prevents re-firing for the same value.
+   */
+  const activeCurrentIndexRef = useRef(activeState.currentIndex);
+  activeCurrentIndexRef.current = activeState.currentIndex;
+  const activeSeekToRef = useRef(activeActions.seekTo);
+  activeSeekToRef.current = activeActions.seekTo;
+  useEffect(() => {
+    if (!showFormattedView) return;
+    if (activeState.isPlaying) return;
+    const handle = formattedViewRef.current;
+    if (!handle) return;
+    const container = handle.getScrollContainer();
+    if (!container) return;
+
+    let rafScheduled = false;
+    const onScroll = () => {
+      if (rafScheduled) return;
+      rafScheduled = true;
+      requestAnimationFrame(() => {
+        rafScheduled = false;
+        const centerY = container.scrollTop + container.clientHeight / 2;
+        const idx = computeFormattedCursor(centerY);
+        if (idx == null) return;
+        if (idx === activeCurrentIndexRef.current) return;
+        activeSeekToRef.current(idx);
+      });
+    };
+
+    container.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      container.removeEventListener('scroll', onScroll);
+    };
+  }, [showFormattedView, activeState.isPlaying, computeFormattedCursor]);
 
   /**
    * Mid-play handoff between focus-mode and formatted-mode engines.
