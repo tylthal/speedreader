@@ -8,12 +8,14 @@
  */
 
 import * as pdfjsLib from 'pdfjs-dist'
-import pdfjsWorkerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url'
 import type { ParsedBook, ParsedChapter } from './types'
 
-// Configure pdf.js worker — use Vite's ?url import for correct resolution
-// in both main thread and Web Worker contexts
-pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorkerUrl
+// Use Vite's static asset handling for the pdf.js worker.
+// new URL(..., import.meta.url) is transformed by Vite to a correct asset URL.
+pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
+  'pdfjs-dist/build/pdf.worker.min.mjs',
+  import.meta.url,
+).href
 
 const WHITESPACE_RE = /\s+/g
 const BLANK_LINES_RE = /\n{3,}/g
