@@ -834,16 +834,6 @@ function ActiveReader({
         </div>
       )}
 
-      {!activeState.isPlaying && activeState.currentIndex < loaderState.segments.length - 5 && (
-        <button
-          className="focus-scroll__jump-btn"
-          onClick={() => activeActions.seekTo(loaderState.segments.length - 1)}
-          aria-label="Jump to end of chapter"
-        >
-          End of chapter ↓
-        </button>
-      )}
-
       <ControlsBottomSheet
         isPlaying={activeState.isPlaying || wasPlayingBeforeLost}
         wpm={activeState.wpm}
