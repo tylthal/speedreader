@@ -123,7 +123,7 @@ export default function BookCard({
       )}
 
       <div
-        className={`book-card${disabled ? ' book-card--disabled' : ''}`}
+        className={`book-card${disabled ? ' book-card--disabled' : ''}${pub.cover_url ? ' book-card--has-cover' : ''}`}
         style={{ transform: `translateX(${swipeOffset}px)` }}
         onClick={handleClick}
         onTouchStart={onTouchStart}
@@ -132,8 +132,19 @@ export default function BookCard({
         role="article"
         aria-label={`${pub.title} by ${pub.author}`}
       >
-        {/* Book spine accent */}
-        <div className="book-card__spine" />
+        {pub.cover_url ? (
+          <div className="book-card__cover">
+            <img
+              src={pub.cover_url}
+              alt=""
+              className="book-card__cover-img"
+              loading="lazy"
+              decoding="async"
+            />
+          </div>
+        ) : (
+          <div className="book-card__spine" />
+        )}
 
         <div className="book-card__content">
           <div className="book-card__header">
