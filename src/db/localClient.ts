@@ -272,25 +272,13 @@ async function runParse(
   filename: string,
   onProgress?: (phase: string, percent: number) => void,
 ): Promise<WorkerResult> {
-  const supported = await checkWorkerDomParserSupport()
-  if (!supported) {
-    return runParseMainThread(data, filename, onProgress)
-  }
-
-  // The buffer gets transferred to the worker, so we need a copy in case
-  // we have to fall back to main-thread parsing.
-  const dataCopy = data.slice(0)
-  try {
-    return await runParseWorker(data, filename, onProgress)
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
-    // Safety net: if the worker fails for any DOMParser-related reason,
-    // retry on the main thread where DOMParser is always available.
-    if (/DOMParser/i.test(msg)) {
-      return runParseMainThread(dataCopy, filename, onProgress)
-    }
-    throw err
-  }
+  // Always parse on the main thread. The worker-based approach failed on
+  // Safari/WebKit (no DOMParser in workers) and the probe-based fallback
+  // proved unreliable. Main-thread parsing is slightly slower but works
+  // everywhere, and most files are small enough that the difference is
+  // imperceptible.
+  console.log('[parse] running on main thread:', filename)
+  return runParseMainThread(data, filename, onProgress)
 }
 
 function imgBlobFromSerialized(img: SerializedInlineImage): Blob {
