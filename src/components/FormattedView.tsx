@@ -174,6 +174,28 @@ function isImageDiagEnabled(): boolean {
   }
 }
 
+interface UploadDiag {
+  parsedCount: number
+  fileStorageAvailable: boolean
+  attempted: number
+  opfsCount: number
+  dexieCount: number
+  nativeCount: number
+  failedCount: number
+  firstError: string | null
+}
+
+function readUploadDiag(publicationId: number): UploadDiag | null {
+  if (typeof localStorage === 'undefined') return null
+  try {
+    const raw = localStorage.getItem(`upload-diag:${publicationId}`)
+    if (!raw) return null
+    return JSON.parse(raw) as UploadDiag
+  } catch {
+    return null
+  }
+}
+
 /**
  * Continuous-scroll formatted view (PRD §4.3) for HTML-derived books.
  *
@@ -514,6 +536,7 @@ const FormattedView = forwardRef<FormattedViewHandle, FormattedViewProps>(functi
   )
 
   const diagEnabled = isImageDiagEnabled()
+  const uploadDiag = diagEnabled ? readUploadDiag(publicationId) : null
 
   return (
     <div className="formatted-view" ref={containerRef} {...tapHandlers}>
@@ -532,20 +555,35 @@ const FormattedView = forwardRef<FormattedViewHandle, FormattedViewProps>(functi
           }}
         >
           <div style={{ color: '#fff', fontWeight: 'bold' }}>
-            images: {imageDiag.opfsCount + imageDiag.dexieCount}/{imageDiag.expected} loaded
+            read: {imageDiag.opfsCount + imageDiag.dexieCount}/{imageDiag.expected} loaded
           </div>
           <div>
             opfs: {imageDiag.opfsCount} · dexie: {imageDiag.dexieCount} · missing: {imageDiag.missingCount}
           </div>
+          {uploadDiag && (
+            <>
+              <div style={{ marginTop: 4, color: '#fff', fontWeight: 'bold' }}>
+                upload: parsed {uploadDiag.parsedCount}, attempted {uploadDiag.attempted}
+              </div>
+              <div>
+                opfs: {uploadDiag.opfsCount} · dexie: {uploadDiag.dexieCount} · native: {uploadDiag.nativeCount} · failed: {uploadDiag.failedCount}
+              </div>
+              {!uploadDiag.fileStorageAvailable && (
+                <div style={{ color: '#fc8' }}>file storage was unavailable at upload time</div>
+              )}
+              {uploadDiag.firstError && (
+                <div style={{ color: '#fc8' }}>first err: {uploadDiag.firstError}</div>
+              )}
+            </>
+          )}
+          {!uploadDiag && (
+            <div style={{ color: '#fc8', marginTop: 4 }}>
+              no upload-diag in localStorage — pub uploaded before this build
+            </div>
+          )}
           {imageDiag.expected === 0 && (
             <div style={{ color: '#fc8' }}>parser produced no opfs: markers — book has no images</div>
           )}
-          {imageDiag.expected > 0 &&
-            imageDiag.opfsCount + imageDiag.dexieCount === 0 && (
-              <div style={{ color: '#fc8' }}>
-                {imageDiag.expected} images expected but none found in either backend — re-upload likely needed
-              </div>
-            )}
         </div>
       )}
       <div className="formatted-view__column">

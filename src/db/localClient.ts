@@ -244,18 +244,47 @@ export class LocalClient implements SpeedReaderClient {
     // Persist inline images (EPUB) to OPFS so the formatted view can resolve
     // them across page reloads. Section HTML uses `<img src="opfs:{name}">`
     // markers; FormattedView resolves them to fresh blob URLs at render time.
+    //
+    // Per-image outcomes (which backend served the write, or which error
+    // we caught) are recorded into a localStorage diagnostic blob keyed by
+    // pubId. The FormattedView ?diag=1 strip surfaces them on-screen so
+    // mobile users can see exactly what happened during their upload
+    // without needing browser devtools.
+    const uploadDiag = {
+      parsedCount: book.parsedImages?.length ?? 0,
+      fileStorageAvailable: isFileStorageAvailable(),
+      attempted: 0,
+      opfsCount: 0,
+      dexieCount: 0,
+      nativeCount: 0,
+      failedCount: 0,
+      firstError: null as string | null,
+    }
     if (book.parsedImages?.length && isFileStorageAvailable()) {
-      let stored = 0
       for (const img of book.parsedImages) {
+        uploadDiag.attempted++
         try {
           const blob = new Blob([img.imageData], { type: img.mimeType })
-          await storeImage(pubId, img.name, blob)
-          stored++
+          const backend = await storeImage(pubId, img.name, blob)
+          if (backend === 'opfs') uploadDiag.opfsCount++
+          else if (backend === 'dexie') uploadDiag.dexieCount++
+          else if (backend === 'native') uploadDiag.nativeCount++
         } catch (err) {
+          uploadDiag.failedCount++
+          if (!uploadDiag.firstError) {
+            uploadDiag.firstError = err instanceof Error ? err.message : String(err)
+          }
           console.warn('[upload] failed to store image', img.name, err)
         }
       }
-      console.log('[upload] stored', stored, 'inline images for pub', pubId)
+      console.log('[upload] image storage summary for pub', pubId, uploadDiag)
+    }
+    try {
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem(`upload-diag:${pubId}`, JSON.stringify(uploadDiag))
+      }
+    } catch {
+      /* localStorage may be disabled — ignore */
     }
 
     // Now insert sections + segments + image_pages in a single transaction.

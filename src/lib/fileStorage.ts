@@ -36,14 +36,17 @@ export async function deleteBookFiles(pubId: number): Promise<void> {
   return deleteBookFiles(pubId);
 }
 
+export type ImageStoreBackend = 'opfs' | 'dexie' | 'native';
+
 export async function storeImage(
   pubId: number,
   name: string,
   blob: Blob,
-): Promise<void> {
+): Promise<ImageStoreBackend> {
   if (isNative()) {
     const { storeImage } = await import('./nativeFs');
-    return storeImage(pubId, name, blob);
+    await storeImage(pubId, name, blob);
+    return 'native';
   }
   const { storeImage } = await import('./opfs');
   return storeImage(pubId, name, blob);

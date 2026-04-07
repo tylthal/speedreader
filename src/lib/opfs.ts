@@ -37,14 +37,15 @@ let opfsWritesKnownBroken = false
 /**
  * iOS Safari's createWritable() does not always throw on unsupported
  * operations — sometimes it returns a writable that .write()/.close()
- * "successfully" but the resulting file is 0 bytes. To catch that case
- * we read back the very first OPFS write of every session and compare
- * its size against what we wrote. Once the readback confirms the bytes
- * landed correctly, we trust subsequent writes without re-verifying.
- * If the readback shows a size mismatch, we flip opfsWritesKnownBroken
- * and the caller falls back to Dexie like a normal createWritable failure.
+ * "successfully" but the resulting file is 0 bytes. We can't trust the
+ * write call to report failure, so we read back EVERY write and confirm
+ * its size matches what we wrote. Earlier versions of this module only
+ * verified the first write per session, but that left a hole on devices
+ * where the first write happened to land (e.g. the cover file under
+ * /covers/) and later writes silently failed (e.g. images under
+ * /images/{pubId}/). The cost of one extra getFile() per write is
+ * negligible compared to the write itself.
  */
-let opfsWriteVerified = false
 
 async function getRoot(): Promise<FileSystemDirectoryHandle> {
   if (!_root) {
@@ -96,26 +97,25 @@ async function tryOpfsWrite(
     await writable.write(blob)
     await writable.close()
 
-    // First-write verification: read it back and confirm the size matches.
-    // Skipped after one successful verification to keep the per-write cost
-    // off the hot path.
-    if (!opfsWriteVerified) {
-      try {
-        const verifyHandle = await dir.getFileHandle(fileName)
-        const verifyFile = await verifyHandle.getFile()
-        if (verifyFile.size !== blob.size) {
-          console.warn(
-            `[opfs] write verification failed: wrote ${blob.size} bytes, read back ${verifyFile.size}. Falling back to Dexie for the rest of this session.`,
-          )
-          opfsWritesKnownBroken = true
-          return false
-        }
-        opfsWriteVerified = true
-      } catch (err) {
-        console.warn('[opfs] write verification threw — falling back to Dexie', err)
+    // Per-write verification: read it back and confirm the size matches.
+    // Required because mobile WebKit can silently produce 0-byte files
+    // even after a "successful" createWritable + write + close. Skipping
+    // the check would let those empty files masquerade as valid storage
+    // and the Dexie fallback would never engage.
+    try {
+      const verifyHandle = await dir.getFileHandle(fileName)
+      const verifyFile = await verifyHandle.getFile()
+      if (verifyFile.size !== blob.size) {
+        console.warn(
+          `[opfs] write verification failed for ${fileName}: wrote ${blob.size} bytes, read back ${verifyFile.size}. Falling back to Dexie for the rest of this session.`,
+        )
         opfsWritesKnownBroken = true
         return false
       }
+    } catch (err) {
+      console.warn('[opfs] write verification threw — falling back to Dexie', err)
+      opfsWritesKnownBroken = true
+      return false
     }
     return true
   } catch (err) {
@@ -358,17 +358,18 @@ export async function storeImage(
   pubId: number,
   name: string,
   blob: Blob,
-): Promise<void> {
+): Promise<'opfs' | 'dexie'> {
   if (!opfsWritesKnownBroken) {
     try {
       const dir = await getDir('images', String(pubId))
-      if (await tryOpfsWrite(dir, name, blob)) return
+      if (await tryOpfsWrite(dir, name, blob)) return 'opfs'
     } catch (err) {
       console.warn('[opfs] image dir failed — falling back to Dexie', err)
       opfsWritesKnownBroken = true
     }
   }
   await dexiePutBlob(imageDexieKey(pubId, name), blob)
+  return 'dexie'
 }
 
 export async function getImageBlob(
