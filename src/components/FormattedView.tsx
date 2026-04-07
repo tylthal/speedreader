@@ -47,7 +47,7 @@ interface FormattedViewProps {
  *     in the given section so layout is stable before the engine starts
  */
 export interface FormattedViewHandle {
-  getScrollContainer: () => HTMLElement | null
+  getScrollContainer: () => HTMLDivElement | null
   getSectionEl: (idx: number) => HTMLElement | null
   setEngineDriving: (driving: boolean) => void
   markReported: (idx: number) => void

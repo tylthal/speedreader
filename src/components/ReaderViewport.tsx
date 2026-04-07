@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useAnnounce } from '../hooks/useAnnounce';
 import { useSegmentLoader } from '../hooks/useSegmentLoader';
 import { usePlaybackEngine } from '../hooks/usePlaybackEngine';
@@ -25,9 +25,11 @@ import TrackCalibration from './TrackCalibration';
 import ReaderHeader from './ReaderHeader';
 import TocSidebar from './TocSidebar';
 import FormattedView from './FormattedView';
+import type { FormattedViewHandle } from './FormattedView';
 import PdfFormattedView from './PdfFormattedView';
 import CbzFormattedView from './CbzFormattedView';
 import type { ContentType } from '../api/client';
+import type { VelocityProfile } from '../lib/velocityProfile';
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -374,6 +376,181 @@ function ActiveReader({
     onComplete: onPlaybackComplete,
   });
 
+  /* ---- Formatted-view scroll/track variants ---------------------------
+   *
+   * The focus-mode engines above drive the FocusChunkOverlay teleprompter.
+   * When the user is in formatted display mode and switches to scroll or
+   * track playback, we want the formatted EPUB page itself to auto-scroll —
+   * not the teleprompter. So we spin up a SECOND pair of engines that read
+   * a different container ref (the FormattedView scroller), an empty item
+   * offsets map (no per-segment DOM exists in formatted view), and the
+   * velocity profile populated by FormattedView's ProfileBuilder.
+   *
+   * These engines are inert until the activeState/activeActions selector
+   * below picks them — they only consume CPU when their isPlaying flips
+   * true, which never happens until the user is actually playing in
+   * formatted+scroll/track mode.
+   */
+  const formattedViewRef = useRef<FormattedViewHandle>(null);
+  // MutableRefObject so we can repoint .current at the FormattedView's
+  // scroll container after it mounts. The engines accept this as a
+  // RefObject<HTMLDivElement | null>.
+  const formattedScrollContainerRef = useRef<HTMLDivElement | null>(null);
+  // Empty — the formatted-view variant uses onScrollTick + the velocity
+  // profile instead of per-segment item rects. Kept around because the
+  // engines' option types still require the field.
+  const formattedItemOffsetsRef = useRef<Map<number, HTMLDivElement>>(new Map());
+  const velocityProfileRef = useRef<VelocityProfile | null>(null);
+
+  // Remember the highest segment index the cursor has reached during the
+  // current play session. The section-proportional cursor mapping is
+  // positional (it derives index from scroll position within the section),
+  // which means a late image load that grows section height would briefly
+  // pull the cursor backward. We clamp the cursor to monotonic forward
+  // progress while the engine is playing; on pause the cursor is allowed
+  // to track scroll position freely so manual scroll-back updates work.
+  const formattedCursorMonoRef = useRef(0);
+
+  /**
+   * Cursor mapping for the formatted-view engines. Given a container-relative
+   * vertical scroll center, return the array index of the segment the user
+   * is currently looking at. Section-proportional: find where the scroll
+   * center sits within the current section's bounding box and interpolate
+   * across the loaded segments.
+   *
+   * Why section-proportional rather than per-segment-DOM: segments come from
+   * a plain-text chunker pipeline, not from the EPUB HTML, so there's no
+   * reliable mapping from a DOM position to a specific segment. Proportional
+   * mapping is approximate but smooth and good enough for progress saving
+   * (which only cares about segment_index granularity).
+   */
+  const formattedScrollTick = useCallback(
+    (centerY: number): number | null => {
+      const handle = formattedViewRef.current;
+      if (!handle) return null;
+      const sectionEl = handle.getSectionEl(chapterIdx);
+      const container = handle.getScrollContainer();
+      if (!sectionEl || !container) return null;
+      const containerRect = container.getBoundingClientRect();
+      const sectionRect = sectionEl.getBoundingClientRect();
+      // Convert section rect into the same container-relative coordinate
+      // space as centerY (which is container.scrollTop + clientHeight/2).
+      const sectionTop = sectionRect.top - containerRect.top + container.scrollTop;
+      const sectionBottom = sectionTop + sectionRect.height;
+      if (centerY < sectionTop || centerY >= sectionBottom) return null;
+      const segs = loaderState.segments;
+      if (segs.length === 0) return null;
+      const progress = (centerY - sectionTop) / sectionRect.height;
+      const idx = Math.min(
+        segs.length - 1,
+        Math.max(0, Math.floor(progress * segs.length)),
+      );
+      // Monotonic clamp while playing — see formattedCursorMonoRef notes above.
+      const clamped = Math.max(idx, formattedCursorMonoRef.current);
+      formattedCursorMonoRef.current = clamped;
+      return clamped;
+    },
+    [chapterIdx, loaderState.segments],
+  );
+
+  const [formattedScrollState, formattedScrollActionsRaw] = useScrollEngine({
+    segments: loaderState.segments,
+    totalSegments: loaderState.totalSegments,
+    containerRef: formattedScrollContainerRef,
+    itemOffsetsRef: formattedItemOffsetsRef,
+    velocityProfileRef,
+    onScrollTick: formattedScrollTick,
+    initialWpm,
+    onSegmentChange,
+    onComplete: onPlaybackComplete,
+  });
+
+  const [formattedTrackState, formattedTrackActionsRaw] = useTrackEngine({
+    segments: loaderState.segments,
+    totalSegments: loaderState.totalSegments,
+    containerRef: formattedScrollContainerRef,
+    itemOffsetsRef: formattedItemOffsetsRef,
+    velocityProfileRef,
+    onScrollTick: formattedScrollTick,
+    gazeRef,
+    initialWpm,
+    onSegmentChange,
+    onComplete: onPlaybackComplete,
+  });
+
+  /**
+   * Wrap formatted-mode play/pause so the engine driving flag flips on the
+   * imperative handle and image decoding finishes before the engine starts.
+   *
+   * Play sequence:
+   *   1. Reset the monotonic cursor clamp so we don't carry stale state
+   *      from a previous play session.
+   *   2. Tell FormattedView the engine is now driving — this suppresses the
+   *      IntersectionObserver's onVisibleSectionChange feedback so the
+   *      engine's scrollTop writes don't loop back through setChapterIdx.
+   *   3. Await every <img>.decode() in the current section so layout is
+   *      stable before we measure pxPerWeight.
+   *   4. Force a profile rebuild from the now-stable layout.
+   *   5. Hand off to the engine's real play().
+   *
+   * Pause is symmetric: stop the engine first, then clear the driving flag.
+   *
+   * Each engine (scroll, track) gets its own wrapper so togglePlayPause sees
+   * the right isPlaying flag.
+   */
+  const wrapFormattedActions = useCallback(
+    (
+      raw: typeof formattedScrollActionsRaw,
+      isPlaying: boolean,
+    ) => {
+      const startPlay = () => {
+        const handle = formattedViewRef.current;
+        formattedCursorMonoRef.current = 0;
+        if (!handle) {
+          raw.play();
+          return;
+        }
+        if (!formattedScrollContainerRef.current) {
+          formattedScrollContainerRef.current = handle.getScrollContainer();
+        }
+        handle.setEngineDriving(true);
+        handle
+          .settleImages(chapterIdx)
+          .then(() => {
+            handle.rebuildProfile();
+            raw.play();
+          })
+          .catch(() => {
+            handle.rebuildProfile();
+            raw.play();
+          });
+      };
+      const stopPlay = () => {
+        raw.pause();
+        formattedViewRef.current?.setEngineDriving(false);
+      };
+      return {
+        ...raw,
+        play: startPlay,
+        pause: stopPlay,
+        togglePlayPause: () => {
+          if (isPlaying) stopPlay();
+          else startPlay();
+        },
+      };
+    },
+    [chapterIdx],
+  );
+
+  const formattedScrollActions = useMemo(
+    () => wrapFormattedActions(formattedScrollActionsRaw, formattedScrollState.isPlaying),
+    [wrapFormattedActions, formattedScrollActionsRaw, formattedScrollState.isPlaying],
+  );
+  const formattedTrackActions = useMemo(
+    () => wrapFormattedActions(formattedTrackActionsRaw, formattedTrackState.isPlaying),
+    [wrapFormattedActions, formattedTrackActionsRaw, formattedTrackState.isPlaying],
+  );
+
   // Start/stop camera when entering/leaving track mode
   const readingModeRef = useRef(readingMode);
   readingModeRef.current = readingMode;
@@ -417,7 +594,26 @@ function ActiveReader({
     }
   }, [readingMode, trackState.isPlaying, wasPlayingBeforeLost, gazeActions]);
 
-  /* ---- Active state/actions based on reading mode ---- */
+  // We need to know which engines are "active" (focus-mode vs formatted-mode
+  // variants) before we can compute showFormattedView, but showFormattedView
+  // also feeds the engine selection. Resolve in two steps:
+  //   1. Compute a tentative showFormattedView from displayMode + isPlaying
+  //      against the FOCUS-mode states. This is correct for the phraseLikeMode
+  //      exclusion path because phrase/RSVP only have focus-mode engines.
+  //   2. Pick activeState/activeActions using the tentative value plus the
+  //      reading mode. Scroll/track in formatted view → formatted variants;
+  //      everything else → focus variants.
+  // The formatted variants are only ever consulted when showFormattedView is
+  // true, so the tentative-vs-final distinction never causes a wrong pick.
+  const showFormattedView =
+    (isImageBook || displayMode === 'formatted') &&
+    !(phraseLikeMode && (
+      readingMode === 'rsvp' ? rsvpState.isPlaying : playbackState.isPlaying
+    ));
+
+  /* ---- Active state/actions based on reading mode + display mode ---- */
+  const useFormattedEngines = showFormattedView && (readingMode === 'scroll' || readingMode === 'track');
+
   const activeState = readingMode === 'rsvp'
     ? {
         currentIndex: rsvpState.currentSegmentIndex,
@@ -426,9 +622,9 @@ function ActiveReader({
         progress: rsvpState.progress,
       }
     : readingMode === 'scroll'
-    ? scrollState
+    ? (useFormattedEngines ? formattedScrollState : scrollState)
     : readingMode === 'track'
-    ? trackState
+    ? (useFormattedEngines ? formattedTrackState : trackState)
     : playbackState;
 
   const activeActions = readingMode === 'rsvp'
@@ -441,19 +637,24 @@ function ActiveReader({
         adjustWpm: rsvpActions.adjustWpm,
       }
     : readingMode === 'scroll'
-    ? scrollActions
+    ? (useFormattedEngines ? formattedScrollActions : scrollActions)
     : readingMode === 'track'
-    ? trackActions
+    ? (useFormattedEngines ? formattedTrackActions : trackActions)
     : playbackActions;
 
-  // Render the formatted view whenever displayMode is 'formatted' (or this
-  // is a CBZ book), EXCEPT in Phrase/RSVP while playback is active — those
-  // modes show the phrase/word display only while playing. When paused they
-  // fall back to the formatted page so the user can browse/read at their
-  // own pace, then hit Play to resume speed-reading from the same cursor.
-  const showFormattedView =
-    (isImageBook || displayMode === 'formatted') &&
-    !(phraseLikeMode && activeState.isPlaying);
+  // Repoint the formatted scroll container ref whenever the formatted view
+  // mounts/unmounts. The engine reads .current on every tick so this just
+  // needs to be in place before play() runs.
+  useEffect(() => {
+    if (!showFormattedView) {
+      formattedScrollContainerRef.current = null;
+      return;
+    }
+    const handle = formattedViewRef.current;
+    if (handle) {
+      formattedScrollContainerRef.current = handle.getScrollContainer();
+    }
+  }, [showFormattedView]);
 
   // trackedSegmentIndexRef declared earlier, before chapter change reset
 
@@ -728,11 +929,13 @@ function ActiveReader({
           />
         ) : (
           <FormattedView
+            ref={formattedViewRef}
             publicationId={publicationId}
             chapters={chapters}
             currentSectionIndex={chapterIdx}
             onVisibleSectionChange={handleVisibleSectionChange}
             onTap={activeActions.togglePlayPause}
+            velocityProfileRef={velocityProfileRef}
           />
         )
       )}
