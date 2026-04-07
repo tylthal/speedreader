@@ -93,6 +93,41 @@ function toHighlight(row: DBHighlight): Highlight {
 // Worker-based parsing
 // ---------------------------------------------------------------------------
 
+/**
+ * Detect whether Web Workers can use DOMParser. Safari/WebKit (including the
+ * iOS Capacitor WebView) does not expose DOMParser in workers, which breaks
+ * EPUB/HTML/FB2/MD parsing. We probe once and cache the result.
+ */
+let workerDomParserSupported: Promise<boolean> | null = null
+function checkWorkerDomParserSupport(): Promise<boolean> {
+  if (workerDomParserSupported) return workerDomParserSupported
+  workerDomParserSupported = new Promise((resolve) => {
+    try {
+      const blob = new Blob(
+        ['self.postMessage(typeof DOMParser !== "undefined")'],
+        { type: 'application/javascript' },
+      )
+      const url = URL.createObjectURL(blob)
+      const probe = new Worker(url)
+      const cleanup = () => {
+        probe.terminate()
+        URL.revokeObjectURL(url)
+      }
+      probe.onmessage = (e) => {
+        cleanup()
+        resolve(Boolean(e.data))
+      }
+      probe.onerror = () => {
+        cleanup()
+        resolve(false)
+      }
+    } catch {
+      resolve(false)
+    }
+  })
+  return workerDomParserSupported
+}
+
 function runParseWorker(
   data: ArrayBuffer,
   filename: string,
@@ -134,6 +169,106 @@ function runParseWorker(
   })
 }
 
+/**
+ * Main-thread parsing fallback for environments where the worker can't run
+ * DOMParser-based parsers (Safari/WebKit). Mirrors parserWorker.ts.
+ */
+async function runParseMainThread(
+  data: ArrayBuffer,
+  filename: string,
+  onProgress?: (phase: string, percent: number) => void,
+): Promise<WorkerResult> {
+  const { parseFile } = await import('../parsers')
+  const { chunkText } = await import('../parsers/chunker')
+  type LocalInlineImage = import('../parsers/types').InlineImage
+  type LocalImagePage = import('../parsers/types').ImagePage
+  type LocalParsedBook = import('../parsers/types').ParsedBook
+  type SerializedChapter = import('../workers/parserProtocol').SerializedChapter
+  type SerializedImageChapter = import('../workers/parserProtocol').SerializedImageChapter
+  type ChunkedChapter = import('../workers/parserProtocol').ChunkedChapter
+  type SerializedImagePage = import('../workers/parserProtocol').SerializedImagePage
+
+  onProgress?.('parsing', 0)
+  const book: LocalParsedBook = await parseFile(data, filename)
+  onProgress?.('parsing', 100)
+
+  const serializeImg = async (img: LocalInlineImage): Promise<SerializedInlineImage> => ({
+    placeholder: img.placeholder,
+    imageData: await img.blob.arrayBuffer(),
+    alt: img.alt,
+    width: img.width,
+    height: img.height,
+    mimeType: img.mimeType,
+  })
+
+  const serializeImgPage = async (page: LocalImagePage): Promise<SerializedImagePage> => ({
+    pageIndex: page.pageIndex,
+    imageData: await page.blob.arrayBuffer(),
+    width: page.width,
+    height: page.height,
+    mimeType: page.mimeType,
+  })
+
+  const serializedChapters: SerializedChapter[] = []
+  const chunkedChapters: ChunkedChapter[] = []
+
+  if (book.contentType === 'text') {
+    onProgress?.('chunking', 0)
+    const total = book.chapters.length
+    for (let i = 0; i < total; i++) {
+      const chapter = book.chapters[i]
+      const serializedImages: SerializedInlineImage[] = []
+      for (const img of chapter.inlineImages) serializedImages.push(await serializeImg(img))
+
+      serializedChapters.push({
+        title: chapter.title,
+        text: chapter.text,
+        inlineImages: serializedImages,
+      })
+
+      const segments = chunkText(chapter.text)
+      chunkedChapters.push({
+        title: chapter.title,
+        text: chapter.text,
+        segments,
+        inlineImages: serializedImages,
+      })
+
+      onProgress?.('chunking', Math.round(((i + 1) / total) * 100))
+    }
+  }
+
+  const serializedImageChapters: SerializedImageChapter[] = []
+  for (const imgChapter of book.imageChapters) {
+    const pages: SerializedImagePage[] = []
+    for (const page of imgChapter.pages) pages.push(await serializeImgPage(page))
+    serializedImageChapters.push({ title: imgChapter.title, pages })
+  }
+
+  return {
+    book: {
+      title: book.title,
+      author: book.author,
+      contentType: book.contentType,
+      chapters: serializedChapters,
+      imageChapters: serializedImageChapters,
+    },
+    chunkedChapters,
+  }
+}
+
+async function runParse(
+  data: ArrayBuffer,
+  filename: string,
+  onProgress?: (phase: string, percent: number) => void,
+): Promise<WorkerResult> {
+  const supported = await checkWorkerDomParserSupport()
+  if (supported) {
+    return runParseWorker(data, filename, onProgress)
+  }
+  return runParseMainThread(data, filename, onProgress)
+}
+
 function imgBlobFromSerialized(img: SerializedInlineImage): Blob {
   return new Blob([img.imageData], { type: img.mimeType })
 }
@@ -152,8 +287,8 @@ export class LocalClient implements SpeedReaderClient {
   async uploadBook(file: File): Promise<Publication> {
     const data = await file.arrayBuffer()
 
-    // Parse + chunk in a Web Worker (off main thread)
-    const result = await runParseWorker(data, file.name, this.onUploadProgress)
+    // Parse + chunk (Web Worker if supported, else main thread)
+    const result = await runParse(data, file.name, this.onUploadProgress)
     const { book, chunkedChapters } = result
 
     const IMG_PLACEHOLDER_RE = /\{\{IMG_(\d+)\}\}/g
