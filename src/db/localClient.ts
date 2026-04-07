@@ -349,10 +349,21 @@ export class LocalClient implements SpeedReaderClient {
       .between([id, -Infinity], [id, Infinity])
       .sortBy('chapter_index')
 
-    let tocTree = null
+    // Convert the parser-side TocNode (camelCase) to the API surface
+    // shape (snake_case). The two types intentionally diverge so the parser
+    // doesn't leak into UI imports.
+    type RawTocNode = { title: string; sectionIndex: number; children?: RawTocNode[] }
+    type ApiTocNode = { title: string; section_index: number; children?: ApiTocNode[] }
+    const convert = (n: RawTocNode): ApiTocNode => ({
+      title: n.title,
+      section_index: n.sectionIndex,
+      children: n.children?.map(convert),
+    })
+    let tocTree: ApiTocNode[] | null = null
     if (pub.toc_json) {
       try {
-        tocTree = JSON.parse(pub.toc_json)
+        const raw = JSON.parse(pub.toc_json) as RawTocNode[]
+        tocTree = Array.isArray(raw) ? raw.map(convert) : null
       } catch {
         tocTree = null
       }

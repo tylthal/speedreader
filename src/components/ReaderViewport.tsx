@@ -14,13 +14,16 @@ import { useNavigate } from 'react-router-dom';
 import { getPublication, getProgress } from '../api/client';
 import { useDataSaver } from '../hooks/useDataSaver';
 import { markNavigationStart, markFirstChunkRendered } from '../lib/ttfcMetric';
-import type { Chapter, ReadingProgress } from '../api/client';
+import type { Chapter, ReadingProgress, TocNode, DisplayMode } from '../api/client';
+import { readDefaultDisplayMode } from '../hooks/useDefaultDisplayMode';
 import type { ReadingMode } from '../types';
 import GestureLayer from './GestureLayer';
 import FocusChunkOverlay from './FocusChunkOverlay';
 import ControlsBottomSheet from './ControlsBottomSheet';
 import GazeIndicator from './GazeIndicator';
 import TrackCalibration from './TrackCalibration';
+import ReaderHeader from './ReaderHeader';
+import TocSidebar from './TocSidebar';
 import ImageReader from './ImageReader';
 import type { ContentType } from '../api/client';
 
@@ -34,22 +37,29 @@ interface ReaderViewportProps {
 
 interface InitialPosition {
   chapters: Chapter[];
+  tocTree: TocNode[] | null;
   chapterIdx: number;
   segmentIndex: number;
   wordIndex: number;
   wpm: number;
   readingMode: ReadingMode;
   contentType: ContentType;
+  bookTitle: string;
+  initialDisplayMode: DisplayMode;
 }
 
 interface ActiveReaderProps {
   publicationId: number;
+  bookTitle: string;
   chapters: Chapter[];
+  tocTree: TocNode[] | null;
   initialChapterIdx: number;
   initialSegmentIndex: number;
   initialWordIndex: number;
   initialWpm: number;
   initialReadingMode: ReadingMode;
+  initialDisplayMode: DisplayMode;
+  contentType: ContentType;
 }
 
 /* ------------------------------------------------------------------ */
@@ -138,16 +148,22 @@ export default function ReaderViewport({ publicationId }: ReaderViewportProps) {
           console.log('[Progress] no saved progress found');
         }
 
+        const initialDisplayMode: DisplayMode =
+          pub.display_mode_pref ?? readDefaultDisplayMode();
+
         setInitState({
           status: 'ready',
           position: {
             chapters: sorted,
+            tocTree: pub.toc_tree ?? null,
             chapterIdx,
             segmentIndex,
             wordIndex,
             wpm,
             readingMode: (pub.content_type === 'image') ? 'image' : readingMode,
             contentType: (pub.content_type ?? 'text') as ContentType,
+            bookTitle: pub.title,
+            initialDisplayMode,
           },
         });
       })
@@ -188,12 +204,16 @@ export default function ReaderViewport({ publicationId }: ReaderViewportProps) {
   return (
     <ActiveReader
       publicationId={publicationId}
+      bookTitle={position.bookTitle}
       chapters={position.chapters}
+      tocTree={position.tocTree}
       initialChapterIdx={position.chapterIdx}
       initialSegmentIndex={position.segmentIndex}
       initialWordIndex={position.wordIndex}
       initialWpm={position.wpm}
       initialReadingMode={position.readingMode}
+      initialDisplayMode={position.initialDisplayMode}
+      contentType={position.contentType}
     />
   );
 }
@@ -204,15 +224,21 @@ export default function ReaderViewport({ publicationId }: ReaderViewportProps) {
 
 function ActiveReader({
   publicationId,
+  bookTitle,
   chapters,
+  tocTree,
   initialChapterIdx,
   initialSegmentIndex,
   initialWordIndex,
   initialWpm,
   initialReadingMode,
+  initialDisplayMode,
+  contentType,
 }: ActiveReaderProps) {
   const [readingMode, setReadingMode] = useState<ReadingMode>(initialReadingMode);
   const [chapterIdx, setChapterIdx] = useState(initialChapterIdx);
+  const [displayMode] = useState<DisplayMode>(initialDisplayMode);
+  const [tocOpen, setTocOpen] = useState(false);
   const [saverEnabled, setSaverEnabled] = useState(false);
   const [stopAtChapterEnd, setStopAtChapterEnd] = useState(() => {
     try {
@@ -613,8 +639,31 @@ function ActiveReader({
   }, [activeState.isPlaying]);
 
   /* ---- Render ---- */
+  // CBZ hides the display-mode toggle entirely (PRD §4.5).
+  const isImage = contentType === 'image';
+
   return (
     <div className="reader-viewport" role="main" aria-label="Book reader" id="main-content">
+      <ReaderHeader
+        bookTitle={bookTitle}
+        sectionTitle={currentChapter?.title ?? 'Untitled'}
+        displayMode={displayMode}
+        onToggleDisplayMode={undefined /* P5 wires this up */}
+        hideDisplayToggle={isImage}
+        onOpenToc={() => setTocOpen(true)}
+        onExit={() => navigate('/')}
+      />
+      <TocSidebar
+        open={tocOpen}
+        chapters={chapters}
+        tocTree={tocTree}
+        currentSectionIndex={chapterIdx}
+        onJump={(idx) => {
+          setChapterIdx(idx);
+          activeActions.seekTo(0);
+        }}
+        onClose={() => setTocOpen(false)}
+      />
       {isDataSaver && (
         <div className="data-saver-indicator" aria-label="Data saver active">
           Data Saver
@@ -735,7 +784,6 @@ function ActiveReader({
         onTogglePlay={activeActions.togglePlayPause}
         onSetWpm={activeActions.setWpm}
         onAdjustWpm={activeActions.adjustWpm}
-        chapterTitle={currentChapter?.title ?? 'Untitled'}
         onPrevChapter={handlePrevChapter}
         onNextChapter={handleNextChapter}
         hasPrevChapter={chapterIdx > 0}
@@ -743,13 +791,6 @@ function ActiveReader({
         mode={readingMode}
         onToggleMode={handleToggleMode}
         onSetMode={handleSetMode}
-        onExit={() => navigate('/')}
-        chapters={chapters}
-        currentChapterIndex={chapterIdx}
-        onJumpToChapter={(idx) => {
-          setChapterIdx(idx);
-          activeActions.seekTo(0);
-        }}
         stopAtChapterEnd={stopAtChapterEnd}
         onToggleStopAtChapter={handleToggleStopAtChapter}
         gazeSensitivity={gazeSensitivity}

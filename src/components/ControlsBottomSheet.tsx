@@ -10,7 +10,6 @@ interface ControlsBottomSheetProps {
   onTogglePlay: () => void;
   onSetWpm: (wpm: number) => void;
   onAdjustWpm: (delta: number) => void;
-  chapterTitle: string;
   onPrevChapter: () => void;
   onNextChapter: () => void;
   hasPrevChapter: boolean;
@@ -18,10 +17,6 @@ interface ControlsBottomSheetProps {
   mode?: ReadingMode;
   onToggleMode?: () => void;
   onSetMode?: (mode: ReadingMode) => void;
-  onExit?: () => void;
-  chapters?: { id: number; title: string; chapter_index: number }[];
-  currentChapterIndex?: number;
-  onJumpToChapter?: (index: number) => void;
   stopAtChapterEnd?: boolean;
   onToggleStopAtChapter?: () => void;
   gazeSensitivity?: number;
@@ -36,7 +31,6 @@ export default function ControlsBottomSheet({
   onTogglePlay,
   onSetWpm: _onSetWpm,
   onAdjustWpm,
-  chapterTitle,
   onPrevChapter,
   onNextChapter,
   hasPrevChapter,
@@ -44,10 +38,6 @@ export default function ControlsBottomSheet({
   mode = 'phrase',
   onToggleMode,
   onSetMode,
-  onExit,
-  chapters = [],
-  currentChapterIndex = 0,
-  onJumpToChapter,
   stopAtChapterEnd = false,
   onToggleStopAtChapter,
   gazeSensitivity = 1.0,
@@ -56,9 +46,9 @@ export default function ControlsBottomSheet({
 }: ControlsBottomSheetProps) {
   const { announce } = useAnnounce();
   const haptics = useHaptics();
-  const [showChapterList, setShowChapterList] = useState(false);
   const [showModeList, setShowModeList] = useState(false);
 
+  // PRD §9.3 — Image mode is gone (CBZ now uses formatted view always).
   const modeNames: Record<string, string> = { phrase: 'Phrase', rsvp: 'RSVP', scroll: 'Scroll', track: 'Track' };
   const allModes: ReadingMode[] = ['phrase', 'rsvp', 'scroll', 'track'];
 
@@ -86,38 +76,22 @@ export default function ControlsBottomSheet({
 
       {/* Chapter navigation row */}
       <div className="controls__chapter-row">
-        {onExit && (
-          <button
-            className="controls__btn controls__exit-btn"
-            onClick={onExit}
-            aria-label="Exit book"
-          >
-            &#x2190;
-          </button>
-        )}
         <button
           className="controls__btn"
           onClick={onPrevChapter}
           disabled={!hasPrevChapter}
           aria-disabled={!hasPrevChapter ? 'true' : undefined}
-          aria-label="Previous chapter"
+          aria-label="Previous section"
         >
           &#9664;
         </button>
-        <button
-          className="controls__chapter-title controls__chapter-title--tappable"
-          onClick={() => setShowChapterList((v) => !v)}
-          aria-label="Open chapter list"
-          aria-expanded={showChapterList}
-        >
-          {chapterTitle}
-        </button>
+        <span className="controls__chapter-spacer" />
         <button
           className="controls__btn"
           onClick={onNextChapter}
           disabled={!hasNextChapter}
           aria-disabled={!hasNextChapter ? 'true' : undefined}
-          aria-label="Next chapter"
+          aria-label="Next section"
         >
           &#9654;
         </button>
@@ -183,22 +157,21 @@ export default function ControlsBottomSheet({
           </div>
         )}
 
-        {/* Stop at chapter end */}
+        {/* Stop at section end */}
         {onToggleStopAtChapter && (
           <button
             className={`controls__chapter-stop-btn${stopAtChapterEnd ? ' controls__chapter-stop-btn--active' : ''}`}
             onClick={() => {
               onToggleStopAtChapter();
               haptics.tap();
-              announce(stopAtChapterEnd ? 'Continuous reading on' : 'Pause between chapters on');
+              announce(stopAtChapterEnd ? 'Continuous reading on' : 'Pause between sections on');
             }}
-            aria-label={stopAtChapterEnd ? 'Switch to continuous reading' : 'Pause between chapters'}
+            aria-label={stopAtChapterEnd ? 'Switch to continuous reading' : 'Pause between sections'}
             aria-pressed={stopAtChapterEnd}
           >
-            {stopAtChapterEnd ? 'Ch. Pause' : 'Ch. Auto'}
+            {stopAtChapterEnd ? 'Sec. Pause' : 'Sec. Auto'}
           </button>
         )}
-
       </div>
 
       {/* Track mode controls */}
@@ -246,45 +219,6 @@ export default function ControlsBottomSheet({
         <span className="controls__play-bar-icon">{isPlaying ? '\u2759\u2759' : '\u25B6\uFE0E'}</span>
         <span className="controls__play-bar-label">{isPlaying ? 'Tap to Pause' : 'Tap to Play'}</span>
       </button>
-
-      {/* Chapter list overlay */}
-      {showChapterList && chapters.length > 0 && (
-        <div className="chapter-list-overlay" role="dialog" aria-label="Chapter list">
-          <div className="chapter-list">
-            <div className="chapter-list__header">
-              <span className="chapter-list__title">Chapters</span>
-              <button
-                className="controls__btn"
-                onClick={() => setShowChapterList(false)}
-                aria-label="Close chapter list"
-              >
-                &#x2715;
-              </button>
-            </div>
-            <ul className="chapter-list__items" role="list">
-              {chapters.map((ch, idx) => (
-                <li key={ch.id}>
-                  <button
-                    className={`chapter-list__item${idx === currentChapterIndex ? ' chapter-list__item--active' : ''}`}
-                    onClick={() => {
-                      onJumpToChapter?.(idx);
-                      setShowChapterList(false);
-                      haptics.tap();
-                      announce(`Jumped to ${ch.title}`);
-                    }}
-                  >
-                    <span className="chapter-list__item-number">{idx + 1}</span>
-                    <span className="chapter-list__item-title">{ch.title}</span>
-                    {idx === currentChapterIndex && (
-                      <span className="chapter-list__item-current" aria-label="Current chapter">&#x25CF;</span>
-                    )}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
