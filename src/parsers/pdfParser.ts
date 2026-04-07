@@ -7,13 +7,14 @@
  * Text extraction works fully.
  */
 
-import * as pdfjsLib from 'pdfjs-dist'
+// Use the legacy build of pdfjs-dist. The modern build relies on
+// ReadableStream async iteration, which Safari does not support.
+import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs'
 import type { ParsedBook, ParsedChapter } from './types'
 
 // Use Vite's static asset handling for the pdf.js worker.
-// new URL(..., import.meta.url) is transformed by Vite to a correct asset URL.
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
-  'pdfjs-dist/build/pdf.worker.min.mjs',
+  'pdfjs-dist/legacy/build/pdf.worker.min.mjs',
   import.meta.url,
 ).href
 
