@@ -92,31 +92,20 @@ export default function FormattedView({
   const containerRef = useRef<HTMLDivElement>(null)
   const sectionRefs = useRef<Map<number, HTMLElement>>(new Map())
   const isProgrammaticScrollRef = useRef(false)
-  const renderCount = useRef(0)
-  renderCount.current++
 
   // Resolved name → blob URL. Pulled from a module-level cache so the URLs
   // persist across mounts/unmounts (StrictMode, HMR, conditional rendering).
   const [imageMap, setImageMap] = useState<Map<string, string>>(new Map())
 
   useEffect(() => {
-    console.log('[fmt] image effect run; chapters ref id:', (chapters as any)?.length)
     let cancelled = false
     loadPublicationImages(publicationId, chapters).then((map) => {
-      if (!cancelled) {
-        console.log('[fmt] setImageMap with', map.size, 'entries')
-        setImageMap(map)
-      }
+      if (!cancelled) setImageMap(map)
     })
     return () => {
       cancelled = true
     }
   }, [publicationId, chapters])
-
-  useEffect(() => {
-    console.log('[fmt] mount')
-    return () => console.log('[fmt] unmount')
-  }, [])
 
   // Pre-rewrite each section's HTML by string-replacing every `opfs:NAME`
   // src with its resolved blob URL. We DELAY the rewrite until imageMap is
@@ -163,9 +152,27 @@ export default function FormattedView({
     }
   }, [rewrittenSections, chapters])
 
-  // Scroll the current section into view whenever the cursor changes
-  // externally (e.g. user toggled from plain → formatted).
+  // Track the last section index we *reported* to the parent. The parent
+  // will then call setChapterIdx with this same value, propagate it back
+  // through the currentSectionIndex prop, and the scroll-into-view effect
+  // below would otherwise yank the user's scroll position back to the top
+  // of the section. Skipping the scroll when currentSectionIndex matches
+  // what we just reported breaks that feedback loop.
+  const lastReportedIdxRef = useRef<number>(currentSectionIndex)
+
+  // Stabilize the parent's onVisibleSectionChange callback in a ref so the
+  // IntersectionObserver effect below doesn't re-create the observer every
+  // time the parent re-renders (which happens on every scroll because
+  // chapterIdx changes are part of the parent's useCallback deps).
+  const onVisibleSectionChangeRef = useRef(onVisibleSectionChange)
+  onVisibleSectionChangeRef.current = onVisibleSectionChange
+
+  // Scroll the current section into view ONLY when the cursor change came
+  // from outside this component (TOC click, plain↔formatted toggle, etc.),
+  // not when the user is scrolling and the IntersectionObserver fed the
+  // change back to us.
   useEffect(() => {
+    if (currentSectionIndex === lastReportedIdxRef.current) return
     const el = sectionRefs.current.get(currentSectionIndex)
     if (!el) return
     isProgrammaticScrollRef.current = true
@@ -175,9 +182,14 @@ export default function FormattedView({
         isProgrammaticScrollRef.current = false
       })
     })
+    // Mark the new index as the "last reported" baseline so the next scroll
+    // event from the user starts comparing against the right value.
+    lastReportedIdxRef.current = currentSectionIndex
   }, [currentSectionIndex])
 
   // Watch which section is at the top of the viewport and report it.
+  // Deps include only `chapters` so the observer is rebuilt when sections
+  // change, not on every parent re-render.
   useEffect(() => {
     const container = containerRef.current
     if (!container) return
@@ -200,7 +212,10 @@ export default function FormattedView({
             bestIdx = idx
           }
         }
-        if (bestIdx >= 0) onVisibleSectionChange(bestIdx)
+        if (bestIdx >= 0 && bestIdx !== lastReportedIdxRef.current) {
+          lastReportedIdxRef.current = bestIdx
+          onVisibleSectionChangeRef.current(bestIdx)
+        }
       },
       { root: container, threshold: [0, 0.01, 0.5, 1] },
     )
@@ -210,7 +225,7 @@ export default function FormattedView({
     }
 
     return () => observer.disconnect()
-  }, [chapters, onVisibleSectionChange])
+  }, [chapters])
 
   return (
     <div className="formatted-view" ref={containerRef}>
