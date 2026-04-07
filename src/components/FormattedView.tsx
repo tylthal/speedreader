@@ -27,6 +27,26 @@ function collectOpfsNames(chapters: Chapter[]): string[] {
   return [...names]
 }
 
+/**
+ * Returns true if the section's html starts with a heading element. We use
+ * this to suppress our own `formatted-view__title` for sections where the
+ * book's body already has its own visible heading (which is the common case
+ * for EPUB chapter files), and only render our title as a fallback for
+ * sections like "Cover" or "Title Page" whose body has no heading.
+ *
+ * The check skips over any opening container tags (div/section/article/main/
+ * header/figure/p with empty content) before looking for the first
+ * <h1>-<h6>. It does NOT parse the HTML — that would be expensive for every
+ * section every render. A regex on the leading characters is enough.
+ */
+const LEADING_HEADING_RE =
+  /^(?:\s*<(?:div|section|article|main|header|figure)(?:\s[^>]*)?>)*\s*<h[1-6](?:\s|>)/i
+
+function bodyHasLeadingHeading(html: string | null | undefined): boolean {
+  if (!html) return false
+  return LEADING_HEADING_RE.test(html)
+}
+
 // ---------------------------------------------------------------------------
 // Module-level image-URL cache, keyed by publicationId.
 //
@@ -241,7 +261,9 @@ export default function FormattedView({
             }}
             className="formatted-view__section"
           >
-            <h1 className="formatted-view__title">{ch.title || 'Untitled'}</h1>
+            {!bodyHasLeadingHeading(ch.html) && (
+              <h1 className="formatted-view__title">{ch.title || 'Untitled'}</h1>
+            )}
             {ch.html ? (
               <div
                 className="formatted-view__body"
