@@ -964,7 +964,7 @@ function ActiveReader({
                 activeActions.seekTo(idx);
               }
             }}
-            onTap={activeActions.togglePlayPause}
+            onTap={activeState.isPlaying ? activeActions.pause : undefined}
           />
         ) : isPdfBook ? (
           <PdfFormattedView
@@ -972,7 +972,7 @@ function ActiveReader({
             chapters={chapters}
             currentSectionIndex={chapterIdx}
             onVisibleSectionChange={handleVisibleSectionChange}
-            onTap={activeActions.togglePlayPause}
+            onTap={activeState.isPlaying ? activeActions.pause : undefined}
           />
         ) : (
           <>
@@ -982,7 +982,7 @@ function ActiveReader({
               chapters={chapters}
               currentSectionIndex={chapterIdx}
               onVisibleSectionChange={handleVisibleSectionChange}
-              onTap={activeActions.togglePlayPause}
+              onTap={activeState.isPlaying ? activeActions.pause : undefined}
               velocityProfileRef={velocityProfileRef}
             />
             <VelocityProfileDebugOverlay
@@ -996,7 +996,7 @@ function ActiveReader({
 
       {!showFormattedView && (
       <GestureLayer
-        onTap={activeActions.togglePlayPause}
+        onTap={activeState.isPlaying ? activeActions.pause : undefined}
         onSwipeLeft={activeState.isPlaying ? handleNextChapter : undefined}
         onSwipeRight={activeState.isPlaying ? handlePrevChapter : undefined}
         onSwipeUp={activeState.isPlaying ? () => activeActions.adjustWpm(25) : undefined}
