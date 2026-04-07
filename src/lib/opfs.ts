@@ -27,11 +27,24 @@ import { db } from '../db/database'
 let _root: FileSystemDirectoryHandle | null = null
 
 /**
- * Set to true the first time an OPFS write throws. Per-session — we don't
+ * Set to true the first time an OPFS write throws OR is verified to have
+ * silently failed (see opfsWriteVerified below). Per-session — we don't
  * persist it because a browser update could fix support, and the cost of
  * one extra failed write per session is trivial.
  */
 let opfsWritesKnownBroken = false
+
+/**
+ * iOS Safari's createWritable() does not always throw on unsupported
+ * operations — sometimes it returns a writable that .write()/.close()
+ * "successfully" but the resulting file is 0 bytes. To catch that case
+ * we read back the very first OPFS write of every session and compare
+ * its size against what we wrote. Once the readback confirms the bytes
+ * landed correctly, we trust subsequent writes without re-verifying.
+ * If the readback shows a size mismatch, we flip opfsWritesKnownBroken
+ * and the caller falls back to Dexie like a normal createWritable failure.
+ */
+let opfsWriteVerified = false
 
 async function getRoot(): Promise<FileSystemDirectoryHandle> {
   if (!_root) {
@@ -54,6 +67,13 @@ async function getDir(
  * Try to write `blob` via OPFS. Returns true on success, false on
  * createWritable failure (in which case the caller should fall back to
  * Dexie). Other errors (quota, permission) propagate.
+ *
+ * On the very first OPFS write of a session we additionally read the file
+ * back and compare its size against the input blob. iOS Safari may
+ * "succeed" through createWritable + write + close without actually
+ * persisting any bytes; the readback catches that and flips
+ * opfsWritesKnownBroken so the caller falls back. After one successful
+ * verification we trust subsequent writes to keep working.
  */
 async function tryOpfsWrite(
   dir: FileSystemDirectoryHandle,
@@ -75,6 +95,28 @@ async function tryOpfsWrite(
     }
     await writable.write(blob)
     await writable.close()
+
+    // First-write verification: read it back and confirm the size matches.
+    // Skipped after one successful verification to keep the per-write cost
+    // off the hot path.
+    if (!opfsWriteVerified) {
+      try {
+        const verifyHandle = await dir.getFileHandle(fileName)
+        const verifyFile = await verifyHandle.getFile()
+        if (verifyFile.size !== blob.size) {
+          console.warn(
+            `[opfs] write verification failed: wrote ${blob.size} bytes, read back ${verifyFile.size}. Falling back to Dexie for the rest of this session.`,
+          )
+          opfsWritesKnownBroken = true
+          return false
+        }
+        opfsWriteVerified = true
+      } catch (err) {
+        console.warn('[opfs] write verification threw — falling back to Dexie', err)
+        opfsWritesKnownBroken = true
+        return false
+      }
+    }
     return true
   } catch (err) {
     // Anything other than createWritable failing means OPFS itself is
@@ -193,6 +235,9 @@ export async function getBookFile(pubId: number): Promise<File | null> {
     for await (const [name, entry] of (dir as any).entries()) {
       if (name.startsWith('original') && entry.kind === 'file') {
         const file = await (entry as FileSystemFileHandle).getFile()
+        // Skip 0-byte files left behind by mobile WebKit's silent-write
+        // failure mode.
+        if (file.size === 0) break
         return new File([file], meta?.filename ?? name, {
           type: meta?.mime ?? file.type,
         })
@@ -284,11 +329,12 @@ export async function getCoverBlob(path: string): Promise<Blob | null> {
   try {
     const parts = path.split('/').filter(Boolean)
     if (parts.length < 2 || parts[0] !== 'covers') return null
-    // OPFS first.
+    // OPFS first. 0-byte file → treat as missing and try Dexie.
     try {
       const dir = await getDir('covers')
       const handle = await dir.getFileHandle(parts[1])
-      return await handle.getFile()
+      const file = await handle.getFile()
+      if (file.size > 0) return file
     } catch {
       /* fall through to Dexie */
     }
@@ -330,11 +376,14 @@ export async function getImageBlob(
   name: string,
 ): Promise<Blob | null> {
   // OPFS first — covers any image stored before the session noticed writes
-  // were broken, plus the entire desktop happy path.
+  // were broken, plus the entire desktop happy path. A 0-byte file is
+  // treated as not-found because mobile WebKit's silent-write failure mode
+  // can leave behind empty files that look "valid" to getFile().
   try {
     const dir = await getDir('images', String(pubId))
     const handle = await dir.getFileHandle(name)
-    return await handle.getFile()
+    const file = await handle.getFile()
+    if (file.size > 0) return file
   } catch {
     /* fall through to Dexie */
   }
