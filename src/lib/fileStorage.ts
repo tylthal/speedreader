@@ -61,6 +61,26 @@ export async function getImageBlob(
   return getImageBlob(pubId, name);
 }
 
+export type ImageBlobSource = 'opfs' | 'dexie' | 'native' | 'missing';
+
+/**
+ * Source-aware variant for diagnostics. Returns which backend served the
+ * blob — 'opfs' or 'dexie' on web, 'native' on Capacitor builds, 'missing'
+ * if neither path resolved.
+ */
+export async function getImageBlobWithSource(
+  pubId: number,
+  name: string,
+): Promise<{ blob: Blob | null; source: ImageBlobSource }> {
+  if (isNative()) {
+    const { getImageBlob } = await import('./nativeFs');
+    const blob = await getImageBlob(pubId, name);
+    return { blob, source: blob ? 'native' : 'missing' };
+  }
+  const { getImageBlobWithSource } = await import('./opfs');
+  return getImageBlobWithSource(pubId, name);
+}
+
 export async function storeCover(
   pubId: number,
   blob: Blob,

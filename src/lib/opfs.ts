@@ -375,19 +375,33 @@ export async function getImageBlob(
   pubId: number,
   name: string,
 ): Promise<Blob | null> {
-  // OPFS first — covers any image stored before the session noticed writes
-  // were broken, plus the entire desktop happy path. A 0-byte file is
-  // treated as not-found because mobile WebKit's silent-write failure mode
-  // can leave behind empty files that look "valid" to getFile().
+  const result = await getImageBlobWithSource(pubId, name)
+  return result.blob
+}
+
+/**
+ * Source-aware variant of getImageBlob — returns the blob alongside which
+ * backend served it. The diagnostic strip in FormattedView uses this to
+ * report per-backend counts so the user can see whether OPFS or the Dexie
+ * fallback is doing the work on their device.
+ */
+export type ImageBlobSource = 'opfs' | 'dexie' | 'missing'
+
+export async function getImageBlobWithSource(
+  pubId: number,
+  name: string,
+): Promise<{ blob: Blob | null; source: ImageBlobSource }> {
   try {
     const dir = await getDir('images', String(pubId))
     const handle = await dir.getFileHandle(name)
     const file = await handle.getFile()
-    if (file.size > 0) return file
+    if (file.size > 0) return { blob: file, source: 'opfs' }
   } catch {
     /* fall through to Dexie */
   }
-  return dexieGetBlob(imageDexieKey(pubId, name))
+  const dexie = await dexieGetBlob(imageDexieKey(pubId, name))
+  if (dexie) return { blob: dexie, source: 'dexie' }
+  return { blob: null, source: 'missing' }
 }
 
 // ---------------------------------------------------------------------------

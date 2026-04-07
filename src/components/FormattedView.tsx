@@ -8,7 +8,7 @@ import {
 } from 'react'
 import type { RefObject } from 'react'
 import type { Chapter } from '../api/client'
-import { getImageBlob } from '../lib/fileStorage'
+import { getImageBlobWithSource, type ImageBlobSource } from '../lib/fileStorage'
 import { useContentTap } from '../hooks/useContentTap'
 import { buildProfile, type VelocityProfile } from '../lib/velocityProfile'
 
@@ -102,8 +102,22 @@ function bodyHasLeadingHeading(html: string | null | undefined): boolean {
 // (a few MB at most). The browser reclaims everything on tab close.
 // ---------------------------------------------------------------------------
 
+/**
+ * Aggregate result of a single publication's image-load pass. Counts are
+ * surfaced to the diagnostic strip so the user can see — without browser
+ * console access — whether OPFS or the Dexie fallback is doing the work,
+ * and how many images failed to resolve from either backend.
+ */
+interface ImageLoadResult {
+  urls: Map<string, string>
+  expected: number
+  opfsCount: number
+  dexieCount: number
+  missingCount: number
+}
+
 interface ImageCacheEntry {
-  promise: Promise<Map<string, string>>
+  promise: Promise<ImageLoadResult>
 }
 
 const imageCache = new Map<number, ImageCacheEntry>()
@@ -111,30 +125,53 @@ const imageCache = new Map<number, ImageCacheEntry>()
 function loadPublicationImages(
   publicationId: number,
   chapters: Chapter[],
-): Promise<Map<string, string>> {
+): Promise<ImageLoadResult> {
   const cached = imageCache.get(publicationId)
   if (cached) return cached.promise
 
   const promise = (async () => {
     const names = collectOpfsNames(chapters)
-    const map = new Map<string, string>()
+    const urls = new Map<string, string>()
+    const counts: Record<ImageBlobSource, number> = {
+      opfs: 0,
+      dexie: 0,
+      native: 0,
+      missing: 0,
+    }
     for (const name of names) {
       try {
-        const blob = await getImageBlob(publicationId, name)
+        const { blob, source } = await getImageBlobWithSource(publicationId, name)
+        counts[source] = (counts[source] ?? 0) + 1
         if (blob) {
-          map.set(name, URL.createObjectURL(blob))
+          urls.set(name, URL.createObjectURL(blob))
         } else {
-          console.warn('[formatted] image not found in OPFS', { publicationId, name })
+          console.warn('[formatted] image not found', { publicationId, name })
         }
       } catch (err) {
+        counts.missing++
         console.warn('[formatted] image resolve failed', { name, err })
       }
     }
-    return map
+    return {
+      urls,
+      expected: names.length,
+      opfsCount: counts.opfs + counts.native,
+      dexieCount: counts.dexie,
+      missingCount: counts.missing,
+    }
   })()
 
   imageCache.set(publicationId, { promise })
   return promise
+}
+
+function isImageDiagEnabled(): boolean {
+  if (typeof window === 'undefined') return false
+  try {
+    return new URLSearchParams(window.location.search).has('diag')
+  } catch {
+    return false
+  }
 }
 
 /**
@@ -171,6 +208,12 @@ const FormattedView = forwardRef<FormattedViewHandle, FormattedViewProps>(functi
   // Resolved name → blob URL. Pulled from a module-level cache so the URLs
   // persist across mounts/unmounts (StrictMode, HMR, conditional rendering).
   const [imageMap, setImageMap] = useState<Map<string, string>>(new Map())
+  const [imageDiag, setImageDiag] = useState<{
+    expected: number
+    opfsCount: number
+    dexieCount: number
+    missingCount: number
+  } | null>(null)
   // Flips true once loadPublicationImages has resolved (success OR failure).
   // The gate below uses this instead of `imageMap.size > 0` because on
   // mobile browsers where OPFS writes silently failed at upload time, the
@@ -180,9 +223,15 @@ const FormattedView = forwardRef<FormattedViewHandle, FormattedViewProps>(functi
   useEffect(() => {
     let cancelled = false
     loadPublicationImages(publicationId, chapters)
-      .then((map) => {
+      .then((result) => {
         if (cancelled) return
-        setImageMap(map)
+        setImageMap(result.urls)
+        setImageDiag({
+          expected: result.expected,
+          opfsCount: result.opfsCount,
+          dexieCount: result.dexieCount,
+          missingCount: result.missingCount,
+        })
       })
       .catch((err) => {
         // Don't block the text render on a storage failure.
@@ -464,8 +513,41 @@ const FormattedView = forwardRef<FormattedViewHandle, FormattedViewProps>(functi
     [],
   )
 
+  const diagEnabled = isImageDiagEnabled()
+
   return (
     <div className="formatted-view" ref={containerRef} {...tapHandlers}>
+      {diagEnabled && imageDiag && (
+        <div
+          style={{
+            position: 'sticky',
+            top: 0,
+            zIndex: 50,
+            padding: '8px 12px',
+            background: 'rgba(0,0,0,0.85)',
+            color: '#9ef',
+            font: '12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace',
+            borderBottom: '1px solid rgba(150,200,255,0.3)',
+            textAlign: 'center',
+          }}
+        >
+          <div style={{ color: '#fff', fontWeight: 'bold' }}>
+            images: {imageDiag.opfsCount + imageDiag.dexieCount}/{imageDiag.expected} loaded
+          </div>
+          <div>
+            opfs: {imageDiag.opfsCount} · dexie: {imageDiag.dexieCount} · missing: {imageDiag.missingCount}
+          </div>
+          {imageDiag.expected === 0 && (
+            <div style={{ color: '#fc8' }}>parser produced no opfs: markers — book has no images</div>
+          )}
+          {imageDiag.expected > 0 &&
+            imageDiag.opfsCount + imageDiag.dexieCount === 0 && (
+              <div style={{ color: '#fc8' }}>
+                {imageDiag.expected} images expected but none found in either backend — re-upload likely needed
+              </div>
+            )}
+        </div>
+      )}
       <div className="formatted-view__column">
         {chapters.map((ch, idx) => (
           <article
