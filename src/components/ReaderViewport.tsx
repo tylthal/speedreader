@@ -1053,6 +1053,7 @@ function ActiveReader({
               onVisibleSectionChange={handleVisibleSectionChange}
               onTap={activeState.isPlaying ? activeActions.pause : undefined}
               velocityProfileRef={velocityProfileRef}
+              showPauseCursor={!activeState.isPlaying}
             />
             <VelocityProfileDebugOverlay
               formattedViewRef={formattedViewRef}
