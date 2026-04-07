@@ -13,10 +13,6 @@ interface FormattedViewProps {
 
 const OPFS_SRC_RE = /<img\s[^>]*?src=["']opfs:([^"']+)["']/gi
 
-/**
- * Walk every section's html, extract every unique `opfs:NAME` marker, and
- * return the deduped list of names.
- */
 function collectOpfsNames(chapters: Chapter[]): string[] {
   const names = new Set<string>()
   for (const ch of chapters) {
@@ -29,6 +25,52 @@ function collectOpfsNames(chapters: Chapter[]): string[] {
     }
   }
   return [...names]
+}
+
+// ---------------------------------------------------------------------------
+// Module-level image-URL cache, keyed by publicationId.
+//
+// The cache lives outside any React component so URLs persist across mounts,
+// unmounts, StrictMode double-invokes, HMR, parent re-renders, and any other
+// React lifecycle event. Each publication's images are loaded at most once
+// per page-load. We never revoke — the leak is bounded by the number of
+// distinct publications opened in a session, which is fine for a reader app
+// (a few MB at most). The browser reclaims everything on tab close.
+// ---------------------------------------------------------------------------
+
+interface ImageCacheEntry {
+  promise: Promise<Map<string, string>>
+}
+
+const imageCache = new Map<number, ImageCacheEntry>()
+
+function loadPublicationImages(
+  publicationId: number,
+  chapters: Chapter[],
+): Promise<Map<string, string>> {
+  const cached = imageCache.get(publicationId)
+  if (cached) return cached.promise
+
+  const promise = (async () => {
+    const names = collectOpfsNames(chapters)
+    const map = new Map<string, string>()
+    for (const name of names) {
+      try {
+        const blob = await getImageBlob(publicationId, name)
+        if (blob) {
+          map.set(name, URL.createObjectURL(blob))
+        } else {
+          console.warn('[formatted] image not found in OPFS', { publicationId, name })
+        }
+      } catch (err) {
+        console.warn('[formatted] image resolve failed', { name, err })
+      }
+    }
+    return map
+  })()
+
+  imageCache.set(publicationId, { promise })
+  return promise
 }
 
 /**
@@ -50,60 +92,31 @@ export default function FormattedView({
   const containerRef = useRef<HTMLDivElement>(null)
   const sectionRefs = useRef<Map<number, HTMLElement>>(new Map())
   const isProgrammaticScrollRef = useRef(false)
+  const renderCount = useRef(0)
+  renderCount.current++
 
-  // Resolved name → blob URL.
+  // Resolved name → blob URL. Pulled from a module-level cache so the URLs
+  // persist across mounts/unmounts (StrictMode, HMR, conditional rendering).
   const [imageMap, setImageMap] = useState<Map<string, string>>(new Map())
-  const createdUrlsRef = useRef<string[]>([])
 
-  // Load every OPFS image once when the publication mounts.
   useEffect(() => {
+    console.log('[fmt] image effect run; chapters ref id:', (chapters as any)?.length)
     let cancelled = false
-    const names = collectOpfsNames(chapters)
-    if (!names.length) {
-      setImageMap(new Map())
-      return
-    }
-    ;(async () => {
-      const next = new Map<string, string>()
-      const created: string[] = []
-      for (const name of names) {
-        if (cancelled) break
-        try {
-          const blob = await getImageBlob(publicationId, name)
-          if (blob) {
-            const url = URL.createObjectURL(blob)
-            next.set(name, url)
-            created.push(url)
-          } else {
-            console.warn('[formatted] image not found in OPFS', { publicationId, name })
-          }
-        } catch (err) {
-          console.warn('[formatted] image resolve failed', { name, err })
-        }
-      }
+    loadPublicationImages(publicationId, chapters).then((map) => {
       if (!cancelled) {
-        // Stash the created URLs so we can revoke on unmount.
-        createdUrlsRef.current = created
-        setImageMap(next)
-      } else {
-        // We were cancelled before commit; clean up our handles.
-        for (const url of created) URL.revokeObjectURL(url)
+        console.log('[fmt] setImageMap with', map.size, 'entries')
+        setImageMap(map)
       }
-    })()
+    })
     return () => {
       cancelled = true
     }
   }, [publicationId, chapters])
 
-  // Revoke blob URLs only when the publication itself changes or on true
-  // unmount. We never revoke between cleanup-and-resetup of the same mount,
-  // so scrolling / chapter prop changes never invalidate the visible images.
   useEffect(() => {
-    return () => {
-      for (const url of createdUrlsRef.current) URL.revokeObjectURL(url)
-      createdUrlsRef.current = []
-    }
-  }, [publicationId])
+    console.log('[fmt] mount')
+    return () => console.log('[fmt] unmount')
+  }, [])
 
   // Pre-rewrite each section's HTML by string-replacing every `opfs:NAME`
   // src with its resolved blob URL. Memoized on (chapters, imageMap) so
