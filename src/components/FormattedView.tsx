@@ -12,19 +12,34 @@ interface FormattedViewProps {
 }
 
 /**
- * Walk an article element and replace every `<img src="opfs:NAME">` with a
- * fresh blob URL fetched from OPFS. Returns the array of created blob URLs
- * so the caller can revoke them on unmount.
+ * Walk an article element and replace every `<img src="opfs:NAME">` (or
+ * <img data-opfs-src="NAME"> for already-resolved imgs that need re-resolving
+ * after a cleanup) with a fresh blob URL fetched from OPFS. Returns the
+ * array of created blob URLs so the caller can revoke them on unmount.
+ *
+ * The original opfs: marker is preserved on `data-opfs-src` so this function
+ * is idempotent: it can be called repeatedly (e.g. after StrictMode's
+ * intentional double-mount or after a re-render with a fresh chapters
+ * reference) and will always re-resolve to a working blob URL.
  */
 async function resolveOpfsImages(
   publicationId: number,
   root: HTMLElement,
 ): Promise<string[]> {
   const created: string[] = []
-  const imgs = root.querySelectorAll('img[src^="opfs:"]')
+  // Match either the raw `opfs:` marker (first resolution) OR the preserved
+  // `data-opfs-src` (subsequent resolutions after cleanup).
+  const imgs = root.querySelectorAll('img[src^="opfs:"], img[data-opfs-src]')
   for (const img of Array.from(imgs)) {
-    const src = img.getAttribute('src') ?? ''
-    const name = src.slice('opfs:'.length)
+    let name = img.getAttribute('data-opfs-src') ?? ''
+    if (!name) {
+      const src = img.getAttribute('src') ?? ''
+      if (src.startsWith('opfs:')) {
+        name = src.slice('opfs:'.length)
+        // Preserve the original marker so we can re-resolve after cleanup.
+        img.setAttribute('data-opfs-src', name)
+      }
+    }
     if (!name) continue
     try {
       const blob = await getImageBlob(publicationId, name)
@@ -65,23 +80,34 @@ export default function FormattedView({
   const isProgrammaticScrollRef = useRef(false)
 
   // Resolve `opfs:` image markers to blob URLs after the HTML mounts.
-  // Re-runs whenever the chapter list changes; revokes previously-created
-  // URLs on unmount.
+  // The created URL list lives in a ref (NOT a closure variable) so it
+  // survives effect re-runs without losing track of working URLs.
+  // resolveOpfsImages() preserves the original marker on data-opfs-src so
+  // it's idempotent across re-runs (StrictMode double-mount, or chapter
+  // prop reference changes).
+  const createdUrlsRef = useRef<string[]>([])
   useEffect(() => {
     let cancelled = false
-    const created: string[] = []
     ;(async () => {
       for (const el of sectionRefs.current.values()) {
         if (cancelled) break
         const urls = await resolveOpfsImages(publicationId, el)
-        created.push(...urls)
+        createdUrlsRef.current.push(...urls)
       }
     })()
     return () => {
       cancelled = true
-      for (const url of created) URL.revokeObjectURL(url)
     }
   }, [publicationId, chapters])
+
+  // Revoke all created URLs only when the publication itself changes or the
+  // component unmounts. Don't revoke on every chapter-prop reference change.
+  useEffect(() => {
+    return () => {
+      for (const url of createdUrlsRef.current) URL.revokeObjectURL(url)
+      createdUrlsRef.current = []
+    }
+  }, [publicationId])
 
   // Scroll the current section into view whenever the cursor changes
   // externally (e.g. user toggled from plain → formatted).
