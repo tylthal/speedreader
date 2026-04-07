@@ -7,16 +7,15 @@
  * Text extraction works fully.
  */
 
-// Use the legacy build of pdfjs-dist. The modern build relies on
-// ReadableStream async iteration, which Safari does not support.
+// Use the legacy build of pdfjs-dist for broader browser compatibility.
 import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs'
+// Custom worker wrapper that polyfills ReadableStream async iteration
+// before loading pdf.js's worker (needed for WebKit browsers).
+import PdfWorker from '../workers/pdfWorker.ts?worker'
 import type { ParsedBook, ParsedChapter } from './types'
 
-// Use Vite's static asset handling for the pdf.js worker.
-pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
-  'pdfjs-dist/legacy/build/pdf.worker.min.mjs',
-  import.meta.url,
-).href
+// Use a worker port from our wrapper instead of workerSrc.
+pdfjsLib.GlobalWorkerOptions.workerPort = new PdfWorker()
 
 const WHITESPACE_RE = /\s+/g
 const BLANK_LINES_RE = /\n{3,}/g
