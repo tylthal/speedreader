@@ -88,6 +88,18 @@ export function useScrollEngine(
   const rafRef = useRef<number>(0);
   const lastTimestampRef = useRef(0);
 
+  // High-precision float accumulator for the scroll position. We must NOT
+  // do `container.scrollTop += scrollDelta` directly: browsers round
+  // scrollTop to integer pixels (or to the device-pixel grid) on assignment,
+  // and any per-frame delta below 1 px is silently dropped on the read-back.
+  // For dense prose in formatted view, pxPerSec at typical wpm is in the
+  // 10–30 range — that's 0.16–0.5 px/frame at 60fps, all sub-pixel. Without
+  // an external accumulator the scroll appears to slow and freeze as soon
+  // as it leaves a high-pxPerWeight entry (heading, image) and enters
+  // normal prose. Mirrors the same fix already in useTrackEngine.
+  const scrollPositionRef = useRef(0);
+  const dpr = typeof window !== 'undefined' ? window.devicePixelRatio : 1;
+
   // Refs for rAF loop
   const currentIndexRef = useRef(currentIndex);
   currentIndexRef.current = currentIndex;
@@ -238,8 +250,15 @@ export function useScrollEngine(
       }
 
       if (pxPerSec > 0) {
-        const scrollDelta = pxPerSec * (delta / 1000);
-        container.scrollTop += scrollDelta;
+        // Accumulate the delta into the float scrollPositionRef instead of
+        // hitting container.scrollTop directly. The browser quantizes
+        // scrollTop on assignment, so direct +=  loses any sub-pixel
+        // remainder every frame and the scroll stalls at low pxPerSec.
+        // The float ref preserves the remainder across frames; we snap to
+        // the device-pixel grid only when writing to the DOM.
+        scrollPositionRef.current += pxPerSec * (delta / 1000);
+        if (scrollPositionRef.current < 0) scrollPositionRef.current = 0;
+        container.scrollTop = Math.floor(scrollPositionRef.current * dpr) / dpr;
 
         // Check if we've hit the bottom
         const maxScroll = container.scrollHeight - container.clientHeight;
@@ -257,14 +276,18 @@ export function useScrollEngine(
     updateCurrentIndexFromScroll();
 
     rafRef.current = requestAnimationFrame(tick);
-  }, [containerRef, velocityProfileRef, stopLoop, updateCurrentIndexFromScroll, computeAverageSpeed]);
+  }, [containerRef, velocityProfileRef, stopLoop, updateCurrentIndexFromScroll, computeAverageSpeed, dpr]);
 
   const play = useCallback(() => {
     if (segmentsRef.current.length === 0) return;
     setIsPlaying(true);
     lastTimestampRef.current = 0;
+    // Sync the float accumulator to wherever the container actually is
+    // right now. Without this the next tick would write 0 + delta and yank
+    // the user's scroll position back to the top.
+    scrollPositionRef.current = containerRef.current?.scrollTop ?? 0;
     rafRef.current = requestAnimationFrame(tick);
-  }, [tick]);
+  }, [tick, containerRef]);
 
   const pause = useCallback(() => {
     setIsPlaying(false);
@@ -294,7 +317,12 @@ export function useScrollEngine(
         el.scrollIntoView({ block: 'center', behavior: 'instant' });
       }
     }
-  }, [itemOffsetsRef]);
+    // Re-sync the float accumulator after the seek so the next tick doesn't
+    // jump back to the pre-seek position.
+    if (containerRef.current) {
+      scrollPositionRef.current = containerRef.current.scrollTop;
+    }
+  }, [itemOffsetsRef, containerRef]);
 
   const setWpm = useCallback((value: number) => {
     setWpmState(clampWpm(value));
