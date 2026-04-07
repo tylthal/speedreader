@@ -171,40 +171,69 @@ const FormattedView = forwardRef<FormattedViewHandle, FormattedViewProps>(functi
   // Resolved name → blob URL. Pulled from a module-level cache so the URLs
   // persist across mounts/unmounts (StrictMode, HMR, conditional rendering).
   const [imageMap, setImageMap] = useState<Map<string, string>>(new Map())
+  // Flips true once loadPublicationImages has resolved (success OR failure).
+  // The gate below uses this instead of `imageMap.size > 0` because on
+  // mobile browsers where OPFS writes silently failed at upload time, the
+  // map will legitimately be empty — and we still need text to render.
+  const [imageLoadResolved, setImageLoadResolved] = useState(false)
 
   useEffect(() => {
     let cancelled = false
-    loadPublicationImages(publicationId, chapters).then((map) => {
-      if (!cancelled) setImageMap(map)
-    })
+    loadPublicationImages(publicationId, chapters)
+      .then((map) => {
+        if (cancelled) return
+        setImageMap(map)
+      })
+      .catch((err) => {
+        // Don't block the text render on a storage failure.
+        console.warn('[formatted] image loader rejected', err)
+      })
+      .finally(() => {
+        if (!cancelled) setImageLoadResolved(true)
+      })
     return () => {
       cancelled = true
     }
   }, [publicationId, chapters])
 
-  // Pre-rewrite each section's HTML by string-replacing every `opfs:NAME`
-  // src with its resolved blob URL. We DELAY the rewrite until imageMap is
-  // populated so the unresolved HTML never reaches the DOM (otherwise the
-  // browser would briefly fire ERR_UNKNOWN_URL_SCHEME for every opfs: src
-  // and the user would see broken-image icons until the load completes).
-  // Memoized on (chapters, imageMap).
-  const imagesReady = imageMap.size > 0 || collectOpfsNames(chapters).length === 0
+  // Pre-rewrite each section's HTML in two passes:
+  //   1. Substitute resolved opfs: markers with their blob URL.
+  //   2. Strip any <img> tags whose src is still an unresolved opfs: marker
+  //      so the user gets clean text instead of broken-image icons. This
+  //      matters on mobile WebKit where the OPFS image storage may have
+  //      silently failed at upload time.
+  //
+  // We DELAY the rewrite until the loader has *resolved* (gate below) — not
+  // until images are populated — so chapters with no images render as soon
+  // as the loader settles, and chapters whose images failed to store still
+  // render their text. Either way, the unresolved opfs: markers never reach
+  // the DOM, so the browser never fires ERR_UNKNOWN_URL_SCHEME.
+  const imagesReady =
+    imageLoadResolved || collectOpfsNames(chapters).length === 0
   const rewrittenSections = useMemo(() => {
     if (!imagesReady) return null
     return chapters.map((ch) => {
       const html = ch.html ?? ''
       if (!html) return { ch, html }
-      const rewritten = imageMap.size === 0
-        ? html
-        : html.replace(
-            /(<img\s[^>]*?src=["'])opfs:([^"']+)(["'])/gi,
-            (match, head: string, name: string, tail: string) => {
-              const url = imageMap.get(name)
-              if (!url) return match
-              return `${head}${url}${tail}`
-            },
-          )
-      return { ch, html: rewritten }
+      // Pass 1 — substitute resolved markers.
+      let out = html
+      if (imageMap.size > 0) {
+        out = out.replace(
+          /(<img\s[^>]*?src=["'])opfs:([^"']+)(["'])/gi,
+          (match, head: string, name: string, tail: string) => {
+            const url = imageMap.get(name)
+            if (!url) return match
+            return `${head}${url}${tail}`
+          },
+        )
+      }
+      // Pass 2 — strip any img tag whose src is still an unresolved opfs:
+      // marker. The lazy [^>]*? keeps each match scoped to a single tag.
+      out = out.replace(
+        /<img\s[^>]*?\bsrc=["']opfs:[^"']+["'][^>]*>/gi,
+        '',
+      )
+      return { ch, html: out }
     })
   }, [chapters, imageMap, imagesReady])
 
