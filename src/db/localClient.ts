@@ -97,32 +97,42 @@ function toHighlight(row: DBHighlight): Highlight {
  * Detect whether Web Workers can use DOMParser. Safari/WebKit (including the
  * iOS Capacitor WebView) does not expose DOMParser in workers, which breaks
  * EPUB/HTML/FB2/MD parsing. We probe once and cache the result.
+ *
+ * The probe uses a module worker to match the actual parserWorker.ts.
  */
 let workerDomParserSupported: Promise<boolean> | null = null
 function checkWorkerDomParserSupport(): Promise<boolean> {
   if (workerDomParserSupported) return workerDomParserSupported
   workerDomParserSupported = new Promise((resolve) => {
+    let probe: Worker | null = null
+    let url: string | null = null
+    const cleanup = () => {
+      if (probe) probe.terminate()
+      if (url) URL.revokeObjectURL(url)
+    }
+    const finish = (result: boolean) => {
+      cleanup()
+      resolve(result)
+    }
     try {
-      const blob = new Blob(
-        ['self.postMessage(typeof DOMParser !== "undefined")'],
-        { type: 'application/javascript' },
-      )
-      const url = URL.createObjectURL(blob)
-      const probe = new Worker(url)
-      const cleanup = () => {
-        probe.terminate()
-        URL.revokeObjectURL(url)
-      }
-      probe.onmessage = (e) => {
-        cleanup()
-        resolve(Boolean(e.data))
-      }
-      probe.onerror = () => {
-        cleanup()
-        resolve(false)
-      }
+      const code = `
+        try {
+          const ok = typeof DOMParser !== "undefined" &&
+                     !!new DOMParser().parseFromString("<x/>", "application/xml");
+          self.postMessage(ok);
+        } catch (e) {
+          self.postMessage(false);
+        }
+      `
+      const blob = new Blob([code], { type: 'application/javascript' })
+      url = URL.createObjectURL(blob)
+      probe = new Worker(url, { type: 'module' })
+      probe.onmessage = (e) => finish(Boolean(e.data))
+      probe.onerror = () => finish(false)
+      // Safety timeout — if the worker never responds, assume unsupported.
+      setTimeout(() => finish(false), 1500)
     } catch {
-      resolve(false)
+      finish(false)
     }
   })
   return workerDomParserSupported
@@ -263,10 +273,24 @@ async function runParse(
   onProgress?: (phase: string, percent: number) => void,
 ): Promise<WorkerResult> {
   const supported = await checkWorkerDomParserSupport()
-  if (supported) {
-    return runParseWorker(data, filename, onProgress)
+  if (!supported) {
+    return runParseMainThread(data, filename, onProgress)
   }
-  return runParseMainThread(data, filename, onProgress)
+
+  // The buffer gets transferred to the worker, so we need a copy in case
+  // we have to fall back to main-thread parsing.
+  const dataCopy = data.slice(0)
+  try {
+    return await runParseWorker(data, filename, onProgress)
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    // Safety net: if the worker fails for any DOMParser-related reason,
+    // retry on the main thread where DOMParser is always available.
+    if (/DOMParser/i.test(msg)) {
+      return runParseMainThread(dataCopy, filename, onProgress)
+    }
+    throw err
+  }
 }
 
 function imgBlobFromSerialized(img: SerializedInlineImage): Blob {
