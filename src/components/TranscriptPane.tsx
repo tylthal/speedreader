@@ -7,8 +7,6 @@ interface TranscriptPaneProps {
   segments: Segment[];
   currentIndex: number;
   onSegmentClick: (index: number) => void;
-  bookmarkedIndices?: Set<number>;
-  highlightedIndices?: Map<number, string>;
 }
 
 const ROW_HEIGHT = 60;
@@ -17,8 +15,6 @@ export default function TranscriptPane({
   segments,
   currentIndex,
   onSegmentClick,
-  bookmarkedIndices,
-  highlightedIndices,
 }: TranscriptPaneProps) {
   const listRef = useRef<List>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -44,18 +40,10 @@ export default function TranscriptPane({
     ({ index, style }: ListChildComponentProps) => {
       const seg = segments[index];
       const isActive = index === currentIndex;
-      const isBookmarked = bookmarkedIndices?.has(seg.segment_index) ?? false;
-      const highlightColor = highlightedIndices?.get(seg.segment_index);
-      const rowClasses = [
-        'transcript-pane__row',
-        highlightColor ? `transcript__row--highlighted transcript__row--highlighted-${highlightColor}` : '',
-      ]
-        .filter(Boolean)
-        .join(' ');
       return (
         <div
           style={{ ...style, position: 'relative' as const }}
-          className={rowClasses}
+          className="transcript-pane__row"
           role="listitem"
           aria-current={isActive ? 'true' : undefined}
           onClick={() => onSegmentClick(index)}
@@ -72,15 +60,10 @@ export default function TranscriptPane({
           >
             {seg.text}
           </span>
-          {isBookmarked && (
-            <span className="transcript__bookmark-icon" aria-label="Bookmarked">
-              {'\uD83D\uDD16'}
-            </span>
-          )}
         </div>
       );
     },
-    [segments, currentIndex, onSegmentClick, bookmarkedIndices, highlightedIndices],
+    [segments, currentIndex, onSegmentClick],
   );
 
   return (

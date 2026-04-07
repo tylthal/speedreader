@@ -1,5 +1,7 @@
 export type ContentType = 'text' | 'image'
 
+export type DisplayMode = 'plain' | 'formatted'
+
 export interface Publication {
   id: number
   title: string
@@ -10,6 +12,18 @@ export interface Publication {
   content_type: ContentType
   total_pages: number
   created_at: string
+  /** OPFS-resolvable cover URL (when present). */
+  cover_url?: string | null
+  /** Per-book display mode preference. */
+  display_mode_pref?: DisplayMode | null
+}
+
+/** A node in the hierarchical TOC tree (PRD §6.4). */
+export interface TocNode {
+  title: string
+  /** Index into PublicationDetail.chapters; -1 for display-only parents. */
+  section_index: number
+  children?: TocNode[]
 }
 
 export interface ImagePage {
@@ -39,6 +53,8 @@ export interface Chapter {
 
 export interface PublicationDetail extends Publication {
   chapters: Chapter[]
+  /** Hierarchical TOC tree, if the source has one. Optional. */
+  toc_tree?: TocNode[] | null
 }
 
 export interface SegmentInlineImage {
@@ -48,6 +64,8 @@ export interface SegmentInlineImage {
   height: number
 }
 
+export type SegmentKind = 'text' | 'section_title'
+
 export interface Segment {
   id: number
   chapter_id: number
@@ -56,6 +74,10 @@ export interface Segment {
   word_count: number
   duration_ms: number
   inline_images?: SegmentInlineImage[] | null
+  /** Anchor inside the section's html string for Plain↔Formatted mapping. */
+  html_anchor?: string | null
+  /** 'section_title' for synthetic title segments at section boundaries. */
+  kind?: SegmentKind | null
 }
 
 export interface SegmentBatch {
@@ -77,44 +99,10 @@ export interface ReadingProgress {
   segments_read: number
 }
 
-export interface Bookmark {
-  id: number
-  publication_id: number
-  chapter_id: number
-  segment_index: number
-  note: string
-  created_at: string
-}
-
-export interface Highlight {
-  id: number
-  publication_id: number
-  chapter_id: number
-  segment_index: number
-  text: string
-  color: string
-  note: string
-  created_at: string
-}
-
 export interface ProgressInput {
   chapter_id: number
   segment_index: number
   word_index: number
   wpm: number
   reading_mode: string
-}
-
-export interface BookmarkInput {
-  chapter_id: number
-  segment_index: number
-  note?: string
-}
-
-export interface HighlightInput {
-  chapter_id: number
-  segment_index: number
-  text: string
-  color?: string
-  note?: string
 }

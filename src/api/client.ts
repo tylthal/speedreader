@@ -1,23 +1,23 @@
 import type { SpeedReaderClient } from './interface'
 import { LocalClient } from '../db/localClient'
+import { ensureSchemaWipe } from '../db/database'
 
 // Re-export all types so consumers don't need to change imports
 export type {
   ContentType,
+  DisplayMode,
   Publication,
   PublicationDetail,
   Chapter,
   Segment,
   SegmentBatch,
   SegmentInlineImage,
+  SegmentKind,
   ImagePage,
   ImagePageBatch,
   ReadingProgress,
-  Bookmark,
-  Highlight,
   ProgressInput,
-  BookmarkInput,
-  HighlightInput,
+  TocNode,
 } from './types'
 
 export type { SpeedReaderClient } from './interface'
@@ -27,6 +27,7 @@ export type { SpeedReaderClient } from './interface'
 let _client: SpeedReaderClient | null = null
 
 export async function initClient(): Promise<void> {
+  await ensureSchemaWipe()
   _client = new LocalClient()
 }
 
@@ -97,34 +98,4 @@ export function saveProgress(
   data: { chapter_id: number; segment_index: number; word_index: number; wpm: number; reading_mode: string },
 ) {
   return getClient().saveProgress(pubId, data)
-}
-
-export function createBookmark(
-  pubId: number,
-  data: { chapter_id: number; segment_index: number; note?: string },
-) {
-  return getClient().createBookmark(pubId, data)
-}
-
-export function getBookmarks(pubId: number) {
-  return getClient().getBookmarks(pubId)
-}
-
-export function deleteBookmark(id: number) {
-  return getClient().deleteBookmark(id)
-}
-
-export function createHighlight(
-  pubId: number,
-  data: { chapter_id: number; segment_index: number; text: string; color?: string; note?: string },
-) {
-  return getClient().createHighlight(pubId, data)
-}
-
-export function getHighlights(pubId: number) {
-  return getClient().getHighlights(pubId)
-}
-
-export function deleteHighlight(id: number) {
-  return getClient().deleteHighlight(id)
 }

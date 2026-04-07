@@ -4,11 +4,7 @@ import type {
   SegmentBatch,
   ImagePageBatch,
   ReadingProgress,
-  Bookmark,
-  Highlight,
   ProgressInput,
-  BookmarkInput,
-  HighlightInput,
 } from './types'
 
 export interface SpeedReaderClient {
@@ -24,10 +20,4 @@ export interface SpeedReaderClient {
   getImageUrl(imagePath: string): string
   getProgress(pubId: number): Promise<ReadingProgress | null>
   saveProgress(pubId: number, data: ProgressInput): Promise<ReadingProgress>
-  createBookmark(pubId: number, data: BookmarkInput): Promise<Bookmark>
-  getBookmarks(pubId: number): Promise<Bookmark[]>
-  deleteBookmark(id: number): Promise<void>
-  createHighlight(pubId: number, data: HighlightInput): Promise<Highlight>
-  getHighlights(pubId: number): Promise<Highlight[]>
-  deleteHighlight(id: number): Promise<void>
 }

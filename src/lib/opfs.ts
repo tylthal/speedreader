@@ -83,6 +83,47 @@ export async function deleteBookFiles(pubId: number): Promise<void> {
   } catch {
     // Already deleted or doesn't exist
   }
+  try {
+    const coversDir = await getDir('covers')
+    // covers are flat files named {pubId}.{ext}
+    for await (const [name] of (coversDir as any).entries()) {
+      if (name.startsWith(`${pubId}.`)) {
+        await coversDir.removeEntry(name).catch(() => {})
+      }
+    }
+  } catch {
+    // Already deleted or doesn't exist
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Cover image storage (PRD §3.4)
+// ---------------------------------------------------------------------------
+
+export async function storeCover(
+  pubId: number,
+  blob: Blob,
+  ext: string,
+): Promise<string> {
+  const dir = await getDir('covers')
+  const name = `${pubId}${ext}`
+  const handle = await dir.getFileHandle(name, { create: true })
+  const writable = await handle.createWritable()
+  await writable.write(blob)
+  await writable.close()
+  return `covers/${name}`
+}
+
+export async function getCoverBlob(path: string): Promise<Blob | null> {
+  try {
+    const parts = path.split('/').filter(Boolean)
+    if (parts.length < 2 || parts[0] !== 'covers') return null
+    const dir = await getDir('covers')
+    const handle = await dir.getFileHandle(parts[1])
+    return await handle.getFile()
+  } catch {
+    return null
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -15,8 +15,6 @@ interface ControlsBottomSheetProps {
   onNextChapter: () => void;
   hasPrevChapter: boolean;
   hasNextChapter: boolean;
-  isCurrentBookmarked?: boolean;
-  onToggleBookmark?: () => void;
   mode?: ReadingMode;
   onToggleMode?: () => void;
   onSetMode?: (mode: ReadingMode) => void;
@@ -43,8 +41,6 @@ export default function ControlsBottomSheet({
   onNextChapter,
   hasPrevChapter,
   hasNextChapter,
-  isCurrentBookmarked = false,
-  onToggleBookmark,
   mode = 'phrase',
   onToggleMode,
   onSetMode,

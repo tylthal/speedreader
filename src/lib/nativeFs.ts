@@ -84,6 +84,50 @@ export async function deleteBookFiles(pubId: number): Promise<void> {
   } catch {
     /* directory may not exist */
   }
+  // Cover files live as flat covers/{pubId}.{ext}; try common extensions.
+  for (const ext of ['.png', '.jpg', '.jpeg', '.webp']) {
+    try {
+      await Filesystem.deleteFile({
+        path: `covers/${pubId}${ext}`,
+        directory: Directory.Data,
+      });
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+export async function storeCover(
+  pubId: number,
+  blob: Blob,
+  ext: string,
+): Promise<string> {
+  const base64 = await blobToBase64(blob);
+  const path = `covers/${pubId}${ext}`;
+  await Filesystem.writeFile({
+    path,
+    data: base64,
+    directory: Directory.Data,
+    recursive: true,
+  });
+  return path;
+}
+
+export async function getCoverBlob(path: string): Promise<Blob | null> {
+  try {
+    const result = await Filesystem.readFile({
+      path,
+      directory: Directory.Data,
+    });
+    // Guess MIME from extension
+    const lower = path.toLowerCase();
+    let mime = 'image/png';
+    if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) mime = 'image/jpeg';
+    else if (lower.endsWith('.webp')) mime = 'image/webp';
+    return base64ToBlob(result.data as string, mime);
+  } catch {
+    return null;
+  }
 }
 
 export async function storeImage(

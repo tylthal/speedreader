@@ -61,6 +61,36 @@ export async function getImageBlob(
   return getImageBlob(pubId, name);
 }
 
+export async function storeCover(
+  pubId: number,
+  blob: Blob,
+  ext: string,
+): Promise<string> {
+  if (isNative()) {
+    const { storeCover } = await import('./nativeFs');
+    return storeCover(pubId, blob, ext);
+  }
+  const { storeCover } = await import('./opfs');
+  return storeCover(pubId, blob, ext);
+}
+
+export async function getCoverBlob(path: string): Promise<Blob | null> {
+  if (isNative()) {
+    const { getCoverBlob } = await import('./nativeFs');
+    return getCoverBlob(path);
+  }
+  const { getCoverBlob } = await import('./opfs');
+  return getCoverBlob(path);
+}
+
+/** Returns an object URL for a stored cover, or null if not present. */
+export async function getCoverUrl(path: string | null | undefined): Promise<string | null> {
+  if (!path) return null;
+  const blob = await getCoverBlob(path);
+  if (!blob) return null;
+  return URL.createObjectURL(blob);
+}
+
 export function isFileStorageAvailable(): boolean {
   if (isNative()) return true;
   return typeof navigator.storage?.getDirectory === 'function';

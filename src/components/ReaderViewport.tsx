@@ -12,7 +12,6 @@ import { useKeyboardHandling } from '../hooks/useKeyboardHandling';
 import { useWakeLock } from '../hooks/useWakeLock';
 import { useNavigate } from 'react-router-dom';
 import { getPublication, getProgress } from '../api/client';
-import { useBookmarks } from '../hooks/useBookmarks';
 import { useDataSaver } from '../hooks/useDataSaver';
 import { markNavigationStart, markFirstChunkRendered } from '../lib/ttfcMetric';
 import type { Chapter, ReadingProgress } from '../api/client';
@@ -556,33 +555,7 @@ function ActiveReader({
     enabled: saverEnabled,
   });
 
-  /* ---- Bookmarks & highlights ---- */
-  const { bookmarks, addBookmark, removeBookmark, isBookmarked } = useBookmarks(publicationId);
-
   const currentSegment = loaderState.segments[activeState.currentIndex] ?? null;
-
-  const handleToggleBookmark = useCallback(() => {
-    if (!currentChapter) return;
-    const seg = loaderState.segments[activeState.currentIndex];
-    const segIndex = seg?.segment_index ?? activeState.currentIndex;
-    if (isBookmarked(currentChapterId, segIndex)) {
-      const bookmark = bookmarks.find(
-        (b) => b.chapter_id === currentChapterId && b.segment_index === segIndex,
-      );
-      if (bookmark) removeBookmark(bookmark.id);
-    } else {
-      addBookmark(currentChapterId, segIndex);
-    }
-  }, [
-    currentChapter,
-    currentChapterId,
-    loaderState.segments,
-    activeState.currentIndex,
-    isBookmarked,
-    bookmarks,
-    addBookmark,
-    removeBookmark,
-  ]);
 
   /* ---- Chapter announcements ---- */
   useEffect(() => {
@@ -767,8 +740,6 @@ function ActiveReader({
         onNextChapter={handleNextChapter}
         hasPrevChapter={chapterIdx > 0}
         hasNextChapter={chapterIdx < chapters.length - 1}
-        isCurrentBookmarked={isBookmarked(currentChapterId, currentSegment?.segment_index ?? activeState.currentIndex)}
-        onToggleBookmark={handleToggleBookmark}
         mode={readingMode}
         onToggleMode={handleToggleMode}
         onSetMode={handleSetMode}

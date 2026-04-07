@@ -33,12 +33,47 @@ export interface ParsedImageChapter {
   pages: ImagePage[]
 }
 
+// ---------------------------------------------------------------------------
+// New shape (PRD §7) — populated by P2-rewritten parsers.
+// During P1 the legacy `chapters`/`imageChapters` fields are still required
+// so the old parsers continue to compile. P2 will flip every parser to emit
+// `sections` and these legacy fields will be removed.
+// ---------------------------------------------------------------------------
+
+export interface ParsedSection {
+  /** PRD §3.2 — never auto-numbered. May be the literal "Untitled". */
+  title: string
+  /** Flat plain-text representation for the chunker. */
+  text: string
+  /** Sanitized HTML for formatted view. Empty string for PDF/CBZ. */
+  html: string
+  /** Format-specific metadata (e.g. PDF page range). */
+  meta?: Record<string, unknown>
+}
+
+export interface ParsedCover {
+  blob: Blob
+  mimeType: string
+}
+
+export interface TocNode {
+  title: string
+  /** Index into ParsedBook.sections. -1 for display-only parent groupings. */
+  sectionIndex: number
+  children?: TocNode[]
+}
+
 export interface ParsedBook {
   title: string
   author: string
   contentType: ContentType
   chapters: ParsedChapter[]
   imageChapters: ParsedImageChapter[]
+  // --- Reader redesign additions (P2 will populate these) ---
+  sections?: ParsedSection[]
+  cover?: ParsedCover
+  /** Hierarchical TOC for the sidebar (PRD §6.4). Flat list if absent. */
+  tocTree?: TocNode[]
 }
 
 /**

@@ -1,11 +1,12 @@
 import { db } from './database'
-import type {
-  DBBookmark,
-  DBHighlight,
-  DBReadingProgress,
-} from './database'
+import type { DBPublication, DBReadingProgress } from './database'
 import type { SpeedReaderClient } from '../api/interface'
-import { storeBookFile, deleteBookFiles, isFileStorageAvailable } from '../lib/fileStorage'
+import {
+  storeBookFile,
+  deleteBookFiles,
+  isFileStorageAvailable,
+  getCoverUrl as resolveCoverUrl,
+} from '../lib/fileStorage'
 import type {
   ParseRequest,
   WorkerOutMessage,
@@ -18,11 +19,7 @@ import type {
   SegmentBatch,
   ImagePageBatch,
   ReadingProgress,
-  Bookmark,
-  Highlight,
   ProgressInput,
-  BookmarkInput,
-  HighlightInput,
   SegmentInlineImage,
 } from '../api/types'
 
@@ -32,6 +29,30 @@ import type {
 
 function nowIso(): string {
   return new Date().toISOString()
+}
+
+async function pubRowToPublication(r: DBPublication): Promise<Publication> {
+  let coverUrl: string | null = null
+  if (r.cover_path) {
+    try {
+      coverUrl = await resolveCoverUrl(r.cover_path)
+    } catch {
+      coverUrl = null
+    }
+  }
+  return {
+    id: r.id!,
+    title: r.title,
+    author: r.author,
+    filename: r.filename,
+    status: r.status,
+    total_segments: r.total_segments,
+    content_type: r.content_type,
+    total_pages: r.total_pages,
+    created_at: r.created_at,
+    cover_url: coverUrl,
+    display_mode_pref: r.display_mode_pref ?? null,
+  }
 }
 
 async function computeSegmentsRead(
@@ -62,30 +83,6 @@ function toProgress(row: DBReadingProgress, segmentsRead: number): ReadingProgre
     reading_mode: row.reading_mode,
     updated_at: row.updated_at,
     segments_read: segmentsRead,
-  }
-}
-
-function toBookmark(row: DBBookmark): Bookmark {
-  return {
-    id: row.id!,
-    publication_id: row.publication_id,
-    chapter_id: row.chapter_id,
-    segment_index: row.segment_index,
-    note: row.note,
-    created_at: row.created_at,
-  }
-}
-
-function toHighlight(row: DBHighlight): Highlight {
-  return {
-    id: row.id!,
-    publication_id: row.publication_id,
-    chapter_id: row.chapter_id,
-    segment_index: row.segment_index,
-    text: row.text,
-    color: row.color,
-    note: row.note,
-    created_at: row.created_at,
   }
 }
 
@@ -432,47 +429,17 @@ export class LocalClient implements SpeedReaderClient {
     }
 
     const pub = await db.publications.get(pubId)
-    return {
-      id: pub!.id!,
-      title: pub!.title,
-      author: pub!.author,
-      filename: pub!.filename,
-      status: pub!.status,
-      total_segments: pub!.total_segments,
-      content_type: pub!.content_type,
-      total_pages: pub!.total_pages,
-      created_at: pub!.created_at,
-    }
+    return pubRowToPublication(pub!)
   }
 
   async getPublications(): Promise<Publication[]> {
     const rows = await db.publications.where('status').notEqual('archived').toArray()
-    return rows.map((r) => ({
-      id: r.id!,
-      title: r.title,
-      author: r.author,
-      filename: r.filename,
-      status: r.status,
-      total_segments: r.total_segments,
-      content_type: r.content_type,
-      total_pages: r.total_pages,
-      created_at: r.created_at,
-    }))
+    return Promise.all(rows.map(pubRowToPublication))
   }
 
   async getArchivedPublications(): Promise<Publication[]> {
     const rows = await db.publications.where('status').equals('archived').toArray()
-    return rows.map((r) => ({
-      id: r.id!,
-      title: r.title,
-      author: r.author,
-      filename: r.filename,
-      status: r.status,
-      total_segments: r.total_segments,
-      content_type: r.content_type,
-      total_pages: r.total_pages,
-      created_at: r.created_at,
-    }))
+    return Promise.all(rows.map(pubRowToPublication))
   }
 
   async archivePublication(id: number): Promise<void> {
@@ -490,8 +457,6 @@ export class LocalClient implements SpeedReaderClient {
       db.segments,
       db.image_pages,
       db.reading_progress,
-      db.bookmarks,
-      db.highlights,
     ], async () => {
       const chapters = await db.chapters
         .where('publication_id')
@@ -506,8 +471,6 @@ export class LocalClient implements SpeedReaderClient {
 
       await db.chapters.where('publication_id').equals(id).delete()
       await db.reading_progress.where('publication_id').equals(id).delete()
-      await db.bookmarks.where('publication_id').equals(id).delete()
-      await db.highlights.where('publication_id').equals(id).delete()
       await db.publications.delete(id)
     })
 
@@ -526,22 +489,25 @@ export class LocalClient implements SpeedReaderClient {
       .between([id, -Infinity], [id, Infinity])
       .sortBy('chapter_index')
 
+    let tocTree = null
+    if (pub.toc_json) {
+      try {
+        tocTree = JSON.parse(pub.toc_json)
+      } catch {
+        tocTree = null
+      }
+    }
+
+    const base = await pubRowToPublication(pub)
     return {
-      id: pub.id!,
-      title: pub.title,
-      author: pub.author,
-      filename: pub.filename,
-      status: pub.status,
-      total_segments: pub.total_segments,
-      content_type: pub.content_type,
-      total_pages: pub.total_pages,
-      created_at: pub.created_at,
+      ...base,
       chapters: chapters.map((c) => ({
         id: c.id!,
         publication_id: c.publication_id,
         chapter_index: c.chapter_index,
         title: c.title,
       })),
+      toc_tree: tocTree,
     }
   }
 
@@ -583,6 +549,8 @@ export class LocalClient implements SpeedReaderClient {
           word_count: r.word_count,
           duration_ms: r.duration_ms,
           inline_images: inlineImages,
+          html_anchor: r.html_anchor ?? null,
+          kind: r.kind ?? 'text',
         }
       }),
     }
@@ -670,56 +638,4 @@ export class LocalClient implements SpeedReaderClient {
     return toProgress(record as any, segmentsRead)
   }
 
-  async createBookmark(pubId: number, data: BookmarkInput): Promise<Bookmark> {
-    const record: Omit<DBBookmark, 'id'> = {
-      publication_id: pubId,
-      chapter_id: data.chapter_id,
-      segment_index: data.segment_index,
-      note: data.note ?? '',
-      created_at: nowIso(),
-    }
-    const id = await db.bookmarks.add(record as DBBookmark)
-    return toBookmark({ ...record, id: id as number })
-  }
-
-  async getBookmarks(pubId: number): Promise<Bookmark[]> {
-    const rows = await db.bookmarks
-      .where('publication_id')
-      .equals(pubId)
-      .toArray()
-    // Sort newest first
-    rows.sort((a, b) => b.created_at.localeCompare(a.created_at))
-    return rows.map(toBookmark)
-  }
-
-  async deleteBookmark(id: number): Promise<void> {
-    await db.bookmarks.delete(id)
-  }
-
-  async createHighlight(pubId: number, data: HighlightInput): Promise<Highlight> {
-    const record: Omit<DBHighlight, 'id'> = {
-      publication_id: pubId,
-      chapter_id: data.chapter_id,
-      segment_index: data.segment_index,
-      text: data.text,
-      color: data.color ?? 'yellow',
-      note: data.note ?? '',
-      created_at: nowIso(),
-    }
-    const id = await db.highlights.add(record as DBHighlight)
-    return toHighlight({ ...record, id: id as number })
-  }
-
-  async getHighlights(pubId: number): Promise<Highlight[]> {
-    const rows = await db.highlights
-      .where('publication_id')
-      .equals(pubId)
-      .toArray()
-    rows.sort((a, b) => b.created_at.localeCompare(a.created_at))
-    return rows.map(toHighlight)
-  }
-
-  async deleteHighlight(id: number): Promise<void> {
-    await db.highlights.delete(id)
-  }
 }
