@@ -128,14 +128,23 @@ async function tryOpfsWrite(
   }
 }
 
+/**
+ * Persist a blob to the Dexie blob_storage table. We convert to an
+ * ArrayBuffer first because iOS Safari's IndexedDB rejects Blob storage
+ * with "UnknownError: Error preparing Blob/File data to be stored in
+ * object store". ArrayBuffers structured-clone correctly across every
+ * engine we care about. The read helper reconstructs a Blob with the
+ * stored mime type.
+ */
 async function dexiePutBlob(
   key: string,
   blob: Blob,
   extra?: { mime?: string; filename?: string | null },
 ): Promise<void> {
+  const data = await blob.arrayBuffer()
   await db.blob_storage.put({
     key,
-    blob,
+    data,
     mime: extra?.mime ?? blob.type,
     filename: extra?.filename ?? null,
   })
@@ -143,7 +152,8 @@ async function dexiePutBlob(
 
 async function dexieGetBlob(key: string): Promise<Blob | null> {
   const row = await db.blob_storage.get(key)
-  return row?.blob ?? null
+  if (!row) return null
+  return new Blob([row.data], { type: row.mime ?? '' })
 }
 
 async function dexieDeleteByPrefix(prefix: string): Promise<void> {
@@ -247,11 +257,13 @@ export async function getBookFile(pubId: number): Promise<File | null> {
     /* fall through to Dexie */
   }
 
-  // Dexie fallback — the entire book file lives in blob_storage.
+  // Dexie fallback — the entire book file lives in blob_storage. We
+  // stored an ArrayBuffer (see dexiePutBlob); reconstruct a File from
+  // it with the saved mime type and filename.
   const row = await db.blob_storage.get(bookDexieKey(pubId))
   if (!row) return null
-  return new File([row.blob], row.filename ?? `book-${pubId}`, {
-    type: row.mime ?? row.blob.type,
+  return new File([row.data], row.filename ?? `book-${pubId}`, {
+    type: row.mime ?? '',
   })
 }
 

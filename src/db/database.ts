@@ -91,12 +91,19 @@ export interface DBReadingProgress {
  *   image:{pubId}:{name}    — inline EPUB image
  *   cover:{pubId}.{ext}     — book cover image
  *   book:{pubId}            — original ebook file
+ *
+ * IMPORTANT: We store an ArrayBuffer here, not a Blob. iOS Safari's IndexedDB
+ * implementation throws "UnknownError: Error preparing Blob/File data to be
+ * stored in object store" when you try to put a Blob directly. ArrayBuffers
+ * are structured-clonable across all engines and round-trip cleanly. The
+ * read path reconstructs a Blob from `data` + `mime` at retrieval time.
  */
 export interface DBBlobStorage {
   /** Namespaced key, see above. */
   key: string
-  blob: Blob
-  /** MIME type, kept so reads can rebuild a typed Blob if needed. */
+  /** Raw bytes. ArrayBuffer rather than Blob — see comment above. */
+  data: ArrayBuffer
+  /** MIME type, used to reconstruct a typed Blob on read. */
   mime?: string
   /** Original filename for book entries; null otherwise. */
   filename?: string | null
