@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Chapter } from '../api/client'
 import { getImageBlob } from '../lib/fileStorage'
 
@@ -11,63 +11,35 @@ interface FormattedViewProps {
   onVisibleSectionChange: (sectionIndex: number) => void
 }
 
+const OPFS_SRC_RE = /<img\s[^>]*?src=["']opfs:([^"']+)["']/gi
+
 /**
- * Walk an article element and replace every `<img src="opfs:NAME">` (or
- * <img data-opfs-src="NAME"> for already-resolved imgs that need re-resolving
- * after a cleanup) with a fresh blob URL fetched from OPFS. Returns the
- * array of created blob URLs so the caller can revoke them on unmount.
- *
- * The original opfs: marker is preserved on `data-opfs-src` so this function
- * is idempotent: it can be called repeatedly (e.g. after StrictMode's
- * intentional double-mount or after a re-render with a fresh chapters
- * reference) and will always re-resolve to a working blob URL.
+ * Walk every section's html, extract every unique `opfs:NAME` marker, and
+ * return the deduped list of names.
  */
-async function resolveOpfsImages(
-  publicationId: number,
-  root: HTMLElement,
-): Promise<string[]> {
-  const created: string[] = []
-  // Match either the raw `opfs:` marker (first resolution) OR the preserved
-  // `data-opfs-src` (subsequent resolutions after cleanup).
-  const imgs = root.querySelectorAll('img[src^="opfs:"], img[data-opfs-src]')
-  for (const img of Array.from(imgs)) {
-    let name = img.getAttribute('data-opfs-src') ?? ''
-    if (!name) {
-      const src = img.getAttribute('src') ?? ''
-      if (src.startsWith('opfs:')) {
-        name = src.slice('opfs:'.length)
-        // Preserve the original marker so we can re-resolve after cleanup.
-        img.setAttribute('data-opfs-src', name)
-      }
-    }
-    if (!name) continue
-    try {
-      const blob = await getImageBlob(publicationId, name)
-      if (blob) {
-        const url = URL.createObjectURL(blob)
-        img.setAttribute('src', url)
-        created.push(url)
-      } else {
-        console.warn('[formatted] image not found in OPFS', { publicationId, name })
-        img.removeAttribute('src')
-      }
-    } catch (err) {
-      console.warn('[formatted] image resolve failed', { name, err })
+function collectOpfsNames(chapters: Chapter[]): string[] {
+  const names = new Set<string>()
+  for (const ch of chapters) {
+    const html = ch.html
+    if (!html) continue
+    OPFS_SRC_RE.lastIndex = 0
+    let m
+    while ((m = OPFS_SRC_RE.exec(html)) !== null) {
+      names.add(m[1])
     }
   }
-  return created
+  return [...names]
 }
 
 /**
  * Continuous-scroll formatted view (PRD §4.3) for HTML-derived books.
  *
- * Renders every section's sanitized HTML stacked vertically inside a centered
- * column. Each section is wrapped in `<article id="section-{N}">` so the
- * reader can scroll-into-view by anchor (PRD §5.3).
- *
- * Anchor mapping is currently section-level: switching back to plain view
- * lands the cursor at the topmost visible section. Per-paragraph precision
- * is PRD §10 future work.
+ * Image loading strategy: at mount we extract every unique `opfs:NAME` marker
+ * from all section HTML, fetch the blobs from OPFS in parallel, and build a
+ * Map<name, blobUrl>. The section HTML is then rewritten via simple string
+ * substitution BEFORE being passed to dangerouslySetInnerHTML. This avoids
+ * the fragile post-render DOM-mutation pattern that broke under StrictMode
+ * and on subsequent re-renders triggered by scrolling.
  */
 export default function FormattedView({
   publicationId,
@@ -79,49 +51,78 @@ export default function FormattedView({
   const sectionRefs = useRef<Map<number, HTMLElement>>(new Map())
   const isProgrammaticScrollRef = useRef(false)
 
-  // OPFS image resolution with StrictMode-safe URL lifecycle.
-  //
-  // The challenge: React StrictMode in dev intentionally double-mounts every
-  // effect (mount → cleanup → re-mount) to surface bugs. Naive cleanup
-  // revokes blob URLs that are still in use by the *real* mount on the
-  // other side of the simulated unmount.
-  //
-  // Solution: track URLs in a ref that survives re-mounts. On cleanup,
-  // schedule a deferred revoke via setTimeout(0) so a re-mount can cancel
-  // it. resolveOpfsImages() is also idempotent (preserves the original
-  // marker on data-opfs-src), so it can re-resolve any image whose URL was
-  // accidentally revoked.
+  // Resolved name → blob URL.
+  const [imageMap, setImageMap] = useState<Map<string, string>>(new Map())
   const createdUrlsRef = useRef<string[]>([])
-  const pendingRevokeRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  // Load every OPFS image once when the publication mounts.
   useEffect(() => {
-    // Cancel any pending revoke from a prior strict-mode cleanup.
-    if (pendingRevokeRef.current) {
-      clearTimeout(pendingRevokeRef.current)
-      pendingRevokeRef.current = null
-    }
-
     let cancelled = false
+    const names = collectOpfsNames(chapters)
+    if (!names.length) {
+      setImageMap(new Map())
+      return
+    }
     ;(async () => {
-      for (const el of sectionRefs.current.values()) {
+      const next = new Map<string, string>()
+      const created: string[] = []
+      for (const name of names) {
         if (cancelled) break
-        const urls = await resolveOpfsImages(publicationId, el)
-        createdUrlsRef.current.push(...urls)
+        try {
+          const blob = await getImageBlob(publicationId, name)
+          if (blob) {
+            const url = URL.createObjectURL(blob)
+            next.set(name, url)
+            created.push(url)
+          } else {
+            console.warn('[formatted] image not found in OPFS', { publicationId, name })
+          }
+        } catch (err) {
+          console.warn('[formatted] image resolve failed', { name, err })
+        }
+      }
+      if (!cancelled) {
+        // Stash the created URLs so we can revoke on unmount.
+        createdUrlsRef.current = created
+        setImageMap(next)
+      } else {
+        // We were cancelled before commit; clean up our handles.
+        for (const url of created) URL.revokeObjectURL(url)
       }
     })()
-
     return () => {
       cancelled = true
-      // Defer revoke. If a re-mount happens within this tick (StrictMode),
-      // it will cancel the timeout above.
-      const toRevoke = createdUrlsRef.current
-      createdUrlsRef.current = []
-      pendingRevokeRef.current = setTimeout(() => {
-        for (const url of toRevoke) URL.revokeObjectURL(url)
-        pendingRevokeRef.current = null
-      }, 0)
     }
   }, [publicationId, chapters])
+
+  // Revoke blob URLs only when the publication itself changes or on true
+  // unmount. We never revoke between cleanup-and-resetup of the same mount,
+  // so scrolling / chapter prop changes never invalidate the visible images.
+  useEffect(() => {
+    return () => {
+      for (const url of createdUrlsRef.current) URL.revokeObjectURL(url)
+      createdUrlsRef.current = []
+    }
+  }, [publicationId])
+
+  // Pre-rewrite each section's HTML by string-replacing every `opfs:NAME`
+  // src with its resolved blob URL. Memoized on (chapters, imageMap) so
+  // we don't re-build on every parent re-render.
+  const rewrittenSections = useMemo(() => {
+    return chapters.map((ch) => {
+      const html = ch.html ?? ''
+      if (!html || imageMap.size === 0) return { ch, html }
+      const rewritten = html.replace(
+        /(<img\s[^>]*?src=["'])opfs:([^"']+)(["'])/gi,
+        (match, head: string, name: string, tail: string) => {
+          const url = imageMap.get(name)
+          if (!url) return match // leave the marker; the broken-img icon
+          return `${head}${url}${tail}`
+        },
+      )
+      return { ch, html: rewritten }
+    })
+  }, [chapters, imageMap])
 
   // Scroll the current section into view whenever the cursor changes
   // externally (e.g. user toggled from plain → formatted).
@@ -130,8 +131,6 @@ export default function FormattedView({
     if (!el) return
     isProgrammaticScrollRef.current = true
     el.scrollIntoView({ block: 'start', behavior: 'auto' })
-    // Wait one frame for the scroll to settle before re-enabling
-    // intersection-observer-driven section reporting.
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         isProgrammaticScrollRef.current = false
@@ -147,8 +146,6 @@ export default function FormattedView({
     const observer = new IntersectionObserver(
       (entries) => {
         if (isProgrammaticScrollRef.current) return
-        // Pick the entry whose top is closest to (but not below) the
-        // container's top edge.
         let bestIdx = -1
         let bestTop = -Infinity
         for (const entry of entries) {
@@ -179,7 +176,7 @@ export default function FormattedView({
   return (
     <div className="formatted-view" ref={containerRef}>
       <div className="formatted-view__column">
-        {chapters.map((ch, idx) => (
+        {rewrittenSections.map(({ ch, html }, idx) => (
           <article
             key={ch.id}
             id={`section-${idx}`}
@@ -191,11 +188,12 @@ export default function FormattedView({
             className="formatted-view__section"
           >
             <h1 className="formatted-view__title">{ch.title || 'Untitled'}</h1>
-            {ch.html ? (
+            {html ? (
               <div
                 className="formatted-view__body"
-                // The HTML was sanitized at parse time (src/lib/sanitize.ts).
-                dangerouslySetInnerHTML={{ __html: ch.html }}
+                // The HTML was sanitized at parse time (src/lib/sanitize.ts)
+                // and image opfs: markers have been pre-resolved to blob URLs.
+                dangerouslySetInnerHTML={{ __html: html }}
               />
             ) : (
               <p className="formatted-view__empty">No formatted content available for this section.</p>
