@@ -656,6 +656,52 @@ function ActiveReader({
     }
   }, [showFormattedView]);
 
+  /**
+   * Mid-play handoff between focus-mode and formatted-mode engines.
+   *
+   * When the user toggles displayMode while a scroll/track engine is
+   * playing, the active engine flips from one variant to the other. The
+   * outgoing engine is still running its rAF loop against a container ref
+   * that's about to disappear (or already has). At minimum we need to pause
+   * it cleanly so it stops trying to write scrollTop on a stale element and
+   * the engine-driving flag clears.
+   *
+   * For MVP we don't auto-resume on the incoming engine — the user can hit
+   * Play again. This matches how phrase/RSVP behave when displayMode toggles
+   * mid-play (no automatic resume). Auto-resume is a fast-follow.
+   *
+   * Tracks the previous value of useFormattedEngines via a ref so the
+   * effect only acts on the actual transition, not on every render.
+   */
+  const prevUseFormattedRef = useRef(useFormattedEngines);
+  useEffect(() => {
+    const prev = prevUseFormattedRef.current;
+    prevUseFormattedRef.current = useFormattedEngines;
+    if (prev === useFormattedEngines) return;
+
+    if (useFormattedEngines) {
+      // Just entered formatted view. Pause whichever focus-mode engine
+      // was running for the current readingMode.
+      if (readingMode === 'scroll' && scrollState.isPlaying) {
+        scrollActions.pause();
+      } else if (readingMode === 'track' && trackState.isPlaying) {
+        trackActions.pause();
+      }
+    } else {
+      // Just left formatted view. Pause the formatted-mode engines via
+      // their wrapped pause so setEngineDriving(false) fires.
+      if (readingMode === 'scroll' && formattedScrollState.isPlaying) {
+        formattedScrollActions.pause();
+      } else if (readingMode === 'track' && formattedTrackState.isPlaying) {
+        formattedTrackActions.pause();
+      }
+    }
+    // The handoff is keyed solely on useFormattedEngines flipping; the
+    // engine isPlaying flags are read at flip time but we don't want the
+    // effect to fire every time they change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [useFormattedEngines]);
+
   // trackedSegmentIndexRef declared earlier, before chapter change reset
 
   /* ---- Initial seek: apply once when segments first load ---- */
