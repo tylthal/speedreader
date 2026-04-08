@@ -536,14 +536,19 @@ function ActiveReader({
   //      formatted view's bodies just landed/grew, retry the scroll
   //      against the now-real section geometry.
   //
-  // The engine path is suppressed during play because the engine is
-  // pushing scrollTop directly each frame (scroll/track) or the
-  // formatted view isn't visible (phrase/rsvp).
+  // pendingScrollRef survives multiple effect re-runs while we wait
+  // for layout. Cleared on a successful scroll, on showFormattedView
+  // false, or on user-scroll commits (user pre-empts).
   //
-  // pendingScrollRef is the "we want to scroll but haven't been able
-  // to yet" latch. Set on transition-in or external cursor move,
-  // cleared once a successful scroll lands. Survives multiple effect
-  // re-runs while waiting for layout to settle.
+  // ROBUSTNESS: instead of relying solely on layoutVersion to fire
+  // the retry, the effect ALSO does its own rAF polling loop. On the
+  // pause-from-phrase path, FormattedView remounts with empty body
+  // divs and the layoutVersion handoff (FormattedView → onLayoutChange
+  // → setLayoutVersion → parent re-render → effect re-fire) goes
+  // through several React passes. The poll cuts that loop short by
+  // checking the section height every frame and committing the
+  // scroll the moment the body content lands. Capped at ~60 frames
+  // so a never-loading section doesn't burn CPU forever.
   const pendingScrollRef = useRef(false);
   const wasFormattedRef = useRef(false);
   useEffect(() => {
@@ -555,14 +560,15 @@ function ActiveReader({
       return;
     }
 
-    // Detect transitions to mark a scroll as pending. We track three
-    // distinct sources that should trigger a scroll:
-    //   - showFormattedView just flipped true (transitionedIn)
-    //   - cursor commit with a non-engine non-user-scroll origin
     const transitionedIn = !wasFormattedRef.current;
     wasFormattedRef.current = true;
     if (transitionedIn) pendingScrollRef.current = true;
-    if (cursorOrigin !== 'user-scroll' && cursorOrigin !== 'engine') {
+    if (cursorOrigin === 'user-scroll') {
+      // User is driving — abandon any pending auto-scroll.
+      pendingScrollRef.current = false;
+      return;
+    }
+    if (cursorOrigin !== 'engine') {
       pendingScrollRef.current = true;
     }
 
@@ -573,16 +579,45 @@ function ActiveReader({
     if (segs.length === 0 || arrIdx == null) return;
 
     let cancelled = false;
-    const raf = requestAnimationFrame(() => {
+    let rafHandle = 0;
+    let attempts = 0;
+    const maxAttempts = 60; // ~1 second at 60fps
+
+    const tryScroll = () => {
       if (cancelled) return;
+      attempts += 1;
+      if (!pendingScrollRef.current) return;
+
       const container = handle.getScrollContainer();
-      if (!container) return;
+      const sectionEl = handle.getSectionEl(chapterIdx);
+      if (!container || !sectionEl) {
+        if (attempts < maxAttempts) {
+          rafHandle = requestAnimationFrame(tryScroll);
+        }
+        return;
+      }
+      // Wait until the body innerHTML has actually landed. On a
+      // remount after pause-from-phrase the section is just a title
+      // h1 (~30 px) for several frames while the image loader
+      // resolves and the innerHTML write fires.
+      if (sectionEl.getBoundingClientRect().height < 80) {
+        if (attempts < maxAttempts) {
+          rafHandle = requestAnimationFrame(tryScroll);
+        }
+        return;
+      }
+
       // Use the SAME highlight pipeline to get the segment's geometry —
       // word-accurate when the matcher succeeds, proportional fallback
       // when it doesn't. This guarantees the scroll target and the
       // visible band stay aligned.
       const info = handle.setHighlightForSegment(chapterIdx, arrIdx, segs);
-      if (!info) return; // section not yet laid out — wait for layoutVersion bump
+      if (!info) {
+        if (attempts < maxAttempts) {
+          rafHandle = requestAnimationFrame(tryScroll);
+        }
+        return;
+      }
 
       const segCenterY = info.topPx + info.heightPx / 2;
       const viewportH = container.clientHeight;
@@ -599,10 +634,12 @@ function ActiveReader({
           : 'smooth';
       container.scrollTo({ top: clamped, behavior });
       pendingScrollRef.current = false;
-    });
+    };
+
+    rafHandle = requestAnimationFrame(tryScroll);
     return () => {
       cancelled = true;
-      cancelAnimationFrame(raf);
+      if (rafHandle) cancelAnimationFrame(rafHandle);
     };
   }, [
     showFormattedView,
