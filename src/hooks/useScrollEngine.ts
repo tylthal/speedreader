@@ -322,16 +322,21 @@ export function useScrollEngine(
     lastTimestampRef.current = 0;
     onSegmentChangeRef.current?.(clamped);
 
-    // Scroll the container to center this segment
+    // Scroll the container to center this segment (focus mode only —
+    // the formatted variants leave items empty and rely on the
+    // proportional cursor mapping instead).
     const items = itemOffsetsRef.current;
-    if (items) {
+    if (items && items.size > 0) {
       const el = items.get(clamped);
       if (el) {
         el.scrollIntoView({ block: 'center', behavior: 'instant' });
       }
     }
-    // Re-sync the float accumulator after the seek so the next tick doesn't
-    // jump back to the pre-seek position.
+    // Re-sync the float accumulator after the seek so the next tick
+    // doesn't write the stale pre-seek position. Critical for the
+    // formatted variants: items is empty there, so the scrollIntoView
+    // branch above is skipped, but the next tick still reads
+    // scrollPositionRef and snaps the container back if we don't sync.
     if (containerRef.current) {
       scrollPositionRef.current = containerRef.current.scrollTop;
     }

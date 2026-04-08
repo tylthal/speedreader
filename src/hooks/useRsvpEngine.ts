@@ -198,6 +198,9 @@ export function useRsvpEngine(
   const pause = useCallback(() => {
     setIsPlaying(false);
     stopLoop();
+    // Cancel any pending auto-resume from the waiting-for-segments
+    // path. See usePlaybackEngine.pause for the rationale.
+    waitingForSegmentsRef.current = false;
   }, [stopLoop]);
 
   const togglePlayPause = useCallback(() => {

@@ -377,17 +377,19 @@ export function useTrackEngine(
     onSegmentChangeRef.current?.(clamped);
 
     const items = itemOffsetsRef.current;
-    if (items) {
+    if (items && items.size > 0) {
       const el = items.get(clamped);
       if (el) {
         el.scrollIntoView({ block: 'center', behavior: 'instant' });
-        // Sync the float accumulator so the rAF loop doesn't jump back
-        // to the old scroll position on the next tick.
-        const container = containerRef.current;
-        if (container) {
-          scrollPositionRef.current = container.scrollTop;
-        }
       }
+    }
+    // Always sync the float accumulator after the seek — the formatted
+    // variants leave items empty, so without this sync the next tick
+    // would write the stale scrollPositionRef back to scrollTop and
+    // snap the container to the pre-seek position.
+    const container = containerRef.current;
+    if (container) {
+      scrollPositionRef.current = container.scrollTop;
     }
   }, [itemOffsetsRef, containerRef]);
 

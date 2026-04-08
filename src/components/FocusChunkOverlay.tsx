@@ -118,8 +118,14 @@ function PausedScrollView({
   // Throttled via rAF to run at most once per frame, and onSeek is
   // debounced to avoid re-rendering the entire tree on every scroll frame.
   const rafPending = useRef(false);
+  const rafHandleRef = useRef<number>(0);
   const pendingSeekIdx = useRef(currentIndex);
   const seekDebounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+  // Flips true on unmount so any rAF that survived the cancel — and any
+  // already-queued debounce timeout the unmount cleanup couldn't reach
+  // in time — refuses to dispatch a stale onSeek into the next-mounted
+  // playing view.
+  const unmountedRef = useRef(false);
 
   // Keep refs to current values so the unmount cleanup isn't stale
   const currentIndexRef = useRef(currentIndex);
@@ -136,8 +142,10 @@ function PausedScrollView({
     // Throttle to one layout read per frame
     if (!rafPending.current) {
       rafPending.current = true;
-      requestAnimationFrame(() => {
+      rafHandleRef.current = requestAnimationFrame(() => {
         rafPending.current = false;
+        rafHandleRef.current = 0;
+        if (unmountedRef.current) return;
         // Re-check the programmatic-scroll flag inside the rAF too:
         // a programmatic scroll started after handleScroll's outer
         // check but before the rAF body would otherwise run, racing
@@ -185,6 +193,7 @@ function PausedScrollView({
         // Debounce the actual seek to avoid constant re-renders
         clearTimeout(seekDebounceRef.current);
         seekDebounceRef.current = setTimeout(() => {
+          if (unmountedRef.current) return;
           if (pendingSeekIdx.current !== currentIndexRef.current) {
             onSeekRef.current(pendingSeekIdx.current);
           }
@@ -199,11 +208,26 @@ function PausedScrollView({
 
   // Flush any pending debounced seek on unmount so currentIndex is up-to-date
   // before ScrollPlayingView mounts (e.g. user scrolled then immediately hit Play).
+  // Also cancel any in-flight rAF and the scroll-end timeout so a late
+  // callback can't dispatch a stale onSeek into the next-mounted playing
+  // view. unmountedRef gates the rAF/debounce closures themselves so any
+  // callback we couldn't cancel in time refuses to act.
   useEffect(() => {
     return () => {
+      unmountedRef.current = true;
+      if (rafHandleRef.current) {
+        cancelAnimationFrame(rafHandleRef.current);
+        rafHandleRef.current = 0;
+      }
       clearTimeout(seekDebounceRef.current);
-      if (pendingSeekIdx.current !== currentIndexRef.current) {
-        onSeekRef.current(pendingSeekIdx.current);
+      clearTimeout(scrollTimeout.current);
+      // Final flush BEFORE marking unmounted... wait, we already set
+      // it above. Re-order: take a snapshot of pendingSeekIdx, do the
+      // flush, then nothing else can run.
+      const pending = pendingSeekIdx.current;
+      const current = currentIndexRef.current;
+      if (pending !== current) {
+        onSeekRef.current(pending);
       }
     };
   }, []);

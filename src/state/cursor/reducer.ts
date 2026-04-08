@@ -281,12 +281,27 @@ export function cursorReducer(
         reset = true,
         absoluteSegmentIndex,
       } = action.payload
+      const targetAbs = reset ? 0 : absoluteSegmentIndex ?? 0
+      // No-op if the cursor already points at this exact location.
+      // Without this short-circuit, an IntersectionObserver fire that
+      // arrives moments after a TOC_JUMP (because the freshly-mounted
+      // section is now in view) would commit a redundant CHAPTER_NAV
+      // and bump revision, re-firing every align effect for nothing.
+      if (
+        state.cursor.chapterId === chapterId &&
+        state.cursor.chapterIdx === chapterIdx &&
+        state.cursor.absoluteSegmentIndex === targetAbs &&
+        state.cursor.wordIndex === 0 &&
+        state.restore.status === 'live'
+      ) {
+        return state
+      }
       const next = commit(
         state,
         {
           chapterId,
           chapterIdx,
-          absoluteSegmentIndex: reset ? 0 : absoluteSegmentIndex ?? 0,
+          absoluteSegmentIndex: targetAbs,
           wordIndex: 0,
         },
         'chapter-nav',

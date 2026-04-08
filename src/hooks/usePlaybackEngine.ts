@@ -157,6 +157,10 @@ export function usePlaybackEngine(
   const pause = useCallback(() => {
     setIsPlaying(false);
     stopLoop();
+    // Cancel any pending auto-resume from the waiting-for-segments
+    // path. Without this, a prefetch landing after a manual pause
+    // would re-fire play() against the user's intent.
+    waitingForSegmentsRef.current = false;
   }, [stopLoop]);
 
   const togglePlayPause = useCallback(() => {
@@ -186,7 +190,12 @@ export function usePlaybackEngine(
     setWpmState((prev) => clampWpm(prev + delta));
   }, []);
 
-  // Auto-resume when new segments arrive after waiting for prefetch
+  // Auto-resume when new segments arrive after waiting for prefetch.
+  // waitingForSegmentsRef flips true only inside tick when the engine
+  // ran out of loaded segments and auto-paused itself. The explicit
+  // pause() action below clears the flag, so a user-initiated pause
+  // cancels the pending auto-resume — without that, a prefetch landing
+  // during a manual pause would yank playback back on.
   useEffect(() => {
     if (waitingForSegmentsRef.current && segments.length > currentIndexRef.current) {
       waitingForSegmentsRef.current = false;

@@ -548,7 +548,14 @@ function ActiveReader({
    */
   const startFormattedPlay = useCallback(
     (raw: { play: () => void }) => {
-      formattedCursorMonoRef.current = 0;
+      // Seed the monotonic forward clamp to the cursor's CURRENT array
+      // index, not 0. The proportional cursor mapping inside
+      // formattedScrollTick can return idx-1 on the very first tick due
+      // to rounding or late image-height shifts; without this seed the
+      // clamp would let the cursor slide backward by one segment on
+      // every resume.
+      const startArr = translators.absoluteToArrayIndex(cursorAbsIdx) ?? 0;
+      formattedCursorMonoRef.current = startArr;
       const handle = formattedViewRef.current;
       if (!handle) {
         raw.play();
@@ -568,7 +575,7 @@ function ActiveReader({
           raw.play();
         });
     },
-    [cursorChapterIdx],
+    [cursorChapterIdx, cursorAbsIdx, translators],
   );
 
   const formattedScrollActions = useMemo(
@@ -860,16 +867,27 @@ function ActiveReader({
   ]);
 
   /* ---- Auto-play after chapter auto-advance ---- */
+  // Fired by onPlaybackComplete via autoAdvanceRef. We need to wait
+  // for TWO things before calling play():
+  //   1. The new chapter's segments to load (loaderState.segments.length > 0)
+  //   2. The active engine to have aligned to abs=0 of the new chapter
+  //      (activeArrayIdx === 0 — derived from the cursor selector, which
+  //      reflects the engine's local seek after useCursorAlignedEngine
+  //      fired)
+  // The previous implementation used setTimeout(300) as a guess; on a
+  // slow segment fetch the engine still pointed at the END of the OLD
+  // chapter, and play() resumed from there. Polling activeArrayIdx is
+  // deterministic and falls out of the existing render cycle.
   useEffect(() => {
     if (!isLive) return;
-    if (autoAdvanceRef.current && loaderState.segments.length > 0) {
-      autoAdvanceRef.current = false;
-      // The cursor is already at abs=0 of the new chapter (from
-      // CHAPTER_NAV in onPlaybackComplete). All engines will have
-      // aligned via useCursorAlignedEngine. Just resume playback.
-      setTimeout(() => wrappedActiveActions.play(), 300);
-    }
-  }, [loaderState.segments, isLive, wrappedActiveActions]);
+    if (!autoAdvanceRef.current) return;
+    if (loaderState.segments.length === 0) return;
+    if (activeArrayIdx !== 0) return;
+    autoAdvanceRef.current = false;
+    // Defer to next microtask so the current render's commit lands
+    // before play() reads engine state.
+    queueMicrotask(() => wrappedActiveActions.play());
+  }, [loaderState.segments, isLive, wrappedActiveActions, activeArrayIdx]);
 
   /* ---- Mode switching: dispatch + setReadingMode ---- */
   // No more cross-engine seekTo. The cursor stays put; MODE_SWITCH
