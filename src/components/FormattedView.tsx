@@ -32,15 +32,27 @@ interface FormattedViewProps {
 }
 
 /**
- * Imperative handle exposed via forwardRef. After the cursor refactor
- * the surface shrunk significantly:
+ * Translucent band painted at the current segment's vertical range.
+ * Coordinates are in scroll-container space (already include scrollTop)
+ * so the band scrolls with the content. Computed by ReaderViewport
+ * from the cursor and pushed in via the imperative handle below; the
+ * component itself stays ignorant of positionStore so the innerHTML
+ * write path doesn't intersect any new render paths.
+ */
+export interface HighlightBand {
+  topPx: number
+  heightPx: number
+}
+
+/**
+ * Imperative handle exposed via forwardRef. The surface stays minimal —
+ * ReaderViewport reaches in for the things that can't be expressed as
+ * props without forcing a re-render of the section innerHTML write path.
+ *
  *   - Scroll container + section element for the cursor mapping math
  *   - rebuildProfile / settleImages for the play-time layout settle
  *   - scrollSectionIntoView for explicit nav (TOC click, chapter buttons)
- *
- * setEngineDriving and markReported are gone — the IntersectionObserver
- * no longer fights an engine-driving feedback loop because alignment is
- * gated on cursor.origin upstream in ReaderViewport.
+ *   - setHighlightBand for the current-segment highlight overlay
  */
 export interface FormattedViewHandle {
   getScrollContainer: () => HTMLDivElement | null
@@ -48,6 +60,8 @@ export interface FormattedViewHandle {
   rebuildProfile: () => void
   settleImages: (sectionIdx: number) => Promise<void>
   scrollSectionIntoView: (idx: number) => void
+  /** Set or clear the current-segment highlight band. Pass null to hide. */
+  setHighlightBand: (band: HighlightBand | null) => void
 }
 
 const OPFS_SRC_RE = /<img\s[^>]*?src=["']opfs:([^"']+)["']/gi
@@ -215,6 +229,12 @@ const FormattedView = forwardRef<FormattedViewHandle, FormattedViewProps>(functi
   const tapHandlers = useContentTap(onTap)
   const containerRef = useRef<HTMLDivElement>(null)
   const sectionRefs = useRef<Map<number, HTMLElement>>(new Map())
+  // Current-segment highlight band. Imperatively set via the handle —
+  // ReaderViewport owns the cursor subscription and computes the band
+  // from positionStore + section layout. Keeping the state here means
+  // the band can re-render in isolation without re-rendering the
+  // section innerHTML write path.
+  const [highlightBand, setHighlightBand] = useState<HighlightBand | null>(null)
   // Suppression flag for the IntersectionObserver below — flipped on
   // by scrollSectionIntoView() while a programmatic scroll is in flight,
   // cleared on scrollend (with a 400ms timer fallback). Without this,
@@ -524,6 +544,9 @@ const FormattedView = forwardRef<FormattedViewHandle, FormattedViewProps>(functi
           }),
         )
       },
+      setHighlightBand: (band) => {
+        setHighlightBand(band)
+      },
     }),
     // velocityProfileRef is stable across renders (it's a ref) so we don't
     // need to re-derive the handle when it changes.
@@ -536,6 +559,16 @@ const FormattedView = forwardRef<FormattedViewHandle, FormattedViewProps>(functi
 
   return (
     <div className="formatted-view" ref={containerRef} {...tapHandlers}>
+      {highlightBand && (
+        <div
+          className="formatted-view__highlight"
+          aria-hidden="true"
+          style={{
+            top: `${highlightBand.topPx}px`,
+            height: `${highlightBand.heightPx}px`,
+          }}
+        />
+      )}
       {diagEnabled && imageDiag && (
         <div
           style={{

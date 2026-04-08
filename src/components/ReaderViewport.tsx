@@ -465,6 +465,98 @@ function ActiveReader({
     });
   }, [showFormattedView, chapterIdx, cursorOrigin, cursorRevision]);
 
+  /* ---- Current-segment highlight band + auto-scroll-to-cursor ---- */
+  // Recomputes the highlight band whenever cursor position or layout
+  // changes, and scrolls the container so the band lands at ~40% down
+  // the viewport. Single effect, single source of truth (positionStore).
+  // Behavior key:
+  //   - cursorOrigin === 'engine'     → engine drives scrollTop directly,
+  //                                     update band only, do NOT scroll
+  //   - cursorOrigin === 'user-scroll'→ user is driving, do nothing
+  //                                     (band already follows their scroll
+  //                                     via the next non-user-scroll commit)
+  //   - cursorOrigin === 'restore'    → cold open, instant scroll
+  //   - cursorOrigin === 'display-mode'/'mode-switch' → instant
+  //   - everything else (toc/chapter-nav/user-seek) → smooth
+  useEffect(() => {
+    if (!showFormattedView) return;
+    if (cursorOrigin === 'user-scroll') return;
+    const handle = formattedViewRef.current;
+    if (!handle) return;
+    const segs = loaderState.segments;
+    if (segs.length === 0) {
+      handle.setHighlightBand(null);
+      return;
+    }
+    const arrIdx = translators.absoluteToArrayIndex(absoluteSegmentIndex);
+    if (arrIdx == null) {
+      handle.setHighlightBand(null);
+      return;
+    }
+
+    // Defer one frame so the chapter-into-view scroll above (if it
+    // ran in the same commit) lands first. Section geometry is read
+    // AFTER that scroll settles.
+    let cancelled = false;
+    const raf = requestAnimationFrame(() => {
+      if (cancelled) return;
+      const container = handle.getScrollContainer();
+      const sectionEl = handle.getSectionEl(chapterIdx);
+      if (!container || !sectionEl) return;
+      const containerRect = container.getBoundingClientRect();
+      const sectionRect = sectionEl.getBoundingClientRect();
+      const sectionTop =
+        sectionRect.top - containerRect.top + container.scrollTop;
+      const sectionH = sectionRect.height;
+      const segCount = segs.length;
+      const bandTop = sectionTop + (arrIdx / segCount) * sectionH;
+      const bandHeight = Math.max(2, sectionH / segCount);
+      handle.setHighlightBand({ topPx: bandTop, heightPx: bandHeight });
+
+      // Scroll only when something other than the engine moved the
+      // cursor. Engine ticks during scroll/track playback already
+      // own scrollTop directly.
+      if (cursorOrigin === 'engine') return;
+
+      const segCenterY = bandTop + bandHeight / 2;
+      const viewportH = container.clientHeight;
+      const targetScroll = segCenterY - viewportH * 0.4;
+      const maxScroll = Math.max(0, container.scrollHeight - viewportH);
+      const clamped = Math.max(0, Math.min(targetScroll, maxScroll));
+
+      // Skip the scroll if we're already within half a viewport — the
+      // text is visible and yanking it would be jarring. The band still
+      // updates so the user sees where they are.
+      if (Math.abs(clamped - container.scrollTop) < viewportH * 0.5 &&
+          cursorOrigin !== 'restore' &&
+          cursorOrigin !== 'display-mode') {
+        return;
+      }
+
+      const behavior: ScrollBehavior =
+        cursorOrigin === 'restore' ||
+        cursorOrigin === 'display-mode' ||
+        cursorOrigin === 'mode-switch'
+          ? 'auto'
+          : 'smooth';
+      container.scrollTo({ top: clamped, behavior });
+    });
+
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(raf);
+    };
+  }, [
+    showFormattedView,
+    absoluteSegmentIndex,
+    chapterIdx,
+    cursorOrigin,
+    cursorRevision,
+    isPlaying,
+    loaderState.segments,
+    translators,
+  ]);
+
   const handlePrevChapter = useCallback(() => {
     if (chapterIdx > 0) navigateToSection(chapterIdx - 1);
   }, [chapterIdx, navigateToSection]);
