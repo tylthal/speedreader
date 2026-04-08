@@ -552,19 +552,25 @@ function ActiveReader({
   const pendingScrollRef = useRef(false);
   const wasFormattedRef = useRef(false);
   useEffect(() => {
-    const handle = formattedViewRef.current;
-    if (!handle) return;
+    // CRITICAL: this cleanup branch must run BEFORE the handle check.
+    // When the user starts playing in phrase/RSVP, showFormattedView
+    // flips false → FormattedView unmounts → formattedViewRef.current
+    // becomes null. If we bailed on the null handle first,
+    // wasFormattedRef would stay true forever, and the next pause
+    // would see transitionedIn=false → pending never set → no auto-
+    // scroll. Reset the latches before any other check.
     if (!showFormattedView) {
       wasFormattedRef.current = false;
       pendingScrollRef.current = false;
       return;
     }
+    const handle = formattedViewRef.current;
+    if (!handle) return;
 
     const transitionedIn = !wasFormattedRef.current;
     wasFormattedRef.current = true;
     if (transitionedIn) pendingScrollRef.current = true;
     if (cursorOrigin === 'user-scroll') {
-      // User is driving — abandon any pending auto-scroll.
       pendingScrollRef.current = false;
       return;
     }
@@ -581,7 +587,7 @@ function ActiveReader({
     let cancelled = false;
     let rafHandle = 0;
     let attempts = 0;
-    const maxAttempts = 60; // ~1 second at 60fps
+    const maxAttempts = 120; // ~2 seconds at 60fps
 
     const tryScroll = () => {
       if (cancelled) return;
