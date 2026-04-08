@@ -62,172 +62,110 @@ function PausedScrollView({
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const itemRefs = useRef<Map<number, HTMLDivElement>>(new Map());
-  const isUserScrolling = useRef(false);
-  const scrollTimeout = useRef<ReturnType<typeof setTimeout>>(undefined);
+  // Suppression flag for handleScroll while a programmatic scroll
+  // (initial mount or external currentIndex change) is in flight.
+  // Cleared on the real scrollend event, with a 1500ms fallback for
+  // browsers that don't fire scrollend.
   const programmaticScroll = useRef(false);
-  // Tracks whether the initial mount scroll has run. The "scroll on
-  // currentIndex change" effect must skip the first render — otherwise
-  // it races the initial-mount instant scroll with a smooth scroll
-  // whose animation outlasts the programmatic-scroll cooldown, and
-  // handleScroll's mid-animation snapshot fires onSeek with the wrong
-  // index. That was the "stops in the wrong place" bug.
   const initialScrollDoneRef = useRef(false);
 
-  // Helper: clear programmaticScroll on the real scrollend event (with
-  // a generous fallback for browsers without scrollend support). The
-  // earlier 100/500ms timeouts were both shorter than the in-flight
-  // smooth-scroll animation, so handleScroll could fire mid-animation
-  // with the flag already cleared.
-  const clearProgrammaticOn = useCallback((container: HTMLDivElement | null) => {
+  const armProgrammaticGuard = useCallback(() => {
+    const container = containerRef.current;
+    programmaticScroll.current = true;
     const cleanup = () => {
       programmaticScroll.current = false;
       container?.removeEventListener('scrollend', cleanup as EventListener);
     };
     container?.addEventListener('scrollend', cleanup as EventListener, { once: true });
-    // Fallback: 1500ms is longer than any reasonable smooth scroll animation.
     setTimeout(cleanup, 1500);
   }, []);
 
-  // Initial scroll (instant, no animation). Runs once on mount.
+  // Initial scroll (instant). Runs once on mount.
   useEffect(() => {
     const el = itemRefs.current.get(currentIndex);
     if (el) {
-      programmaticScroll.current = true;
+      armProgrammaticGuard();
       el.scrollIntoView({ block: 'center', behavior: 'instant' });
-      clearProgrammaticOn(containerRef.current);
     }
     initialScrollDoneRef.current = true;
-    // Only on mount
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Scroll to current index when it changes from an external seek.
-  // Skips the very first render — the initial-mount effect above owns
-  // that. After mount we use smooth scroll for visual continuity.
+  // Scroll to current index when it changes from an external seek
+  // (keyboard, scrubber, etc). Skips the first render — the initial
+  // mount effect above owns it. After mount we use smooth for visual
+  // continuity.
   useEffect(() => {
     if (!initialScrollDoneRef.current) return;
     const el = itemRefs.current.get(currentIndex);
-    if (el && !isUserScrolling.current) {
-      programmaticScroll.current = true;
+    if (el) {
+      armProgrammaticGuard();
       el.scrollIntoView({ block: 'center', behavior: 'smooth' });
-      clearProgrammaticOn(containerRef.current);
     }
-  }, [currentIndex, clearProgrammaticOn]);
+  }, [currentIndex, armProgrammaticGuard]);
 
-  // Detect which segment is closest to center on scroll.
-  // Throttled via rAF to run at most once per frame, and onSeek is
-  // debounced to avoid re-rendering the entire tree on every scroll frame.
+  // Detect which segment is closest to viewport center on user scroll.
+  // rAF-throttled to one layout read per frame; calls onSeek directly
+  // (no debounce) — positionStore.setPosition dedupes on equal values
+  // so a stable scroll doesn't churn re-renders. The store is the
+  // source of truth, so there's no need for an unmount flush.
   const rafPending = useRef(false);
   const rafHandleRef = useRef<number>(0);
-  const pendingSeekIdx = useRef(currentIndex);
-  const seekDebounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
-  // Flips true on unmount so any rAF that survived the cancel — and any
-  // already-queued debounce timeout the unmount cleanup couldn't reach
-  // in time — refuses to dispatch a stale onSeek into the next-mounted
-  // playing view.
-  const unmountedRef = useRef(false);
-
-  // Keep refs to current values so the unmount cleanup isn't stale
-  const currentIndexRef = useRef(currentIndex);
-  currentIndexRef.current = currentIndex;
-  const onSeekRef = useRef(onSeek);
-  onSeekRef.current = onSeek;
 
   const handleScroll = useCallback(() => {
     if (programmaticScroll.current) return;
+    if (rafPending.current) return;
+    rafPending.current = true;
+    rafHandleRef.current = requestAnimationFrame(() => {
+      rafPending.current = false;
+      rafHandleRef.current = 0;
+      if (programmaticScroll.current) return;
+      const container = containerRef.current;
+      if (!container) return;
 
-    isUserScrolling.current = true;
-    clearTimeout(scrollTimeout.current);
+      const containerRect = container.getBoundingClientRect();
+      const centerY = containerRect.top + containerRect.height / 2;
 
-    // Throttle to one layout read per frame
-    if (!rafPending.current) {
-      rafPending.current = true;
-      rafHandleRef.current = requestAnimationFrame(() => {
-        rafPending.current = false;
-        rafHandleRef.current = 0;
-        if (unmountedRef.current) return;
-        // Re-check the programmatic-scroll flag inside the rAF too:
-        // a programmatic scroll started after handleScroll's outer
-        // check but before the rAF body would otherwise run, racing
-        // the same way the cooldown-timeout fix is meant to prevent.
-        if (programmaticScroll.current) return;
-        const container = containerRef.current;
-        if (!container) return;
-
-        const containerRect = container.getBoundingClientRect();
-        const centerY = containerRect.top + containerRect.height / 2;
-
-        const items = itemRefs.current;
-        // Adaptive search: start near last known position, widen if
-        // the best match is at the edge (user scrolled fast/far).
-        let closestIdx = pendingSeekIdx.current;
-        let closestDist = Infinity;
-        let radius = 15;
-
-        for (let attempt = 0; attempt < 3; attempt++) {
-          const lo = Math.max(0, closestIdx - radius);
-          const hi = Math.min(segments.length - 1, closestIdx + radius);
-
-          for (let idx = lo; idx <= hi; idx++) {
-            const el = items.get(idx);
-            if (!el) continue;
-            const rect = el.getBoundingClientRect();
-            const dist = Math.abs(rect.top + rect.height / 2 - centerY);
-            if (dist < closestDist) {
-              closestDist = dist;
-              closestIdx = idx;
-            }
-          }
-
-          // If best match is at the edge, widen the search and retry
-          // centered on the new best match
-          if (closestIdx === lo || closestIdx === hi) {
-            radius *= 3;
-          } else {
-            break; // found a match that's not at the boundary
+      const items = itemRefs.current;
+      // Adaptive search: start near currentIndex, widen if best match
+      // is at the edge of the search window.
+      let closestIdx = currentIndex;
+      let closestDist = Infinity;
+      let radius = 15;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const lo = Math.max(0, closestIdx - radius);
+        const hi = Math.min(segments.length - 1, closestIdx + radius);
+        for (let idx = lo; idx <= hi; idx++) {
+          const el = items.get(idx);
+          if (!el) continue;
+          const rect = el.getBoundingClientRect();
+          const dist = Math.abs(rect.top + rect.height / 2 - centerY);
+          if (dist < closestDist) {
+            closestDist = dist;
+            closestIdx = idx;
           }
         }
+        if (closestIdx === lo || closestIdx === hi) {
+          radius *= 3;
+        } else {
+          break;
+        }
+      }
 
-        pendingSeekIdx.current = closestIdx;
+      if (closestIdx !== currentIndex) {
+        onSeek(closestIdx);
+      }
+    });
+  }, [segments.length, currentIndex, onSeek]);
 
-        // Debounce the actual seek to avoid constant re-renders
-        clearTimeout(seekDebounceRef.current);
-        seekDebounceRef.current = setTimeout(() => {
-          if (unmountedRef.current) return;
-          if (pendingSeekIdx.current !== currentIndexRef.current) {
-            onSeekRef.current(pendingSeekIdx.current);
-          }
-        }, 100);
-      });
-    }
-
-    scrollTimeout.current = setTimeout(() => {
-      isUserScrolling.current = false;
-    }, 150);
-  }, [segments.length]);
-
-  // Flush any pending debounced seek on unmount so currentIndex is up-to-date
-  // before ScrollPlayingView mounts (e.g. user scrolled then immediately hit Play).
-  // Also cancel any in-flight rAF and the scroll-end timeout so a late
-  // callback can't dispatch a stale onSeek into the next-mounted playing
-  // view. unmountedRef gates the rAF/debounce closures themselves so any
-  // callback we couldn't cancel in time refuses to act.
+  // Cancel any pending rAF on unmount. No flush needed: the store
+  // already holds the latest scroll position because handleScroll
+  // calls onSeek synchronously inside the rAF body.
   useEffect(() => {
     return () => {
-      unmountedRef.current = true;
       if (rafHandleRef.current) {
         cancelAnimationFrame(rafHandleRef.current);
         rafHandleRef.current = 0;
-      }
-      clearTimeout(seekDebounceRef.current);
-      clearTimeout(scrollTimeout.current);
-      // Final flush BEFORE marking unmounted... wait, we already set
-      // it above. Re-order: take a snapshot of pendingSeekIdx, do the
-      // flush, then nothing else can run.
-      const pending = pendingSeekIdx.current;
-      const current = currentIndexRef.current;
-      if (pending !== current) {
-        onSeekRef.current(pending);
       }
     };
   }, []);

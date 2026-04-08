@@ -1,20 +1,10 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { saveProgress } from '../api/client';
 import type { ReadingProgress } from '../api/client';
-import { useCursorState } from '../state/cursor/CursorContext';
+import { positionStore, usePositionSelector } from '../state/position/positionStore';
 
 interface UseProgressSaverOptions {
   publicationId: number;
-  wpm: number;
-  readingMode: string;
-  /**
-   * Optional override for the live word index. RSVP keeps word state
-   * local for hot-path reasons (4-12 Hz tick) and only commits to the
-   * cursor on segment boundaries; this callback lets the saver still
-   * snapshot the latest intra-segment word on flush (visibility-hidden,
-   * beforeunload, unmount).
-   */
-  getLiveWordIndex?: () => number;
 }
 
 function localStorageKey(pubId: number): string {
@@ -22,85 +12,66 @@ function localStorageKey(pubId: number): string {
 }
 
 /**
- * Reads its position from CursorContext and writes whenever the live
- * cursor commits. The `restore.status === 'live'` gate replaces the
- * old `enabled` flag — RestoreCoordinator owns the transition, so the
- * saver can never overwrite a saved position with a default zero.
+ * Reads its position from positionStore and writes whenever the live
+ * position commits. Gate: `revision > 0` — the seed init() leaves
+ * revision at 0, so the saver never overwrites the restored position
+ * before the user has interacted.
  *
  * Writes go to localStorage on every commit (sync) and to the API on
  * a 2s debounce. visibility-hidden / beforeunload / unmount each
  * trigger an immediate flush.
  */
-export function useProgressSaver(options: UseProgressSaverOptions): void {
-  const { publicationId, wpm, readingMode, getLiveWordIndex } = options;
-  const cursorRoot = useCursorState();
-  const isLive = cursorRoot.restore.status === 'live';
-  const { chapterId, absoluteSegmentIndex, wordIndex } = cursorRoot.cursor;
-
-  const latestRef = useRef({
-    publicationId,
-    chapterId,
-    absoluteSegmentIndex,
-    wordIndex,
-    wpm,
-    readingMode,
-    isLive,
-    getLiveWordIndex,
-  });
-  latestRef.current = {
-    publicationId,
-    chapterId,
-    absoluteSegmentIndex,
-    wordIndex,
-    wpm,
-    readingMode,
-    isLive,
-    getLiveWordIndex,
-  };
+export function useProgressSaver({ publicationId }: UseProgressSaverOptions): void {
+  // Subscribe to the slices we care about. The store's selector
+  // dedupe makes per-tick word changes free unless we ask for word.
+  const chapterId = usePositionSelector((s) => s.chapterId);
+  const absoluteSegmentIndex = usePositionSelector((s) => s.absoluteSegmentIndex);
+  const wordIndex = usePositionSelector((s) => s.wordIndex);
+  const wpm = usePositionSelector((s) => s.wpm);
+  const readingMode = usePositionSelector((s) => s.mode);
+  const revision = usePositionSelector((s) => s.revision);
 
   const lastSavedKeyRef = useRef('');
 
   const doSave = useCallback(() => {
-    const cur = latestRef.current;
-    if (!cur.isLive || cur.chapterId === 0) return;
-    // Prefer the engine's live word index on flush so a beforeunload
-    // mid-segment writes the right RSVP word.
-    const liveWord = cur.getLiveWordIndex?.() ?? cur.wordIndex;
+    const snap = positionStore.getSnapshot();
+    if (snap.revision === 0) return; // pre-interaction, don't write
+    if (snap.chapterId === 0) return;
 
     const data = {
-      chapter_id: cur.chapterId,
-      absolute_segment_index: cur.absoluteSegmentIndex,
-      word_index: liveWord,
-      wpm: cur.wpm,
-      reading_mode: cur.readingMode,
+      chapter_id: snap.chapterId,
+      absolute_segment_index: snap.absoluteSegmentIndex,
+      word_index: snap.wordIndex,
+      wpm: snap.wpm,
+      reading_mode: snap.mode,
     };
 
     try {
       const lsData: ReadingProgress = {
-        publication_id: cur.publicationId,
-        chapter_id: cur.chapterId,
-        absolute_segment_index: cur.absoluteSegmentIndex,
-        word_index: liveWord,
-        wpm: cur.wpm,
-        reading_mode: cur.readingMode,
+        publication_id: publicationId,
+        chapter_id: snap.chapterId,
+        absolute_segment_index: snap.absoluteSegmentIndex,
+        word_index: snap.wordIndex,
+        wpm: snap.wpm,
+        reading_mode: snap.mode,
         updated_at: new Date().toISOString(),
-        // BookCard uses segments_read, but the home screen will refresh
-        // it from the server on its next mount. Writing 0 here is fine
-        // — only saveProgress's API response carries the real value.
+        // BookCard reads the API response's segments_read; the localStorage
+        // value is a placeholder overwritten on the next API success.
         segments_read: 0,
       };
-      localStorage.setItem(localStorageKey(cur.publicationId), JSON.stringify(lsData));
+      localStorage.setItem(localStorageKey(publicationId), JSON.stringify(lsData));
     } catch {
       /* storage full or unavailable */
     }
 
-    saveProgress(cur.publicationId, data).catch(() => {});
-  }, []);
+    saveProgress(publicationId, data).catch(() => {});
+  }, [publicationId]);
 
   // Save on cursor change — localStorage immediate, API debounced.
   const apiTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
-    if (!isLive || chapterId === 0) return;
+    if (revision === 0) return;
+    if (chapterId === 0) return;
 
     const key = `${publicationId}:${chapterId}:${absoluteSegmentIndex}:${wordIndex}:${wpm}:${readingMode}`;
     if (key !== lastSavedKeyRef.current) {
@@ -129,7 +100,7 @@ export function useProgressSaver(options: UseProgressSaverOptions): void {
       if (apiTimerRef.current) clearTimeout(apiTimerRef.current);
     };
   }, [
-    isLive,
+    revision,
     publicationId,
     chapterId,
     absoluteSegmentIndex,
