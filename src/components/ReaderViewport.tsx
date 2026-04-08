@@ -465,75 +465,115 @@ function ActiveReader({
     });
   }, [showFormattedView, chapterIdx, cursorOrigin, cursorRevision]);
 
-  /* ---- Current-segment highlight band + auto-scroll-to-cursor ---- */
-  // Recomputes the highlight band whenever cursor position or layout
-  // changes, and scrolls the container so the band lands at ~40% down
-  // the viewport. Single effect, single source of truth (positionStore).
-  // Behavior key:
-  //   - cursorOrigin === 'engine'     → engine drives scrollTop directly,
-  //                                     update band only, do NOT scroll
-  //   - cursorOrigin === 'user-scroll'→ user is driving, do nothing
-  //                                     (band already follows their scroll
-  //                                     via the next non-user-scroll commit)
-  //   - cursorOrigin === 'restore'    → cold open, instant scroll
-  //   - cursorOrigin === 'display-mode'/'mode-switch' → instant
-  //   - everything else (toc/chapter-nav/user-seek) → smooth
+  /* ---- Current-segment highlight band ---- */
+  // Always paints the band on cursor changes while showFormattedView is
+  // true — including engine ticks (so the band follows live playback in
+  // scroll/track modes) and user scrolls (so the band follows the
+  // user's finger). Reads section geometry from the formatted view
+  // handle and the velocity profile (when available) for accurate
+  // per-block positioning. Falls back to word-weighted proportional
+  // when no profile, then to pure proportional.
   useEffect(() => {
-    if (!showFormattedView) return;
-    if (cursorOrigin === 'user-scroll') return;
     const handle = formattedViewRef.current;
     if (!handle) return;
-    const segs = loaderState.segments;
-    if (segs.length === 0) {
+    if (!showFormattedView) {
       handle.setHighlightBand(null);
       return;
     }
+    const segs = loaderState.segments;
     const arrIdx = translators.absoluteToArrayIndex(absoluteSegmentIndex);
-    if (arrIdx == null) {
+    if (segs.length === 0 || arrIdx == null) {
       handle.setHighlightBand(null);
       return;
     }
 
-    // Defer one frame so the chapter-into-view scroll above (if it
-    // ran in the same commit) lands first. Section geometry is read
-    // AFTER that scroll settles.
+    // Defer one frame so chapter-into-view scrolls (if any) land first
+    // and the section geometry is fresh.
     let cancelled = false;
     const raf = requestAnimationFrame(() => {
       if (cancelled) return;
       const container = handle.getScrollContainer();
       const sectionEl = handle.getSectionEl(chapterIdx);
       if (!container || !sectionEl) return;
-      const containerRect = container.getBoundingClientRect();
-      const sectionRect = sectionEl.getBoundingClientRect();
-      const sectionTop =
-        sectionRect.top - containerRect.top + container.scrollTop;
-      const sectionH = sectionRect.height;
-      const segCount = segs.length;
-      const bandTop = sectionTop + (arrIdx / segCount) * sectionH;
-      const bandHeight = Math.max(2, sectionH / segCount);
-      handle.setHighlightBand({ topPx: bandTop, heightPx: bandHeight });
+      const band = computeHighlightBand(
+        arrIdx,
+        segs,
+        sectionEl,
+        container,
+        velocityProfileRef.current,
+      );
+      if (band) handle.setHighlightBand(band);
+    });
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(raf);
+    };
+  }, [
+    showFormattedView,
+    absoluteSegmentIndex,
+    chapterIdx,
+    cursorRevision,
+    isPlaying,
+    loaderState.segments,
+    translators,
+  ]);
 
-      // Scroll only when something other than the engine moved the
-      // cursor. Engine ticks during scroll/track playback already
-      // own scrollTop directly.
-      if (cursorOrigin === 'engine') return;
+  /* ---- Auto-scroll the formatted view to the current segment ---- */
+  // Two trigger conditions:
+  //   1. The cursor moves via something other than user-scroll/engine
+  //      (toc/chapter-nav/user-seek/restore/display-mode/mode-switch)
+  //   2. showFormattedView flips from false → true (the user paused in
+  //      phrase/rsvp and the formatted view is now visible). The cursor
+  //      itself didn't move, so we detect this via wasFormattedRef.
+  //
+  // The engine path is suppressed during play because the engine is
+  // pushing scrollTop directly each frame (scroll/track) or the
+  // formatted view isn't visible (phrase/rsvp). On the pause transition,
+  // the wasFormattedRef branch fires once and lands the user at the
+  // cursor.
+  const wasFormattedRef = useRef(false);
+  useEffect(() => {
+    const handle = formattedViewRef.current;
+    if (!handle) return;
+    if (!showFormattedView) {
+      wasFormattedRef.current = false;
+      return;
+    }
+    const transitionedIn = !wasFormattedRef.current;
+    wasFormattedRef.current = true;
 
-      const segCenterY = bandTop + bandHeight / 2;
+    if (cursorOrigin === 'user-scroll') return;
+    if (cursorOrigin === 'engine' && !transitionedIn) return;
+
+    const segs = loaderState.segments;
+    const arrIdx = translators.absoluteToArrayIndex(absoluteSegmentIndex);
+    if (segs.length === 0 || arrIdx == null) return;
+
+    let cancelled = false;
+    const raf = requestAnimationFrame(() => {
+      if (cancelled) return;
+      const container = handle.getScrollContainer();
+      const sectionEl = handle.getSectionEl(chapterIdx);
+      if (!container || !sectionEl) return;
+      const band = computeHighlightBand(
+        arrIdx,
+        segs,
+        sectionEl,
+        container,
+        velocityProfileRef.current,
+      );
+      if (!band) return;
+
+      const segCenterY = band.topPx + band.heightPx / 2;
       const viewportH = container.clientHeight;
+      // Land the segment at ~40% down the viewport — slightly above
+      // center, leaves the upcoming text visible.
       const targetScroll = segCenterY - viewportH * 0.4;
       const maxScroll = Math.max(0, container.scrollHeight - viewportH);
       const clamped = Math.max(0, Math.min(targetScroll, maxScroll));
 
-      // Skip the scroll if we're already within half a viewport — the
-      // text is visible and yanking it would be jarring. The band still
-      // updates so the user sees where they are.
-      if (Math.abs(clamped - container.scrollTop) < viewportH * 0.5 &&
-          cursorOrigin !== 'restore' &&
-          cursorOrigin !== 'display-mode') {
-        return;
-      }
-
       const behavior: ScrollBehavior =
+        transitionedIn ||
         cursorOrigin === 'restore' ||
         cursorOrigin === 'display-mode' ||
         cursorOrigin === 'mode-switch'
@@ -541,7 +581,6 @@ function ActiveReader({
           : 'smooth';
       container.scrollTo({ top: clamped, behavior });
     });
-
     return () => {
       cancelled = true;
       cancelAnimationFrame(raf);
@@ -552,7 +591,6 @@ function ActiveReader({
     chapterIdx,
     cursorOrigin,
     cursorRevision,
-    isPlaying,
     loaderState.segments,
     translators,
   ]);
@@ -885,4 +923,130 @@ function useDerivedProgress(
   const effectiveTotal = totalSegments > 0 ? totalSegments : segments.length;
   const absoluteIndex = segments[activeArrayIdx]?.segment_index ?? activeArrayIdx;
   return effectiveTotal > 0 ? absoluteIndex / effectiveTotal : 0;
+}
+
+/* ------------------------------------------------------------------ */
+/*  computeHighlightBand                                               */
+/* ------------------------------------------------------------------ */
+//
+// Returns the y-range of the given segment within the formatted view's
+// scroll-container coordinate system. Three accuracy tiers, from best
+// to fallback:
+//
+//   1. Velocity-profile + word-count weighted (block-accurate). The
+//      profile already partitions the section into blocks with known
+//      topPx/heightPx and a per-block "weight" (effective word count).
+//      We map cumulative segment word-count to cumulative weight, then
+//      walk the profile to find the matching block + interpolate the
+//      block-relative offset.
+//
+//   2. Word-count weighted proportional. No profile yet — distribute
+//      segments across the section's height by their cumulative
+//      word-count fraction. Better than naive proportional for chapters
+//      with very uneven segment sizes (short title segments etc.).
+//
+//   3. Pure proportional. Equal slices per segment. Used when word
+//      counts are missing (zero) or absent.
+//
+// The function is pure: same inputs, same output. It reads section
+// geometry via getBoundingClientRect — slightly expensive, but called
+// only on cursor/layout changes, not in any rAF hot path.
+
+function computeHighlightBand(
+  arrIdx: number,
+  segments: { word_count?: number }[],
+  sectionEl: HTMLElement,
+  container: HTMLDivElement,
+  profile: VelocityProfile | null,
+): { topPx: number; heightPx: number } | null {
+  const segCount = segments.length;
+  if (segCount === 0 || arrIdx < 0 || arrIdx >= segCount) return null;
+
+  const containerRect = container.getBoundingClientRect();
+  const sectionRect = sectionEl.getBoundingClientRect();
+  const sectionTop =
+    sectionRect.top - containerRect.top + container.scrollTop;
+  const sectionH = sectionRect.height;
+  if (sectionH <= 0) return null;
+
+  // Cumulative word counts. Word counts of 0 fall back to 1 so each
+  // segment has at least equal weight (this matches the chunker's
+  // intent — even a "title" segment gets some space).
+  let cumBefore = 0;
+  for (let i = 0; i < arrIdx; i++) {
+    cumBefore += Math.max(1, segments[i].word_count ?? 1);
+  }
+  const segWords = Math.max(1, segments[arrIdx].word_count ?? 1);
+  const cumAfter = cumBefore + segWords;
+  let totalWords = cumAfter;
+  for (let i = arrIdx + 1; i < segCount; i++) {
+    totalWords += Math.max(1, segments[i].word_count ?? 1);
+  }
+
+  // Tier 1: velocity profile available — find this section's block
+  // entries and use them for accurate per-block positioning.
+  if (profile && profile.entries.length > 0) {
+    const sectionBottom = sectionTop + sectionH;
+    // Filter to entries that fall within this section. The profile is
+    // built once for the whole formatted view (every chapter), so we
+    // need to slice. Tolerance of a few px to handle margin overlap.
+    const sectionEntries: { topPx: number; heightPx: number; weight: number }[] = [];
+    for (const e of profile.entries) {
+      if (e.bottomPx <= sectionTop + 1) continue;
+      if (e.topPx >= sectionBottom - 1) break; // entries are sorted
+      sectionEntries.push({
+        topPx: e.topPx,
+        heightPx: e.heightPx,
+        weight: e.weight,
+      });
+    }
+
+    if (sectionEntries.length > 0) {
+      let sectionTotalWeight = 0;
+      for (const e of sectionEntries) sectionTotalWeight += e.weight;
+      if (sectionTotalWeight > 0) {
+        const startWeight = (cumBefore / totalWords) * sectionTotalWeight;
+        const endWeight = (cumAfter / totalWords) * sectionTotalWeight;
+        const topPx = weightToPx(startWeight, sectionEntries);
+        const bottomPx = weightToPx(endWeight, sectionEntries);
+        const heightPx = Math.max(2, bottomPx - topPx);
+        return { topPx, heightPx };
+      }
+    }
+  }
+
+  // Tier 2: word-count weighted proportional within the section.
+  if (totalWords > 0) {
+    const startFrac = cumBefore / totalWords;
+    const endFrac = cumAfter / totalWords;
+    return {
+      topPx: sectionTop + startFrac * sectionH,
+      heightPx: Math.max(2, (endFrac - startFrac) * sectionH),
+    };
+  }
+
+  // Tier 3: pure proportional fallback.
+  return {
+    topPx: sectionTop + (arrIdx / segCount) * sectionH,
+    heightPx: Math.max(2, sectionH / segCount),
+  };
+}
+
+/** Walk weight-sorted entries until cumulative weight reaches target;
+ *  interpolate within the matched entry to a precise pixel offset. */
+function weightToPx(
+  targetWeight: number,
+  entries: { topPx: number; heightPx: number; weight: number }[],
+): number {
+  let cum = 0;
+  for (const e of entries) {
+    if (cum + e.weight >= targetWeight) {
+      const frac = e.weight > 0 ? (targetWeight - cum) / e.weight : 0;
+      return e.topPx + Math.max(0, Math.min(1, frac)) * e.heightPx;
+    }
+    cum += e.weight;
+  }
+  // Past the end — clamp to bottom of last entry.
+  const last = entries[entries.length - 1];
+  return last.topPx + last.heightPx;
 }
