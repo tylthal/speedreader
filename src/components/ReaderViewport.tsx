@@ -349,12 +349,35 @@ function ActiveReader({
     onComplete: handleAutoAdvance,
   });
 
+  /* ---- User-facing pause/toggle wrappers ---- */
+  // The auto-advance flow (engine completes chapter → handleAutoAdvance
+  // sets autoAdvanceRef → effect below resumes play when next chapter's
+  // segments load) was racing user pause: if the user pressed pause
+  // mid-auto-advance, the effect would still re-fire play() and the
+  // pause never took effect. Worst on books with several short opening
+  // sections — phrase mode sweeps through Cover/Title-Page/Contents
+  // in seconds and the user can't pause at all.
+  //
+  // Fix: any user-initiated pause clears autoAdvanceRef so the auto-
+  // play effect stays inactive. The internal pause paths (visibility,
+  // gaze loss) don't need to clear it — those are pause-equivalents,
+  // not abort-the-auto-advance signals.
+  const userPause = useCallback(() => {
+    autoAdvanceRef.current = false;
+    controller.pause();
+  }, [controller]);
+  const userTogglePlayPause = useCallback(() => {
+    if (positionStore.getSnapshot().isPlaying) {
+      autoAdvanceRef.current = false;
+    }
+    controller.togglePlayPause();
+  }, [controller]);
+
   /* ---- Auto-play after auto-advance ---- */
   // Fired by handleAutoAdvance via autoAdvanceRef. Wait for the new
   // chapter's segments to load (loader effect re-runs on chapter change),
-  // then call play(). No 300ms timeout — the controller reads position
-  // from the store at play time, so it automatically picks up the new
-  // chapter's abs=0.
+  // then call play(). userPause/userTogglePlayPause clear the latch so
+  // a manual pause cancels the auto-resume.
   useEffect(() => {
     if (!autoAdvanceRef.current) return;
     if (loaderState.segments.length === 0) return;
@@ -464,20 +487,13 @@ function ActiveReader({
     );
   }, [chapters, controller]);
 
-  // Scroll the formatted view into view whenever the cursor lands on a
-  // new chapter via something other than a user scroll. Single source
-  // of truth: the cursor selector.
-  const lastScrolledChapterIdxRef = useRef<number>(-1);
-  useEffect(() => {
-    if (!showFormattedView) return;
-    if (cursorOrigin === 'user-scroll') return;
-    if (cursorOrigin === 'engine') return;
-    if (lastScrolledChapterIdxRef.current === chapterIdx) return;
-    lastScrolledChapterIdxRef.current = chapterIdx;
-    requestAnimationFrame(() => {
-      formattedViewRef.current?.scrollSectionIntoView(chapterIdx);
-    });
-  }, [showFormattedView, chapterIdx, cursorOrigin, cursorRevision]);
+  // NOTE: there used to be a separate "scroll-section-into-view on
+  // chapter change" effect here. It fought with the auto-scroll effect
+  // below — both fired on TOC clicks, both targeted the same container,
+  // and the second one (auto-scroll) would override the first
+  // (instant-jump-to-section-top). The auto-scroll effect alone is now
+  // the single source of truth for ALL formatted-view scrolling. The
+  // scrollSectionIntoView imperative method is gone from FormattedView.
 
   /* ---- Current-segment highlight ---- */
   // Calls into FormattedView's imperative handle. The component owns
@@ -519,7 +535,6 @@ function ActiveReader({
     absoluteSegmentIndex,
     chapterIdx,
     cursorRevision,
-    isPlaying,
     loaderState.segments,
     translators,
     layoutVersion,
@@ -580,10 +595,6 @@ function ActiveReader({
 
     if (!pendingScrollRef.current) return;
 
-    const segs = loaderState.segments;
-    const arrIdx = translators.absoluteToArrayIndex(absoluteSegmentIndex);
-    if (segs.length === 0 || arrIdx == null) return;
-
     let cancelled = false;
     let rafHandle = 0;
     let attempts = 0;
@@ -593,6 +604,18 @@ function ActiveReader({
       if (cancelled) return;
       attempts += 1;
       if (!pendingScrollRef.current) return;
+
+      // Pull segments and translate inside the loop — on TOC clicks
+      // the loader is mid-fetch and segments arrive several frames
+      // later. The poll naturally waits for them.
+      const segs = loaderState.segments;
+      const arrIdx = translators.absoluteToArrayIndex(absoluteSegmentIndex);
+      if (segs.length === 0 || arrIdx == null) {
+        if (attempts < maxAttempts) {
+          rafHandle = requestAnimationFrame(tryScroll);
+        }
+        return;
+      }
 
       const container = handle.getScrollContainer();
       const sectionEl = handle.getSectionEl(chapterIdx);
@@ -631,11 +654,17 @@ function ActiveReader({
       const maxScroll = Math.max(0, container.scrollHeight - viewportH);
       const clamped = Math.max(0, Math.min(targetScroll, maxScroll));
 
+      // 'auto' (instant) for any deliberate jump — TOC click, prev/next
+      // chapter, restore, display-mode toggle, mode-switch, or the
+      // pause-from-phrase transition. 'smooth' for fine adjustments
+      // (user-seek via keyboard prev/next chunk).
       const behavior: ScrollBehavior =
         transitionedIn ||
         cursorOrigin === 'restore' ||
         cursorOrigin === 'display-mode' ||
-        cursorOrigin === 'mode-switch'
+        cursorOrigin === 'mode-switch' ||
+        cursorOrigin === 'toc' ||
+        cursorOrigin === 'chapter-nav'
           ? 'auto'
           : 'smooth';
       container.scrollTo({ top: clamped, behavior });
@@ -734,7 +763,7 @@ function ActiveReader({
   );
 
   useKeyboardHandling({
-    onTogglePlay: controller.togglePlayPause,
+    onTogglePlay: userTogglePlayPause,
     onSpeedUp: useCallback(() => controller.adjustWpm(25), [controller]),
     onSpeedDown: useCallback(() => controller.adjustWpm(-25), [controller]),
     onNextChunk: useCallback(() => seekToArr(activeArrayIdx + 1), [seekToArr, activeArrayIdx]),
@@ -760,10 +789,16 @@ function ActiveReader({
     typeof (chapters[0].meta as Record<string, unknown>).startPage === 'number';
 
   // Formatted-view IntersectionObserver fires when scroll lands in a
-  // new section. Convert to a CHAPTER_NAV via setPosition.
+  // new section. Convert to a CHAPTER_NAV via setPosition — but mark
+  // origin as 'user-scroll' if the user is currently driving the
+  // scroll, so the auto-scroll effect doesn't snap them back to the
+  // start of the new chapter. The user is the source of truth when
+  // they're scrolling; we follow them, we don't override.
   const handleVisibleSectionChange = useCallback(
     (idx: number) => {
       if (idx === chapterIdx) return;
+      const currentOrigin = positionStore.getSnapshot().origin;
+      const isUserDriving = currentOrigin === 'user-scroll';
       positionStore.setPosition(
         {
           chapterId: chapters[idx].id,
@@ -771,7 +806,7 @@ function ActiveReader({
           absoluteSegmentIndex: 0,
           wordIndex: 0,
         },
-        'chapter-nav',
+        isUserDriving ? 'user-scroll' : 'chapter-nav',
       );
     },
     [chapterIdx, chapters],
@@ -829,7 +864,7 @@ function ActiveReader({
                 );
               }
             }}
-            onTap={isPlaying ? controller.pause : undefined}
+            onTap={isPlaying ? userPause : undefined}
           />
         ) : isPdfBook ? (
           <PdfFormattedView
@@ -837,7 +872,7 @@ function ActiveReader({
             chapters={chapters}
             currentSectionIndex={chapterIdx}
             onVisibleSectionChange={handleVisibleSectionChange}
-            onTap={isPlaying ? controller.pause : undefined}
+            onTap={isPlaying ? userPause : undefined}
           />
         ) : (
           <>
@@ -847,7 +882,7 @@ function ActiveReader({
               chapters={chapters}
               currentSectionIndex={chapterIdx}
               onVisibleSectionChange={handleVisibleSectionChange}
-              onTap={isPlaying ? controller.pause : undefined}
+              onTap={isPlaying ? userPause : undefined}
               velocityProfileRef={velocityProfileRef}
               onLayoutChange={onFormattedLayoutChange}
             />
@@ -862,7 +897,7 @@ function ActiveReader({
 
       {!showFormattedView && (
       <GestureLayer
-        onTap={isPlaying ? controller.pause : undefined}
+        onTap={isPlaying ? userPause : undefined}
         onSwipeLeft={isPlaying ? handleNextChapter : undefined}
         onSwipeRight={isPlaying ? handlePrevChapter : undefined}
         onSwipeUp={isPlaying ? () => controller.adjustWpm(25) : undefined}
@@ -954,7 +989,7 @@ function ActiveReader({
         isPlaying={isPlaying || wasPlayingBeforeLost}
         wpm={wpm}
         progress={progress}
-        onTogglePlay={controller.togglePlayPause}
+        onTogglePlay={userTogglePlayPause}
         onSetWpm={controller.setWpm}
         onAdjustWpm={controller.adjustWpm}
         onPrevChapter={handlePrevChapter}

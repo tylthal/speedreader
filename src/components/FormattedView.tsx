@@ -74,9 +74,8 @@ export interface HighlightInfo {
  * ReaderViewport reaches in for the things that can't be expressed as
  * props without forcing a re-render of the section innerHTML write path.
  *
- *   - Scroll container + section element for legacy callers
+ *   - Scroll container + section element for the auto-scroll effect
  *   - rebuildProfile / settleImages for the play-time layout settle
- *   - scrollSectionIntoView for explicit nav (TOC click, chapter buttons)
  *   - setHighlightForSegment is the ONLY highlight entry point. It
  *     looks up (or builds, if needed) the per-section text→DOM-range
  *     index, materializes per-line rects via Range.getClientRects(),
@@ -84,13 +83,19 @@ export interface HighlightInfo {
  *     back to a proportional / velocity-profile estimate when the
  *     text matcher can't locate a particular segment. Pass arrIdx=-1
  *     to clear the highlight.
+ *
+ * NOTE: scrollSectionIntoView used to live here. It was removed
+ * because it raced the auto-scroll effect on TOC clicks (instant-jump
+ * to section top, then ~ms later auto-scroll override to a different
+ * position, plus a per-chapter latch that blocked re-clicks). The
+ * auto-scroll effect in ReaderViewport now owns ALL formatted-view
+ * scrolling.
  */
 export interface FormattedViewHandle {
   getScrollContainer: () => HTMLDivElement | null
   getSectionEl: (idx: number) => HTMLElement | null
   rebuildProfile: () => void
   settleImages: (sectionIdx: number) => Promise<void>
-  scrollSectionIntoView: (idx: number) => void
   setHighlightForSegment: (
     sectionIdx: number,
     arrIdx: number,
@@ -561,28 +566,7 @@ const FormattedView = forwardRef<FormattedViewHandle, FormattedViewProps>(functi
       rebuildProfile: () => {
         rebuildProfileNow()
       },
-      scrollSectionIntoView: (idx) => {
-        const el = sectionRefs.current.get(idx)
-        if (!el) return
-        // Mark the index as "last reported" so the IntersectionObserver
-        // doesn't echo a redundant onVisibleSectionChange after the
-        // programmatic scroll lands.
-        lastReportedIdxRef.current = idx
-        // Suppress the IntersectionObserver while the programmatic
-        // scroll is in flight. The flag is cleared when scrollend
-        // fires (or after a 400ms timer fallback for browsers that
-        // don't support scrollend).
-        isProgrammaticScrollRef.current = true
-        const container = containerRef.current
-        const cleanup = () => {
-          isProgrammaticScrollRef.current = false
-          container?.removeEventListener('scrollend', cleanup as EventListener)
-        }
-        container?.addEventListener('scrollend', cleanup as EventListener, { once: true })
-        // Fallback for Safari < 18.2 and others without scrollend.
-        setTimeout(cleanup, 400)
-        el.scrollIntoView({ block: 'start', behavior: 'auto' })
-      },
+      // scrollSectionIntoView removed — see FormattedViewHandle docstring.
       settleImages: async (sectionIdx) => {
         // Force every <img> in this section to fully decode before resolving.
         // HTMLImageElement.decode() resolves once the image is parsed AND
@@ -649,9 +633,15 @@ const FormattedView = forwardRef<FormattedViewHandle, FormattedViewProps>(functi
         }
 
         // Fallback: text matcher couldn't find this segment (or the
-        // Range produced no rects — hidden via CSS, etc). Use the
-        // proportional / velocity-profile estimate so we still show
-        // SOMETHING for that one segment.
+        // Range produced no rects — image-only section, hidden via
+        // CSS, etc). Use the proportional / velocity-profile estimate
+        // so we still show SOMETHING for that one segment — BUT only
+        // if the fallback would produce a band of reasonable size.
+        // For image-only sections (Cover, Map of Babel etc.) the
+        // chunker emits a single section_title segment whose
+        // proportional slot is the entire section height — rendering
+        // that as a full-width band paints a giant rectangle over the
+        // whole image. Hide the highlight in that case instead.
         const fallback = computeProportionalBand(
           arrIdx,
           segments,
@@ -663,12 +653,25 @@ const FormattedView = forwardRef<FormattedViewHandle, FormattedViewProps>(functi
           setHighlightRects(null)
           return null
         }
-        // Render the fallback as a single full-width rect.
+        // Cap the fallback height at ~3 lines of body text. Anything
+        // larger is almost certainly the "single segment fills the
+        // whole section" case (image-only sections), which should
+        // hide instead of paint a giant box.
+        const MAX_FALLBACK_HEIGHT = 96 // ~3 lines at default font size
+        if (fallback.heightPx > MAX_FALLBACK_HEIGHT) {
+          setHighlightRects(null)
+          return null
+        }
+        // Render the fallback as a single full-width rect inside the
+        // formatted column. Use the column's actual bounds, not the
+        // container's, so the band doesn't span gutters.
         const containerRect = container.getBoundingClientRect()
+        const columnEl = container.querySelector('.formatted-view__column') as HTMLElement | null
+        const colRect = columnEl?.getBoundingClientRect()
         const fallbackRect: RectInContainer = {
           topPx: fallback.topPx,
-          leftPx: 0,
-          widthPx: containerRect.width,
+          leftPx: colRect ? colRect.left - containerRect.left + container.scrollLeft : 0,
+          widthPx: colRect ? colRect.width : containerRect.width,
           heightPx: fallback.heightPx,
         }
         setHighlightRects([fallbackRect])
