@@ -52,6 +52,8 @@ interface UseTrackEngineOptions {
   onScrollTick?: (centerY: number) => number | null;
   initialWpm?: number;
   onSegmentChange?: (index: number) => void;
+  /** Tick-only cursor publish; see useScrollEngine for the contract. */
+  onCursorTick?: (arrayIdx: number) => void;
   onComplete?: () => void;
 }
 
@@ -103,6 +105,7 @@ export function useTrackEngine(
     onScrollTick,
     initialWpm = DEFAULT_WPM,
     onSegmentChange,
+    onCursorTick,
     onComplete,
   } = options;
 
@@ -133,6 +136,8 @@ export function useTrackEngine(
   totalSegmentsRef.current = totalSegments;
   const onSegmentChangeRef = useRef(onSegmentChange);
   onSegmentChangeRef.current = onSegmentChange;
+  const onCursorTickRef = useRef(onCursorTick);
+  onCursorTickRef.current = onCursorTick;
   const onCompleteRef = useRef(onComplete);
   onCompleteRef.current = onComplete;
 
@@ -163,6 +168,7 @@ export function useTrackEngine(
         setCurrentIndex(newIdx);
         currentIndexRef.current = newIdx;
         onSegmentChangeRef.current?.(newIdx);
+        onCursorTickRef.current?.(newIdx);
       }
       return;
     }
@@ -190,6 +196,7 @@ export function useTrackEngine(
       setCurrentIndex(closestIdx);
       currentIndexRef.current = closestIdx;
       onSegmentChangeRef.current?.(closestIdx);
+      onCursorTickRef.current?.(closestIdx);
     }
   }, [containerRef, itemOffsetsRef]);
 

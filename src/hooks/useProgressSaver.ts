@@ -1,16 +1,20 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { saveProgress } from '../api/client';
 import type { ReadingProgress } from '../api/client';
+import { useCursorState } from '../state/cursor/CursorContext';
 
 interface UseProgressSaverOptions {
   publicationId: number;
-  chapterId: number;
-  segmentIndex: number;
-  wordIndex: number;
   wpm: number;
   readingMode: string;
-  /** Saves are completely suppressed until enabled is true */
-  enabled: boolean;
+  /**
+   * Optional override for the live word index. RSVP keeps word state
+   * local for hot-path reasons (4-12 Hz tick) and only commits to the
+   * cursor on segment boundaries; this callback lets the saver still
+   * snapshot the latest intra-segment word on flush (visibility-hidden,
+   * beforeunload, unmount).
+   */
+  getLiveWordIndex?: () => number;
 }
 
 function localStorageKey(pubId: number): string {
@@ -18,87 +22,99 @@ function localStorageKey(pubId: number): string {
 }
 
 /**
- * Minimal progress saver. Does NOT load or restore progress.
- * Saves are suppressed until `enabled` is true, preventing
- * default values from overwriting real saved progress.
+ * Reads its position from CursorContext and writes whenever the live
+ * cursor commits. The `restore.status === 'live'` gate replaces the
+ * old `enabled` flag — RestoreCoordinator owns the transition, so the
+ * saver can never overwrite a saved position with a default zero.
+ *
+ * Writes go to localStorage on every commit (sync) and to the API on
+ * a 2s debounce. visibility-hidden / beforeunload / unmount each
+ * trigger an immediate flush.
  */
 export function useProgressSaver(options: UseProgressSaverOptions): void {
-  const latestRef = useRef(options);
-  latestRef.current = options;
+  const { publicationId, wpm, readingMode, getLiveWordIndex } = options;
+  const cursorRoot = useCursorState();
+  const isLive = cursorRoot.restore.status === 'live';
+  const { chapterId, absoluteSegmentIndex, wordIndex } = cursorRoot.cursor;
+
+  const latestRef = useRef({
+    publicationId,
+    chapterId,
+    absoluteSegmentIndex,
+    wordIndex,
+    wpm,
+    readingMode,
+    isLive,
+    getLiveWordIndex,
+  });
+  latestRef.current = {
+    publicationId,
+    chapterId,
+    absoluteSegmentIndex,
+    wordIndex,
+    wpm,
+    readingMode,
+    isLive,
+    getLiveWordIndex,
+  };
 
   const lastSavedKeyRef = useRef('');
 
   const doSave = useCallback(() => {
-    const {
-      publicationId,
-      chapterId,
-      segmentIndex,
-      wordIndex,
-      wpm,
-      readingMode,
-      enabled,
-    } = latestRef.current;
-
-    if (!enabled || chapterId === 0) return;
+    const cur = latestRef.current;
+    if (!cur.isLive || cur.chapterId === 0) return;
+    // Prefer the engine's live word index on flush so a beforeunload
+    // mid-segment writes the right RSVP word.
+    const liveWord = cur.getLiveWordIndex?.() ?? cur.wordIndex;
 
     const data = {
-      chapter_id: chapterId,
-      segment_index: segmentIndex,
-      word_index: wordIndex,
-      wpm,
-      reading_mode: readingMode,
+      chapter_id: cur.chapterId,
+      absolute_segment_index: cur.absoluteSegmentIndex,
+      word_index: liveWord,
+      wpm: cur.wpm,
+      reading_mode: cur.readingMode,
     };
 
-    // localStorage (immediate, in case API fails)
     try {
       const lsData: ReadingProgress = {
-        publication_id: publicationId,
-        chapter_id: chapterId,
-        segment_index: segmentIndex,
-        word_index: wordIndex,
-        wpm,
-        reading_mode: readingMode,
+        publication_id: cur.publicationId,
+        chapter_id: cur.chapterId,
+        absolute_segment_index: cur.absoluteSegmentIndex,
+        word_index: liveWord,
+        wpm: cur.wpm,
+        reading_mode: cur.readingMode,
         updated_at: new Date().toISOString(),
-        segments_read: segmentIndex,
+        // BookCard uses segments_read, but the home screen will refresh
+        // it from the server on its next mount. Writing 0 here is fine
+        // — only saveProgress's API response carries the real value.
+        segments_read: 0,
       };
-      localStorage.setItem(localStorageKey(publicationId), JSON.stringify(lsData));
+      localStorage.setItem(localStorageKey(cur.publicationId), JSON.stringify(lsData));
     } catch {
       /* storage full or unavailable */
     }
 
-    // API: async, best-effort
-    saveProgress(publicationId, data).catch(() => {});
+    saveProgress(cur.publicationId, data).catch(() => {});
   }, []);
 
-  // Save on segment change — localStorage is immediate (sync),
-  // API is debounced to avoid flooding the server.
+  // Save on cursor change — localStorage immediate, API debounced.
   const apiTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
-    if (!options.enabled || options.chapterId === 0) return;
+    if (!isLive || chapterId === 0) return;
 
-    // Always save to localStorage immediately on segment change
-    const {
-      publicationId,
-      chapterId,
-      segmentIndex,
-      wordIndex,
-      wpm,
-      readingMode,
-    } = options;
-
-    const key = `${publicationId}:${chapterId}:${segmentIndex}:${wordIndex}:${wpm}:${readingMode}`;
+    const key = `${publicationId}:${chapterId}:${absoluteSegmentIndex}:${wordIndex}:${wpm}:${readingMode}`;
     if (key !== lastSavedKeyRef.current) {
       lastSavedKeyRef.current = key;
       try {
         const lsData: ReadingProgress = {
           publication_id: publicationId,
           chapter_id: chapterId,
-          segment_index: segmentIndex,
+          absolute_segment_index: absoluteSegmentIndex,
           word_index: wordIndex,
           wpm,
           reading_mode: readingMode,
           updated_at: new Date().toISOString(),
-          segments_read: segmentIndex,
+          segments_read: 0,
         };
         localStorage.setItem(localStorageKey(publicationId), JSON.stringify(lsData));
       } catch {
@@ -106,7 +122,6 @@ export function useProgressSaver(options: UseProgressSaverOptions): void {
       }
     }
 
-    // Debounce API save (2 seconds)
     if (apiTimerRef.current) clearTimeout(apiTimerRef.current);
     apiTimerRef.current = setTimeout(doSave, 2000);
 
@@ -114,13 +129,13 @@ export function useProgressSaver(options: UseProgressSaverOptions): void {
       if (apiTimerRef.current) clearTimeout(apiTimerRef.current);
     };
   }, [
-    options.enabled,
-    options.publicationId,
-    options.chapterId,
-    options.segmentIndex,
-    options.wordIndex,
-    options.wpm,
-    options.readingMode,
+    isLive,
+    publicationId,
+    chapterId,
+    absoluteSegmentIndex,
+    wordIndex,
+    wpm,
+    readingMode,
     doSave,
   ]);
 
@@ -137,7 +152,6 @@ export function useProgressSaver(options: UseProgressSaverOptions): void {
     return () => {
       document.removeEventListener('visibilitychange', onVisibilityChange);
       window.removeEventListener('beforeunload', onBeforeUnload);
-      // Save on unmount (user navigating away from reader)
       doSave();
     };
   }, [doSave]);

@@ -23,6 +23,14 @@ interface UsePlaybackEngineOptions {
   totalSegments: number;
   initialWpm?: number;
   onSegmentChange?: (index: number) => void;
+  /**
+   * Fires only from the rAF tick loop's segment-advance branch — never
+   * from seekTo. Used by ReaderViewport to dispatch ENGINE_TICK into
+   * the cursor reducer. Keeping it separate from onSegmentChange (which
+   * still drives the prefetcher and fires on both ticks AND seeks)
+   * means the engine→cursor→engine loop can never close.
+   */
+  onCursorTick?: (arrayIdx: number) => void;
   onComplete?: () => void;
 }
 
@@ -37,7 +45,7 @@ function clampWpm(value: number): number {
 export function usePlaybackEngine(
   options: UsePlaybackEngineOptions
 ): [PlaybackState, PlaybackActions] {
-  const { segments, totalSegments, initialWpm = DEFAULT_WPM, onSegmentChange, onComplete } = options;
+  const { segments, totalSegments, initialWpm = DEFAULT_WPM, onSegmentChange, onCursorTick, onComplete } = options;
 
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -50,6 +58,8 @@ export function usePlaybackEngine(
   // Keep latest callbacks in refs to avoid stale closures in rAF loop
   const onSegmentChangeRef = useRef(onSegmentChange);
   onSegmentChangeRef.current = onSegmentChange;
+  const onCursorTickRef = useRef(onCursorTick);
+  onCursorTickRef.current = onCursorTick;
   const onCompleteRef = useRef(onComplete);
   onCompleteRef.current = onComplete;
 
@@ -129,6 +139,9 @@ export function usePlaybackEngine(
       setCurrentIndex(nextIndex);
       currentIndexRef.current = nextIndex;
       onSegmentChangeRef.current?.(nextIndex);
+      // Tick-only — never fires from seekTo. ReaderViewport translates
+      // arrayIdx → absolute_segment_index and dispatches ENGINE_TICK.
+      onCursorTickRef.current?.(nextIndex);
     }
 
     rafRef.current = requestAnimationFrame(tick);

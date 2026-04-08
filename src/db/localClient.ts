@@ -60,7 +60,7 @@ async function pubRowToPublication(r: DBPublication): Promise<Publication> {
 async function computeSegmentsRead(
   pubId: number,
   chapterId: number,
-  segmentIndex: number,
+  absoluteSegmentIndex: number,
 ): Promise<number> {
   const chapters = await db.chapters
     .where('[publication_id+chapter_index]')
@@ -72,14 +72,14 @@ async function computeSegmentsRead(
     if (ch.id === chapterId) break
     segmentsBefore += ch.segment_count
   }
-  return segmentsBefore + segmentIndex
+  return segmentsBefore + absoluteSegmentIndex
 }
 
 function toProgress(row: DBReadingProgress, segmentsRead: number): ReadingProgress {
   return {
     publication_id: row.publication_id,
     chapter_id: row.chapter_id,
-    segment_index: row.segment_index,
+    absolute_segment_index: row.absolute_segment_index,
     word_index: row.word_index,
     wpm: row.wpm,
     reading_mode: row.reading_mode,
@@ -582,11 +582,10 @@ export class LocalClient implements SpeedReaderClient {
       .equals(pubId)
       .first()
     if (!row) return null
-
     const segmentsRead = await computeSegmentsRead(
       pubId,
       row.chapter_id,
-      row.segment_index,
+      row.absolute_segment_index,
     )
     return toProgress(row, segmentsRead)
   }
@@ -597,11 +596,11 @@ export class LocalClient implements SpeedReaderClient {
       .equals(pubId)
       .first()
 
-    const record = {
+    const record: DBReadingProgress = {
       ...(existing ? { id: existing.id } : {}),
       publication_id: pubId,
       chapter_id: data.chapter_id,
-      segment_index: data.segment_index,
+      absolute_segment_index: data.absolute_segment_index,
       word_index: data.word_index,
       wpm: data.wpm,
       reading_mode: data.reading_mode,
@@ -609,13 +608,12 @@ export class LocalClient implements SpeedReaderClient {
     }
 
     await db.reading_progress.put(record)
-
     const segmentsRead = await computeSegmentsRead(
       pubId,
       data.chapter_id,
-      data.segment_index,
+      data.absolute_segment_index,
     )
-    return toProgress(record as any, segmentsRead)
+    return toProgress(record, segmentsRead)
   }
 
 }

@@ -41,27 +41,22 @@ interface FormattedViewProps {
 }
 
 /**
- * Imperative handle exposed via forwardRef. ReaderViewport reaches in for
- * the things the engines and the formatted-mode play adapter need:
- *   - Scroll container, for the engines' containerRef
- *   - Section element, for the section-proportional cursor mapping
- *   - setEngineDriving — flips isProgrammaticScrollRef so the IntersectionObserver
- *     doesn't fight engine-driven scrollTop writes (the same defense the
- *     internal section-jump effect uses)
- *   - markReported — keeps lastReportedIdxRef in sync so the section-jump
- *     effect doesn't yank the user's position
- *   - rebuildProfile — synchronous rebuild, used by ResizeObserver and the
- *     play adapter after image decode settles
- *   - settleImages — async, awaits HTMLImageElement.decode() for every img
- *     in the given section so layout is stable before the engine starts
+ * Imperative handle exposed via forwardRef. After the cursor refactor
+ * the surface shrunk significantly:
+ *   - Scroll container + section element for the cursor mapping math
+ *   - rebuildProfile / settleImages for the play-time layout settle
+ *   - scrollSectionIntoView for explicit nav (TOC click, chapter buttons)
+ *
+ * setEngineDriving and markReported are gone — the IntersectionObserver
+ * no longer fights an engine-driving feedback loop because alignment is
+ * gated on cursor.origin upstream in ReaderViewport.
  */
 export interface FormattedViewHandle {
   getScrollContainer: () => HTMLDivElement | null
   getSectionEl: (idx: number) => HTMLElement | null
-  setEngineDriving: (driving: boolean) => void
-  markReported: (idx: number) => void
   rebuildProfile: () => void
   settleImages: (sectionIdx: number) => Promise<void>
+  scrollSectionIntoView: (idx: number) => void
 }
 
 const OPFS_SRC_RE = /<img\s[^>]*?src=["']opfs:([^"']+)["']/gi
@@ -230,6 +225,11 @@ const FormattedView = forwardRef<FormattedViewHandle, FormattedViewProps>(functi
   const tapHandlers = useContentTap(onTap)
   const containerRef = useRef<HTMLDivElement>(null)
   const sectionRefs = useRef<Map<number, HTMLElement>>(new Map())
+  // Suppression flag for the IntersectionObserver below — flipped on
+  // by scrollSectionIntoView() while a programmatic scroll is in flight,
+  // cleared on scrollend (with a 400ms timer fallback). Without this,
+  // a TOC click or chapter-nav scroll would loop back through the
+  // observer and dispatch a redundant CHAPTER_NAV at the destination.
   const isProgrammaticScrollRef = useRef(false)
 
   // Generation counter bumped on every profile rebuild — engines compare
@@ -419,12 +419,10 @@ const FormattedView = forwardRef<FormattedViewHandle, FormattedViewProps>(functi
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chapters, velocityProfileRef])
 
-  // Track the last section index we *reported* to the parent. The parent
-  // will then call setChapterIdx with this same value, propagate it back
-  // through the currentSectionIndex prop, and the scroll-into-view effect
-  // below would otherwise yank the user's scroll position back to the top
-  // of the section. Skipping the scroll when currentSectionIndex matches
-  // what we just reported breaks that feedback loop.
+  // Track the last section index we *reported* to the parent so the
+  // IntersectionObserver doesn't re-emit it on every entry batch. The
+  // parent (ReaderViewport) now no-ops duplicate values too, but this
+  // local short-circuit avoids the dispatch entirely.
   const lastReportedIdxRef = useRef<number>(currentSectionIndex)
 
   // Stabilize the parent's onVisibleSectionChange callback in a ref so the
@@ -434,25 +432,15 @@ const FormattedView = forwardRef<FormattedViewHandle, FormattedViewProps>(functi
   const onVisibleSectionChangeRef = useRef(onVisibleSectionChange)
   onVisibleSectionChangeRef.current = onVisibleSectionChange
 
-  // Scroll the current section into view ONLY when the cursor change came
-  // from outside this component (TOC click, plain↔formatted toggle, etc.),
-  // not when the user is scrolling and the IntersectionObserver fed the
-  // change back to us.
-  useEffect(() => {
-    if (currentSectionIndex === lastReportedIdxRef.current) return
-    const el = sectionRefs.current.get(currentSectionIndex)
-    if (!el) return
-    isProgrammaticScrollRef.current = true
-    el.scrollIntoView({ block: 'start', behavior: 'auto' })
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        isProgrammaticScrollRef.current = false
-      })
-    })
-    // Mark the new index as the "last reported" baseline so the next scroll
-    // event from the user starts comparing against the right value.
-    lastReportedIdxRef.current = currentSectionIndex
-  }, [currentSectionIndex])
+  // NOTE: there used to be an effect here that called scrollIntoView()
+  // whenever currentSectionIndex changed. It tangled with the
+  // IntersectionObserver below — pause-time layout shifts could trip
+  // the observer, the observer would update chapterIdx, the effect
+  // would scrollIntoView and yank the view to the top of the section.
+  // Section navigation now happens via the imperative
+  // scrollSectionIntoView() handle, called explicitly by TOC clicks and
+  // chapter-nav buttons. Visible-section changes from scrolling stay
+  // observe-only.
 
   // Watch which section is at the top of the viewport and report it.
   // Deps include only `chapters` so the observer is rebuilt when sections
@@ -504,22 +492,30 @@ const FormattedView = forwardRef<FormattedViewHandle, FormattedViewProps>(functi
     () => ({
       getScrollContainer: () => containerRef.current,
       getSectionEl: (idx) => sectionRefs.current.get(idx) ?? null,
-      setEngineDriving: (driving) => {
-        // Reuse the same flag the section-jump effect uses to suppress the
-        // IntersectionObserver — when the engine is writing scrollTop on
-        // every rAF, we MUST NOT feed those programmatic scrolls back through
-        // onVisibleSectionChange or we'd loop. The flag is read inside the
-        // observer callback at the top of this file.
-        isProgrammaticScrollRef.current = driving
-      },
-      markReported: (idx) => {
-        // Lets the formatted-mode cursor advance update lastReportedIdxRef
-        // so the section-jump effect doesn't try to scrollIntoView when
-        // chapterIdx changes from inside the engine.
-        lastReportedIdxRef.current = idx
-      },
       rebuildProfile: () => {
         rebuildProfileNow()
+      },
+      scrollSectionIntoView: (idx) => {
+        const el = sectionRefs.current.get(idx)
+        if (!el) return
+        // Mark the index as "last reported" so the IntersectionObserver
+        // doesn't echo a redundant onVisibleSectionChange after the
+        // programmatic scroll lands.
+        lastReportedIdxRef.current = idx
+        // Suppress the IntersectionObserver while the programmatic
+        // scroll is in flight. The flag is cleared when scrollend
+        // fires (or after a 400ms timer fallback for browsers that
+        // don't support scrollend).
+        isProgrammaticScrollRef.current = true
+        const container = containerRef.current
+        const cleanup = () => {
+          isProgrammaticScrollRef.current = false
+          container?.removeEventListener('scrollend', cleanup as EventListener)
+        }
+        container?.addEventListener('scrollend', cleanup as EventListener, { once: true })
+        // Fallback for Safari < 18.2 and others without scrollend.
+        setTimeout(cleanup, 400)
+        el.scrollIntoView({ block: 'start', behavior: 'auto' })
       },
       settleImages: async (sectionIdx) => {
         // Force every <img> in this section to fully decode before resolving.

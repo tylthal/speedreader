@@ -95,7 +95,13 @@ export function getProgress(pubId: number) {
 
 export function saveProgress(
   pubId: number,
-  data: { chapter_id: number; segment_index: number; word_index: number; wpm: number; reading_mode: string },
+  data: {
+    chapter_id: number
+    absolute_segment_index: number
+    word_index: number
+    wpm: number
+    reading_mode: string
+  },
 ) {
   return getClient().saveProgress(pubId, data)
 }

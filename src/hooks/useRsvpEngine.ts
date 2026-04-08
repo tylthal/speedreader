@@ -19,6 +19,10 @@ interface RsvpActions {
   setWpm: (wpm: number) => void;
   adjustWpm: (delta: number) => void;
   seekToSegment: (index: number, wordIndex?: number) => void;
+  /** Read the engine's live intra-segment word index without subscribing.
+   *  Used by useProgressSaver flush paths so beforeunload mid-segment
+   *  captures the right word — word ticks don't dispatch to the cursor. */
+  getLiveWordIndex: () => number;
 }
 
 interface UseRsvpEngineOptions {
@@ -26,6 +30,14 @@ interface UseRsvpEngineOptions {
   totalSegments: number;
   initialWpm?: number;
   onSegmentChange?: (index: number) => void;
+  /**
+   * Fires only on segment-boundary advances inside the rAF tick loop.
+   * Word advances stay local — they tick at 4-12 Hz and dispatching to
+   * the cursor reducer at that rate would burn re-renders for every
+   * subscriber. The saver reads the live word index via getLiveWordIndex
+   * on flush, so beforeunload mid-segment still saves the right word.
+   */
+  onCursorTick?: (arrayIdx: number) => void;
   onComplete?: () => void;
 }
 
@@ -71,7 +83,7 @@ function getWordDuration(word: string, wpm: number): number {
 export function useRsvpEngine(
   options: UseRsvpEngineOptions
 ): [RsvpState, RsvpActions] {
-  const { segments, totalSegments, initialWpm = DEFAULT_WPM, onSegmentChange, onComplete } = options;
+  const { segments, totalSegments, initialWpm = DEFAULT_WPM, onSegmentChange, onCursorTick, onComplete } = options;
 
   const [currentSegmentIndex, setCurrentSegmentIndex] = useState(0);
   const [currentWordIndex, setCurrentWordIndex] = useState(0);
@@ -96,6 +108,8 @@ export function useRsvpEngine(
   const waitingForSegmentsRef = useRef(false);
   const onSegmentChangeRef = useRef(onSegmentChange);
   onSegmentChangeRef.current = onSegmentChange;
+  const onCursorTickRef = useRef(onCursorTick);
+  onCursorTickRef.current = onCursorTick;
   const onCompleteRef = useRef(onComplete);
   onCompleteRef.current = onComplete;
 
@@ -163,6 +177,8 @@ export function useRsvpEngine(
         setCurrentWordIndex(0);
         currentWordIndexRef.current = 0;
         onSegmentChangeRef.current?.(nextSegIdx);
+        // Segment-only cursor publish. Word advances below stay local.
+        onCursorTickRef.current?.(nextSegIdx);
       } else {
         setCurrentWordIndex(nextWordIdx);
         currentWordIndexRef.current = nextWordIdx;
@@ -269,6 +285,7 @@ export function useRsvpEngine(
     setWpm,
     adjustWpm,
     seekToSegment,
+    getLiveWordIndex: () => currentWordIndexRef.current,
   };
 
   return [state, actions];

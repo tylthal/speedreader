@@ -10,6 +10,7 @@ import { useProgressSaver } from '../hooks/useProgressSaver';
 import { useOrientationResilience } from '../hooks/useOrientationResilience';
 import { useKeyboardHandling } from '../hooks/useKeyboardHandling';
 import { useWakeLock } from '../hooks/useWakeLock';
+import { useCursorAlignedEngine } from '../hooks/useCursorAlignedEngine';
 import { useNavigate } from 'react-router-dom';
 import { getPublication, getProgress, setDisplayModePref } from '../api/client';
 import { useDataSaver } from '../hooks/useDataSaver';
@@ -31,6 +32,14 @@ import PdfFormattedView from './PdfFormattedView';
 import CbzFormattedView from './CbzFormattedView';
 import type { ContentType } from '../api/client';
 import type { VelocityProfile } from '../lib/velocityProfile';
+import {
+  CursorProvider,
+  useCursorDispatch,
+  useCursorSelector,
+} from '../state/cursor/CursorContext';
+import type { CursorRootState } from '../state/cursor/types';
+import { initialCursor } from '../state/cursor/types';
+import { useRestoreCoordinator } from '../state/cursor/RestoreCoordinator';
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -43,11 +52,9 @@ interface ReaderViewportProps {
 interface InitialPosition {
   chapters: Chapter[];
   tocTree: TocNode[] | null;
-  chapterIdx: number;
-  segmentIndex: number;
-  wordIndex: number;
-  wpm: number;
-  readingMode: ReadingMode;
+  initialCursorRoot: CursorRootState;
+  initialWpm: number;
+  initialReadingMode: ReadingMode;
   contentType: ContentType;
   bookTitle: string;
   initialDisplayMode: DisplayMode;
@@ -58,18 +65,33 @@ interface ActiveReaderProps {
   bookTitle: string;
   chapters: Chapter[];
   tocTree: TocNode[] | null;
-  initialChapterIdx: number;
-  initialSegmentIndex: number;
-  initialWordIndex: number;
   initialWpm: number;
   initialReadingMode: ReadingMode;
   initialDisplayMode: DisplayMode;
   contentType: ContentType;
 }
 
+const VALID_MODES: ReadingMode[] = ['phrase', 'rsvp', 'scroll', 'track'];
+function coerceMode(raw: string): ReadingMode {
+  if ((VALID_MODES as readonly string[]).includes(raw)) return raw as ReadingMode;
+  if (raw === 'eyetrack') return 'track';
+  return 'phrase';
+}
+
 /* ------------------------------------------------------------------ */
 /*  ReaderViewport — Phase 1: Loading                                  */
 /* ------------------------------------------------------------------ */
+//
+// Phase 1 fetches the publication AND the saved progress synchronously
+// so we can construct the cursor's initial state with the right
+// chapter+segment before mounting the provider. This is the only place
+// we directly read getProgress() — once the provider is up,
+// RestoreCoordinator owns the lifecycle.
+//
+// Pre-launch we don't bother gating on the API; localStorage is read
+// inline and we pick the fresher of the two. RestoreCoordinator will
+// re-validate after mount but the initial cursor state is already
+// correct, so the engines align without ever flashing through zero.
 
 export default function ReaderViewport({ publicationId }: ReaderViewportProps) {
   const [initState, setInitState] = useState<
@@ -101,7 +123,10 @@ export default function ReaderViewport({ publicationId }: ReaderViewportProps) {
           return;
         }
 
-        // Pick best progress: compare API vs localStorage, use most recent
+        // Pick the fresher of API + localStorage. The duplicate read
+        // (RestoreCoordinator does the same) is intentional — we want
+        // the initial cursor state correct on the very first render so
+        // engines never see a default zero position.
         let progress: ReadingProgress | null = apiProgress;
         try {
           const raw = localStorage.getItem(`speedreader_progress_${publicationId}`);
@@ -115,12 +140,12 @@ export default function ReaderViewport({ publicationId }: ReaderViewportProps) {
           /* ignore */
         }
 
-        // Compute initial position from saved progress
         let chapterIdx = 0;
-        let segmentIndex = 0;
+        let absoluteSegmentIndex = 0;
         let wordIndex = 0;
         let wpm = 250;
         let readingMode: ReadingMode = 'phrase';
+        let havePosition = false;
 
         if (progress) {
           const savedChapterIdx = sorted.findIndex(
@@ -128,30 +153,54 @@ export default function ReaderViewport({ publicationId }: ReaderViewportProps) {
           );
           if (savedChapterIdx !== -1) {
             chapterIdx = savedChapterIdx;
-            segmentIndex = progress.segment_index;
+            absoluteSegmentIndex = progress.absolute_segment_index;
             wordIndex = progress.word_index ?? 0;
             wpm = progress.wpm;
-            if (progress.reading_mode === 'rsvp' || progress.reading_mode === 'phrase' || progress.reading_mode === 'scroll' || progress.reading_mode === 'track') {
-              readingMode = progress.reading_mode as ReadingMode;
-            } else if (progress.reading_mode === 'eyetrack') {
-              // Backward compat: old saved progress used 'eyetrack'
-              readingMode = 'track';
-            }
+            readingMode = coerceMode(progress.reading_mode);
+            havePosition = true;
           }
-
-          if (import.meta.env.DEV) {
-            console.log('[Progress] restoring', {
-              source: progress === apiProgress ? 'api' : 'localStorage',
-              chapterIdx,
-              segmentIndex,
-              wordIndex,
-              wpm,
-              readingMode,
-            });
-          }
-        } else if (import.meta.env.DEV) {
-          console.log('[Progress] no saved progress found');
         }
+
+        const initialCursorRoot: CursorRootState = havePosition
+          ? {
+              cursor: {
+                ...initialCursor,
+                chapterId: sorted[chapterIdx].id,
+                chapterIdx,
+                absoluteSegmentIndex,
+                wordIndex,
+                origin: 'restore',
+                revision: 1,
+              },
+              restore: {
+                status: 'pending',
+                target: {
+                  chapterId: sorted[chapterIdx].id,
+                  chapterIdx,
+                  absoluteSegmentIndex,
+                  wordIndex,
+                  wpm,
+                  readingMode,
+                },
+                source: progress === apiProgress ? 'api' : 'localStorage',
+                error: null,
+              },
+            }
+          : {
+              cursor: {
+                ...initialCursor,
+                chapterId: sorted[0].id,
+                chapterIdx: 0,
+                origin: 'restore',
+                revision: 1,
+              },
+              restore: {
+                status: 'live',
+                target: null,
+                source: 'none',
+                error: null,
+              },
+            };
 
         const initialDisplayMode: DisplayMode =
           pub.display_mode_pref ?? readDefaultDisplayMode();
@@ -161,11 +210,9 @@ export default function ReaderViewport({ publicationId }: ReaderViewportProps) {
           position: {
             chapters: sorted,
             tocTree: pub.toc_tree ?? null,
-            chapterIdx,
-            segmentIndex,
-            wordIndex,
-            wpm,
-            readingMode,
+            initialCursorRoot,
+            initialWpm: wpm,
+            initialReadingMode: readingMode,
             contentType: (pub.content_type ?? 'text') as ContentType,
             bookTitle: pub.title,
             initialDisplayMode,
@@ -196,67 +243,70 @@ export default function ReaderViewport({ publicationId }: ReaderViewportProps) {
   const { position } = initState;
 
   return (
-    <ActiveReader
-      publicationId={publicationId}
-      bookTitle={position.bookTitle}
-      chapters={position.chapters}
-      tocTree={position.tocTree}
-      initialChapterIdx={position.chapterIdx}
-      initialSegmentIndex={position.segmentIndex}
-      initialWordIndex={position.wordIndex}
-      initialWpm={position.wpm}
-      initialReadingMode={position.readingMode}
-      initialDisplayMode={position.initialDisplayMode}
-      contentType={position.contentType}
-    />
+    <CursorProvider initial={position.initialCursorRoot}>
+      <ActiveReader
+        publicationId={publicationId}
+        bookTitle={position.bookTitle}
+        chapters={position.chapters}
+        tocTree={position.tocTree}
+        initialWpm={position.initialWpm}
+        initialReadingMode={position.initialReadingMode}
+        initialDisplayMode={position.initialDisplayMode}
+        contentType={position.contentType}
+      />
+    </CursorProvider>
   );
 }
 
 /* ------------------------------------------------------------------ */
 /*  ActiveReader — Phase 2: Fully initialized reader                   */
 /* ------------------------------------------------------------------ */
+//
+// All the cursor reads/writes happen here. Engines no longer own a
+// canonical position — they publish to the cursor via onCursorTick and
+// receive alignments via useCursorAlignedEngine. Mode switching is
+// MODE_SWITCH dispatch + setReadingMode; the engines re-align as a
+// side effect of the revision bump.
 
 function ActiveReader({
   publicationId,
   bookTitle,
   chapters,
   tocTree,
-  initialChapterIdx,
-  initialSegmentIndex,
-  initialWordIndex,
   initialWpm,
   initialReadingMode,
   initialDisplayMode,
   contentType,
 }: ActiveReaderProps) {
+  const dispatch = useCursorDispatch();
+  const cursorChapterIdx = useCursorSelector((s) => s.cursor.chapterIdx);
+  const cursorAbsIdx = useCursorSelector((s) => s.cursor.absoluteSegmentIndex);
+  const cursorWordIdx = useCursorSelector((s) => s.cursor.wordIndex);
+  const cursorOrigin = useCursorSelector((s) => s.cursor.origin);
+  const cursorRevision = useCursorSelector((s) => s.cursor.revision);
+  const restoreStatus = useCursorSelector((s) => s.restore.status);
+  const isLive = restoreStatus === 'live';
+
   const [readingMode, setReadingMode] = useState<ReadingMode>(initialReadingMode);
-  const [chapterIdx, setChapterIdx] = useState(initialChapterIdx);
   const [displayMode, setDisplayMode] = useState<DisplayMode>(initialDisplayMode);
   const [tocOpen, setTocOpen] = useState(false);
 
-  // CBZ never shows the formatted-view toggle (PRD §4.5).
   const isImageBook = contentType === 'image';
-  // Phrase/RSVP show the phrase/word display only while playing — this is
-  // a deliberate refinement of PRD §4.4: when paused in formatted mode, the
-  // user gets the full formatted page to browse, then hitting Play snaps
-  // back to the phrase/word display from the same segment cursor.
   const phraseLikeMode = readingMode === 'phrase' || readingMode === 'rsvp';
 
   const handleToggleDisplayMode = useCallback(() => {
     setDisplayMode((prev) => {
       const next: DisplayMode = prev === 'plain' ? 'formatted' : 'plain';
-      // Persist per-book preference (best-effort).
       setDisplayModePref(publicationId, next).catch(() => { /* ignore */ });
       return next;
     });
   }, [publicationId]);
-  const [saverEnabled, setSaverEnabled] = useState(false);
+
   const [stopAtChapterEnd, setStopAtChapterEnd] = useState(() => {
     try {
       return localStorage.getItem(`speedreader_stop_at_chapter_${publicationId}`) === '1';
     } catch { return false; }
   });
-  const hasAppliedInitialSeek = useRef(false);
   const autoAdvanceRef = useRef(false);
   const stopAtChapterEndRef = useRef(stopAtChapterEnd);
   stopAtChapterEndRef.current = stopAtChapterEnd;
@@ -273,26 +323,15 @@ function ActiveReader({
   const { announce } = useAnnounce();
   const isDataSaver = useDataSaver();
 
-  const currentChapter = chapters[chapterIdx] ?? null;
+  const currentChapter = chapters[cursorChapterIdx] ?? chapters[0] ?? null;
   const currentChapterId = currentChapter?.id ?? 0;
 
-  // Track the absolute segment_index the engines are currently on.
-  // This survives array shifts caused by backward prefetch.
-  const trackedSegmentIndexRef = useRef(initialSegmentIndex);
-
-  // Reset tracked segment position on chapter change
-  const prevChapterIdRef = useRef(currentChapterId);
-  if (prevChapterIdRef.current !== currentChapterId) {
-    prevChapterIdRef.current = currentChapterId;
-    trackedSegmentIndexRef.current = 0;
-  }
-
-  /* ---- Segment loader ---- */
-  const [loaderState, loaderActions] = useSegmentLoader({
+  /* ---- Segment loader (with translators) ---- */
+  const [loaderState, loaderActions, translators] = useSegmentLoader({
     publicationId,
     chapterId: currentChapterId,
     dataSaver: isDataSaver,
-    initialSegmentIndex,
+    initialSegmentIndex: cursorAbsIdx,
   });
 
   useEffect(() => {
@@ -301,40 +340,77 @@ function ActiveReader({
     }
   }, [loaderState.segments]);
 
-  /* ---- Callbacks for engines ---- */
-  const suppressPrefetchRef = useRef(false);
-  const onSegmentChange = useCallback(
-    (index: number) => {
-      // Keep the tracked absolute segment_index in sync
-      const seg = loaderState.segments[index];
-      if (seg) trackedSegmentIndexRef.current = seg.segment_index;
-      if (!suppressPrefetchRef.current) {
-        loaderActions.checkPrefetch(index);
-      }
+  /* ---- Restore coordinator ---- */
+  // Skip the coordinator's own getProgress call — Phase 1 already did
+  // it and seeded the initial cursor. We only need the ensure-window +
+  // applied + go-live transitions, which fire from the cursor state.
+  const ensureWindowFor = useCallback(
+    (_chapterId: number, abs: number) => loaderActions.ensureWindowFor(abs),
+    [loaderActions],
+  );
+  useRestoreCoordinator({
+    publicationId,
+    chapters,
+    ensureWindowFor,
+  });
+
+  /* ---- Cursor publishers from engine ticks ---- */
+  // Wraps the loader prefetch + cursor dispatch into a single callback
+  // each engine plugs into. Only fires from rAF tick loops; explicit
+  // seeks (alignToCursor below) bypass it so we can never close the
+  // engine→cursor→engine feedback loop.
+  const onCursorTick = useCallback(
+    (arrayIdx: number) => {
+      loaderActions.checkPrefetch(arrayIdx);
+      const abs = translators.arrayToAbsolute(arrayIdx);
+      if (abs == null) return;
+      dispatch({
+        type: 'ENGINE_TICK',
+        payload: { absoluteSegmentIndex: abs },
+      });
     },
-    [loaderActions, loaderState.segments],
+    [loaderActions, translators, dispatch],
+  );
+
+  // onSegmentChange is the legacy prefetch-only path; engines call it
+  // from BOTH ticks and seeks. We keep it for prefetch, distinct from
+  // onCursorTick (ticks only).
+  const onSegmentChangeForPrefetch = useCallback(
+    (arrayIdx: number) => {
+      loaderActions.checkPrefetch(arrayIdx);
+    },
+    [loaderActions],
   );
 
   const onPlaybackComplete = useCallback(() => {
-    if (chapterIdx >= chapters.length - 1) {
+    if (cursorChapterIdx >= chapters.length - 1) {
       announce('Book finished');
       return;
     }
     if (stopAtChapterEndRef.current) {
-      announce(`Chapter complete: ${chapters[chapterIdx]?.title ?? ''}`);
+      announce(`Chapter complete: ${chapters[cursorChapterIdx]?.title ?? ''}`);
       return;
     }
     autoAdvanceRef.current = true;
-    setChapterIdx((i) => i + 1);
-    announce(`Next chapter: ${chapters[chapterIdx + 1]?.title ?? ''}`);
-  }, [chapterIdx, chapters, announce]);
+    const nextIdx = cursorChapterIdx + 1;
+    dispatch({
+      type: 'CHAPTER_NAV',
+      payload: {
+        chapterId: chapters[nextIdx].id,
+        chapterIdx: nextIdx,
+        reset: true,
+      },
+    });
+    announce(`Next chapter: ${chapters[nextIdx]?.title ?? ''}`);
+  }, [cursorChapterIdx, chapters, announce, dispatch]);
 
-  /* ---- Playback engines (initialized with correct WPM from the start) ---- */
+  /* ---- Playback engines ---- */
   const [playbackState, playbackActions] = usePlaybackEngine({
     segments: loaderState.segments,
     totalSegments: loaderState.totalSegments,
     initialWpm,
-    onSegmentChange,
+    onSegmentChange: onSegmentChangeForPrefetch,
+    onCursorTick,
     onComplete: onPlaybackComplete,
   });
 
@@ -342,11 +418,12 @@ function ActiveReader({
     segments: loaderState.segments,
     totalSegments: loaderState.totalSegments,
     initialWpm,
-    onSegmentChange,
+    onSegmentChange: onSegmentChangeForPrefetch,
+    onCursorTick,
     onComplete: onPlaybackComplete,
   });
 
-  /* ---- Scroll engine ---- */
+  /* ---- Focus-mode scroll/track engines ---- */
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const scrollItemRefsMap = useRef<Map<number, HTMLDivElement>>(new Map());
 
@@ -356,11 +433,12 @@ function ActiveReader({
     containerRef: scrollContainerRef,
     itemOffsetsRef: scrollItemRefsMap,
     initialWpm,
-    onSegmentChange,
+    onSegmentChange: onSegmentChangeForPrefetch,
+    onCursorTick,
     onComplete: onPlaybackComplete,
   });
 
-  /* ---- Gaze tracker + track engine ---- */
+  /* ---- Gaze tracker + focus track engine ---- */
   const [gazeState, gazeRef, gazeActions] = useGazeTracker();
   const [showCalibration, setShowCalibration] = useState(false);
   const [gazeSensitivity, setGazeSensitivity] = useState(1.0);
@@ -373,71 +451,40 @@ function ActiveReader({
     itemOffsetsRef: scrollItemRefsMap,
     gazeRef,
     initialWpm,
-    onSegmentChange,
+    onSegmentChange: onSegmentChangeForPrefetch,
+    onCursorTick,
     onComplete: onPlaybackComplete,
   });
 
-  /* ---- Formatted-view scroll/track variants ---------------------------
-   *
-   * The focus-mode engines above drive the FocusChunkOverlay teleprompter.
-   * When the user is in formatted display mode and switches to scroll or
-   * track playback, we want the formatted EPUB page itself to auto-scroll —
-   * not the teleprompter. So we spin up a SECOND pair of engines that read
-   * a different container ref (the FormattedView scroller), an empty item
-   * offsets map (no per-segment DOM exists in formatted view), and the
-   * velocity profile populated by FormattedView's ProfileBuilder.
-   *
-   * These engines are inert until the activeState/activeActions selector
-   * below picks them — they only consume CPU when their isPlaying flips
-   * true, which never happens until the user is actually playing in
-   * formatted+scroll/track mode.
-   */
+  /* ---- Formatted-view scroll/track variants ---- */
   const formattedViewRef = useRef<FormattedViewHandle>(null);
-  // MutableRefObject so we can repoint .current at the FormattedView's
-  // scroll container after it mounts. The engines accept this as a
-  // RefObject<HTMLDivElement | null>.
   const formattedScrollContainerRef = useRef<HTMLDivElement | null>(null);
-  // Empty — the formatted-view variant uses onScrollTick + the velocity
-  // profile instead of per-segment item rects. Kept around because the
-  // engines' option types still require the field.
+  // Empty — formatted variant uses onScrollTick + the velocity profile
+  // instead of per-segment item rects. Required by the engines' option type.
   const formattedItemOffsetsRef = useRef<Map<number, HTMLDivElement>>(new Map());
   const velocityProfileRef = useRef<VelocityProfile | null>(null);
 
-  // Remember the highest segment index the cursor has reached during the
-  // current play session. The section-proportional cursor mapping is
-  // positional (it derives index from scroll position within the section),
-  // which means a late image load that grows section height would briefly
-  // pull the cursor backward. We clamp the cursor to monotonic forward
-  // progress while the engine is playing; on pause the cursor is allowed
-  // to track scroll position freely so manual scroll-back updates work.
+  // Monotonic forward clamp for the formatted-mode scroll cursor while
+  // playing. Late image loads can grow section height and pull the
+  // proportional mapping backward; we lock the cursor to monotonic
+  // forward progress per play session. Reset on each play().
   const formattedCursorMonoRef = useRef(0);
 
   /**
-   * Pure cursor mapping: given a container-relative scroll center, return
-   * the segment array index the user is looking at — no monotonic clamp,
-   * no side effects. Used both by the engine's onScrollTick (with the
-   * clamp wrapper below) and by the manual-scroll listener (without it,
-   * because users may legitimately scroll backward while paused).
-   *
-   * Section-proportional: find where the scroll center sits within the
-   * current section's bounding box and interpolate across the loaded
-   * segments. Segments come from a plain-text chunker pipeline, not from
-   * the EPUB HTML, so there's no reliable mapping from a DOM position to
-   * a specific segment. Proportional is approximate but smooth and good
-   * enough for progress saving (which only cares about segment_index
-   * granularity).
+   * Pure cursor mapping: container-relative scroll center → array index
+   * within the current section. No clamp, no side effects. Reused by
+   * the engine's onScrollTick (with the clamp wrapper) and the
+   * pause-time scroll listener (without it).
    */
   const computeFormattedCursor = useCallback(
     (centerY: number): number | null => {
       const handle = formattedViewRef.current;
       if (!handle) return null;
-      const sectionEl = handle.getSectionEl(chapterIdx);
+      const sectionEl = handle.getSectionEl(cursorChapterIdx);
       const container = handle.getScrollContainer();
       if (!sectionEl || !container) return null;
       const containerRect = container.getBoundingClientRect();
       const sectionRect = sectionEl.getBoundingClientRect();
-      // Convert section rect into the same container-relative coordinate
-      // space as centerY (which is container.scrollTop + clientHeight/2).
       const sectionTop = sectionRect.top - containerRect.top + container.scrollTop;
       const sectionBottom = sectionTop + sectionRect.height;
       if (centerY < sectionTop || centerY >= sectionBottom) return null;
@@ -449,16 +496,9 @@ function ActiveReader({
         Math.max(0, Math.floor(progress * segs.length)),
       );
     },
-    [chapterIdx, loaderState.segments],
+    [cursorChapterIdx, loaderState.segments],
   );
 
-  /**
-   * Engine-side wrapper that applies the monotonic forward clamp. While
-   * playing we never want the cursor to slide backward — late image loads
-   * grow the section height, the proportional mapping recomputes lower,
-   * and the cursor would otherwise rewind under the scroll. The clamp ref
-   * resets in startPlay() so each play session starts fresh.
-   */
   const formattedScrollTick = useCallback(
     (centerY: number): number | null => {
       const idx = computeFormattedCursor(centerY);
@@ -478,7 +518,8 @@ function ActiveReader({
     velocityProfileRef,
     onScrollTick: formattedScrollTick,
     initialWpm,
-    onSegmentChange,
+    onSegmentChange: onSegmentChangeForPrefetch,
+    onCursorTick,
     onComplete: onPlaybackComplete,
   });
 
@@ -491,84 +532,70 @@ function ActiveReader({
     onScrollTick: formattedScrollTick,
     gazeRef,
     initialWpm,
-    onSegmentChange,
+    onSegmentChange: onSegmentChangeForPrefetch,
+    onCursorTick,
     onComplete: onPlaybackComplete,
   });
 
   /**
-   * Wrap formatted-mode play/pause so the engine driving flag flips on the
-   * imperative handle and image decoding finishes before the engine starts.
+   * Formatted-mode play wrapper. Settles images and rebuilds the
+   * velocity profile before handing off to the engine. Also resets the
+   * monotonic forward clamp so each play session starts fresh.
    *
-   * Play sequence:
-   *   1. Reset the monotonic cursor clamp so we don't carry stale state
-   *      from a previous play session.
-   *   2. Tell FormattedView the engine is now driving — this suppresses the
-   *      IntersectionObserver's onVisibleSectionChange feedback so the
-   *      engine's scrollTop writes don't loop back through setChapterIdx.
-   *   3. Await every <img>.decode() in the current section so layout is
-   *      stable before we measure pxPerWeight.
-   *   4. Force a profile rebuild from the now-stable layout.
-   *   5. Hand off to the engine's real play().
-   *
-   * Pause is symmetric: stop the engine first, then clear the driving flag.
-   *
-   * Each engine (scroll, track) gets its own wrapper so togglePlayPause sees
-   * the right isPlaying flag.
+   * Replaces wrapFormattedActions from the pre-cursor-refactor era —
+   * the engine-driving flag is gone (the IntersectionObserver consults
+   * cursor.origin instead) and the cross-engine seek dance is gone
+   * (useCursorAlignedEngine handles alignment).
    */
-  const wrapFormattedActions = useCallback(
-    (
-      raw: typeof formattedScrollActionsRaw,
-      isPlaying: boolean,
-    ) => {
-      const startPlay = () => {
-        const handle = formattedViewRef.current;
-        formattedCursorMonoRef.current = 0;
-        if (!handle) {
+  const startFormattedPlay = useCallback(
+    (raw: { play: () => void }) => {
+      formattedCursorMonoRef.current = 0;
+      const handle = formattedViewRef.current;
+      if (!handle) {
+        raw.play();
+        return;
+      }
+      if (!formattedScrollContainerRef.current) {
+        formattedScrollContainerRef.current = handle.getScrollContainer();
+      }
+      handle
+        .settleImages(cursorChapterIdx)
+        .then(() => {
+          handle.rebuildProfile();
           raw.play();
-          return;
-        }
-        if (!formattedScrollContainerRef.current) {
-          formattedScrollContainerRef.current = handle.getScrollContainer();
-        }
-        handle.setEngineDriving(true);
-        handle
-          .settleImages(chapterIdx)
-          .then(() => {
-            handle.rebuildProfile();
-            raw.play();
-          })
-          .catch(() => {
-            handle.rebuildProfile();
-            raw.play();
-          });
-      };
-      const stopPlay = () => {
-        raw.pause();
-        formattedViewRef.current?.setEngineDriving(false);
-      };
-      return {
-        ...raw,
-        play: startPlay,
-        pause: stopPlay,
-        togglePlayPause: () => {
-          if (isPlaying) stopPlay();
-          else startPlay();
-        },
-      };
+        })
+        .catch(() => {
+          handle.rebuildProfile();
+          raw.play();
+        });
     },
-    [chapterIdx],
+    [cursorChapterIdx],
   );
 
   const formattedScrollActions = useMemo(
-    () => wrapFormattedActions(formattedScrollActionsRaw, formattedScrollState.isPlaying),
-    [wrapFormattedActions, formattedScrollActionsRaw, formattedScrollState.isPlaying],
+    () => ({
+      ...formattedScrollActionsRaw,
+      play: () => startFormattedPlay(formattedScrollActionsRaw),
+      togglePlayPause: () => {
+        if (formattedScrollState.isPlaying) formattedScrollActionsRaw.pause();
+        else startFormattedPlay(formattedScrollActionsRaw);
+      },
+    }),
+    [formattedScrollActionsRaw, formattedScrollState.isPlaying, startFormattedPlay],
   );
   const formattedTrackActions = useMemo(
-    () => wrapFormattedActions(formattedTrackActionsRaw, formattedTrackState.isPlaying),
-    [wrapFormattedActions, formattedTrackActionsRaw, formattedTrackState.isPlaying],
+    () => ({
+      ...formattedTrackActionsRaw,
+      play: () => startFormattedPlay(formattedTrackActionsRaw),
+      togglePlayPause: () => {
+        if (formattedTrackState.isPlaying) formattedTrackActionsRaw.pause();
+        else startFormattedPlay(formattedTrackActionsRaw);
+      },
+    }),
+    [formattedTrackActionsRaw, formattedTrackState.isPlaying, startFormattedPlay],
   );
 
-  // Start/stop camera when entering/leaving track mode
+  /* ---- Camera lifecycle for track mode ---- */
   const readingModeRef = useRef(readingMode);
   readingModeRef.current = readingMode;
   useEffect(() => {
@@ -585,7 +612,6 @@ function ActiveReader({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [readingMode]);
 
-  // Auto-pause on tracking loss, auto-resume when tracking recovers
   const [wasPlayingBeforeLost, setWasPlayingBeforeLost] = useState(false);
   useEffect(() => {
     if (readingMode === 'track') {
@@ -599,57 +625,154 @@ function ActiveReader({
     }
   }, [readingMode, gazeState.status, trackState.isPlaying, trackActions, wasPlayingBeforeLost]);
 
-  // Pause gaze inference when playback is paused to free up CPU for touch scrolling
   useEffect(() => {
     if (readingMode !== 'track') return;
     if (trackState.isPlaying) {
       gazeActions.resumeTracking();
     } else if (!wasPlayingBeforeLost) {
-      // Only pause tracking if this isn't a tracking-loss auto-pause
-      // (tracking needs to stay on to detect when the user returns)
       gazeActions.pauseTracking();
     }
   }, [readingMode, trackState.isPlaying, wasPlayingBeforeLost, gazeActions]);
 
-  // We need to know which engines are "active" (focus-mode vs formatted-mode
-  // variants) before we can compute showFormattedView, but showFormattedView
-  // also feeds the engine selection. Resolve in two steps:
-  //   1. Compute a tentative showFormattedView from displayMode + isPlaying
-  //      against the FOCUS-mode states. This is correct for the phraseLikeMode
-  //      exclusion path because phrase/RSVP only have focus-mode engines.
-  //   2. Pick activeState/activeActions using the tentative value plus the
-  //      reading mode. Scroll/track in formatted view → formatted variants;
-  //      everything else → focus variants.
-  // The formatted variants are only ever consulted when showFormattedView is
-  // true, so the tentative-vs-final distinction never causes a wrong pick.
+  /* ---- showFormattedView decision (same heuristic as before) ---- */
   const showFormattedView =
     (isImageBook || displayMode === 'formatted') &&
     !(phraseLikeMode && (
       readingMode === 'rsvp' ? rsvpState.isPlaying : playbackState.isPlaying
     ));
 
-  /* ---- Active state/actions based on reading mode + display mode ---- */
   const useFormattedEngines = showFormattedView && (readingMode === 'scroll' || readingMode === 'track');
+
+  /* ---- alignToCursor wiring (one effect per engine) ---- */
+  // Each engine gets a useCursorAlignedEngine call. The seek translates
+  // absolute → array index inside the callback so we don't capture a
+  // stale array length, and skips when origin === 'engine' to break the
+  // feedback loop. `isActive` is set so parked engines don't waste work
+  // chasing alignments they'll never play out.
+
+  const alignPlayback = useCallback((abs: number) => {
+    const arr = translators.absoluteToArrayIndex(abs);
+    if (arr == null) return;
+    playbackActions.seekTo(arr);
+  }, [translators, playbackActions]);
+  useCursorAlignedEngine({
+    cursorRevision,
+    cursorOrigin,
+    cursorAbsoluteIndex: cursorAbsIdx,
+    alignToCursor: alignPlayback,
+    isLive,
+    isActive: readingMode === 'phrase',
+  });
+
+  const alignRsvp = useCallback((abs: number, word: number) => {
+    const arr = translators.absoluteToArrayIndex(abs);
+    if (arr == null) return;
+    rsvpActions.seekToSegment(arr, word);
+  }, [translators, rsvpActions]);
+  useCursorAlignedEngine({
+    cursorRevision,
+    cursorOrigin,
+    cursorAbsoluteIndex: cursorAbsIdx,
+    cursorWordIndex: cursorWordIdx,
+    alignToCursor: alignRsvp,
+    isLive,
+    isActive: readingMode === 'rsvp',
+  });
+
+  const alignFocusScroll = useCallback((abs: number) => {
+    const arr = translators.absoluteToArrayIndex(abs);
+    if (arr == null) return;
+    scrollActions.seekTo(arr);
+  }, [translators, scrollActions]);
+  useCursorAlignedEngine({
+    cursorRevision,
+    cursorOrigin,
+    cursorAbsoluteIndex: cursorAbsIdx,
+    alignToCursor: alignFocusScroll,
+    isLive,
+    isActive: readingMode === 'scroll' && !useFormattedEngines,
+  });
+
+  const alignFocusTrack = useCallback((abs: number) => {
+    const arr = translators.absoluteToArrayIndex(abs);
+    if (arr == null) return;
+    trackActions.seekTo(arr);
+  }, [translators, trackActions]);
+  useCursorAlignedEngine({
+    cursorRevision,
+    cursorOrigin,
+    cursorAbsoluteIndex: cursorAbsIdx,
+    alignToCursor: alignFocusTrack,
+    isLive,
+    isActive: readingMode === 'track' && !useFormattedEngines,
+  });
+
+  const alignFormattedScroll = useCallback((abs: number) => {
+    const arr = translators.absoluteToArrayIndex(abs);
+    if (arr == null) return;
+    formattedScrollActionsRaw.seekTo(arr);
+  }, [translators, formattedScrollActionsRaw]);
+  useCursorAlignedEngine({
+    cursorRevision,
+    cursorOrigin,
+    cursorAbsoluteIndex: cursorAbsIdx,
+    alignToCursor: alignFormattedScroll,
+    isLive,
+    isActive: readingMode === 'scroll' && useFormattedEngines,
+  });
+
+  const alignFormattedTrack = useCallback((abs: number) => {
+    const arr = translators.absoluteToArrayIndex(abs);
+    if (arr == null) return;
+    formattedTrackActionsRaw.seekTo(arr);
+  }, [translators, formattedTrackActionsRaw]);
+  useCursorAlignedEngine({
+    cursorRevision,
+    cursorOrigin,
+    cursorAbsoluteIndex: cursorAbsIdx,
+    alignToCursor: alignFormattedTrack,
+    isLive,
+    isActive: readingMode === 'track' && useFormattedEngines,
+  });
+
+  /* ---- activeState/activeActions ---- */
+  // The "active" engine is the one currently rendering UI. Reads
+  // current array index from the cursor selector so the rest of the
+  // component doesn't have to know which engine variant is in use.
+  const activeArrayIdx = useMemo(() => {
+    return translators.absoluteToArrayIndex(cursorAbsIdx) ?? 0;
+  }, [translators, cursorAbsIdx, loaderState.segments]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const activeState = readingMode === 'rsvp'
     ? {
-        currentIndex: rsvpState.currentSegmentIndex,
+        currentIndex: activeArrayIdx,
         isPlaying: rsvpState.isPlaying,
         wpm: rsvpState.wpm,
         progress: rsvpState.progress,
       }
     : readingMode === 'scroll'
-    ? (useFormattedEngines ? formattedScrollState : scrollState)
+    ? (useFormattedEngines
+        ? { ...formattedScrollState, currentIndex: activeArrayIdx }
+        : { ...scrollState, currentIndex: activeArrayIdx })
     : readingMode === 'track'
-    ? (useFormattedEngines ? formattedTrackState : trackState)
-    : playbackState;
+    ? (useFormattedEngines
+        ? { ...formattedTrackState, currentIndex: activeArrayIdx }
+        : { ...trackState, currentIndex: activeArrayIdx })
+    : { ...playbackState, currentIndex: activeArrayIdx };
 
   const activeActions = readingMode === 'rsvp'
     ? {
         play: rsvpActions.play,
         pause: rsvpActions.pause,
         togglePlayPause: rsvpActions.togglePlayPause,
-        seekTo: rsvpActions.seekToSegment,
+        seekTo: (idx: number) => {
+          const abs = translators.arrayToAbsolute(idx);
+          if (abs == null) return;
+          dispatch({
+            type: 'USER_SEEK',
+            payload: { absoluteSegmentIndex: abs },
+          });
+        },
         setWpm: rsvpActions.setWpm,
         adjustWpm: rsvpActions.adjustWpm,
       }
@@ -659,9 +782,26 @@ function ActiveReader({
     ? (useFormattedEngines ? formattedTrackActions : trackActions)
     : playbackActions;
 
-  // Repoint the formatted scroll container ref whenever the formatted view
-  // mounts/unmounts. The engine reads .current on every tick so this just
-  // needs to be in place before play() runs.
+  // Wrap the non-RSVP active engines' seekTo so it goes through cursor
+  // dispatch (USER_SEEK) instead of jumping the engine directly. The
+  // align effect then drives the engine, ensuring every other engine
+  // tracks the same absolute position.
+  const wrappedActiveActions = useMemo(() => {
+    if (readingMode === 'rsvp') return activeActions;
+    return {
+      ...activeActions,
+      seekTo: (idx: number) => {
+        const abs = translators.arrayToAbsolute(idx);
+        if (abs == null) return;
+        dispatch({
+          type: 'USER_SEEK',
+          payload: { absoluteSegmentIndex: abs },
+        });
+      },
+    };
+  }, [activeActions, readingMode, translators, dispatch]);
+
+  /* ---- Repoint formatted scroll container ref ---- */
   useEffect(() => {
     if (!showFormattedView) {
       formattedScrollContainerRef.current = null;
@@ -673,31 +813,7 @@ function ActiveReader({
     }
   }, [showFormattedView]);
 
-  /**
-   * Sync the active engine's segment cursor to the user's manual scroll
-   * position while paused in formatted view. Without this, the cursor
-   * stays wherever it was last set (TOC click, end of last play session,
-   * etc.) so pressing Play after a manual scroll resumes from the wrong
-   * place. The mapping reuses computeFormattedCursor — same math the
-   * engine uses while playing — but skips the monotonic clamp because the
-   * user is allowed to scroll backward when paused.
-   *
-   * The active engine is whichever activeActions.seekTo points at:
-   *   - playback mode → playbackActions.seekTo
-   *   - rsvp mode    → rsvpActions.seekToSegment
-   *   - scroll mode  → formattedScrollActions.seekTo (raw passthrough)
-   *   - track mode   → formattedTrackActions.seekTo (raw passthrough)
-   * So this works "regardless of mode" as long as the user is in
-   * formatted view.
-   *
-   * rAF-throttled so a flick scroll doesn't fire dozens of seekTo calls
-   * per frame; the comparison against the latest currentIndex via a ref
-   * prevents re-firing for the same value.
-   */
-  const activeCurrentIndexRef = useRef(activeState.currentIndex);
-  activeCurrentIndexRef.current = activeState.currentIndex;
-  const activeSeekToRef = useRef(activeActions.seekTo);
-  activeSeekToRef.current = activeActions.seekTo;
+  /* ---- Pause-mode scroll listener (USER_SCROLL dispatcher) ---- */
   useEffect(() => {
     if (!showFormattedView) return;
     if (activeState.isPlaying) return;
@@ -715,8 +831,13 @@ function ActiveReader({
         const centerY = container.scrollTop + container.clientHeight / 2;
         const idx = computeFormattedCursor(centerY);
         if (idx == null) return;
-        if (idx === activeCurrentIndexRef.current) return;
-        activeSeekToRef.current(idx);
+        const abs = translators.arrayToAbsolute(idx);
+        if (abs == null) return;
+        if (abs === cursorAbsIdx) return;
+        dispatch({
+          type: 'USER_SCROLL',
+          payload: { absoluteSegmentIndex: abs },
+        });
       });
     };
 
@@ -724,168 +845,66 @@ function ActiveReader({
     return () => {
       container.removeEventListener('scroll', onScroll);
     };
-  }, [showFormattedView, activeState.isPlaying, computeFormattedCursor]);
-
-  /**
-   * Mid-play handoff between focus-mode and formatted-mode engines.
-   *
-   * When the user toggles displayMode while a scroll/track engine is
-   * playing, the active engine flips from one variant to the other. The
-   * outgoing engine is still running its rAF loop against a container ref
-   * that's about to disappear (or already has). At minimum we need to pause
-   * it cleanly so it stops trying to write scrollTop on a stale element and
-   * the engine-driving flag clears.
-   *
-   * For MVP we don't auto-resume on the incoming engine — the user can hit
-   * Play again. This matches how phrase/RSVP behave when displayMode toggles
-   * mid-play (no automatic resume). Auto-resume is a fast-follow.
-   *
-   * Tracks the previous value of useFormattedEngines via a ref so the
-   * effect only acts on the actual transition, not on every render.
-   */
-  const prevUseFormattedRef = useRef(useFormattedEngines);
-  useEffect(() => {
-    const prev = prevUseFormattedRef.current;
-    prevUseFormattedRef.current = useFormattedEngines;
-    if (prev === useFormattedEngines) return;
-
-    if (useFormattedEngines) {
-      // Just entered formatted view. Pause whichever focus-mode engine
-      // was running for the current readingMode.
-      if (readingMode === 'scroll' && scrollState.isPlaying) {
-        scrollActions.pause();
-      } else if (readingMode === 'track' && trackState.isPlaying) {
-        trackActions.pause();
-      }
-    } else {
-      // Just left formatted view. Pause the formatted-mode engines via
-      // their wrapped pause so setEngineDriving(false) fires.
-      if (readingMode === 'scroll' && formattedScrollState.isPlaying) {
-        formattedScrollActions.pause();
-      } else if (readingMode === 'track' && formattedTrackState.isPlaying) {
-        formattedTrackActions.pause();
-      }
-    }
-    // The handoff is keyed solely on useFormattedEngines flipping; the
-    // engine isPlaying flags are read at flip time but we don't want the
-    // effect to fire every time they change.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [useFormattedEngines]);
-
-  // trackedSegmentIndexRef declared earlier, before chapter change reset
-
-  /* ---- Initial seek: apply once when segments first load ---- */
-  useEffect(() => {
-    if (hasAppliedInitialSeek.current) return;
-    if (loaderState.segments.length === 0) return;
-
-    hasAppliedInitialSeek.current = true;
-
-    // Full chapter is loaded from segment 0. Find the array index
-    // matching the saved segment_index and seek both engines there.
-    const targetIdx = initialSegmentIndex > 0
-      ? loaderState.segments.findIndex((s) => s.segment_index >= initialSegmentIndex)
-      : 0;
-    const seekIdx = targetIdx !== -1 ? targetIdx : 0;
-
-    // Suppress prefetch during initial seek to avoid unnecessary fetches
-    suppressPrefetchRef.current = true;
-    if (seekIdx > 0) {
-      playbackActions.seekTo(seekIdx);
-      rsvpActions.seekToSegment(seekIdx, initialWordIndex);
-      scrollActions.seekTo(seekIdx);
-      trackActions.seekTo(seekIdx);
-    } else if (initialWordIndex > 0) {
-      rsvpActions.seekToSegment(0, initialWordIndex);
-    }
-    suppressPrefetchRef.current = false;
-    trackedSegmentIndexRef.current = loaderState.segments[seekIdx]?.segment_index ?? initialSegmentIndex;
-
-    setSaverEnabled(true);
-  }, [loaderState.segments, initialSegmentIndex, initialWordIndex, playbackActions, rsvpActions, scrollActions]);
-
-  /* ---- Correct engine positions when segments prepend shifts array ---- */
-  const prevSegmentsRef = useRef(loaderState.segments);
-  useEffect(() => {
-    if (!hasAppliedInitialSeek.current) return;
-    const prev = prevSegmentsRef.current;
-    const next = loaderState.segments;
-    prevSegmentsRef.current = next;
-
-    // Skip if segments were cleared (chapter change) or this is the first load
-    if (prev.length === 0 || next.length === 0 || prev === next) return;
-
-    // Detect if the array start shifted (backward prefetch prepended segments)
-    const prevFirstIdx = prev[0]?.segment_index;
-    const nextFirstIdx = next[0]?.segment_index;
-    if (prevFirstIdx === undefined || nextFirstIdx === undefined) return;
-    if (nextFirstIdx >= prevFirstIdx) return; // Forward append or no change — indices still valid
-
-    // Array shifted: find new array index for the tracked segment
-    const targetSegIdx = trackedSegmentIndexRef.current;
-    const newArrayIdx = next.findIndex((s) => s.segment_index >= targetSegIdx);
-    if (newArrayIdx !== -1) {
-      playbackActions.seekTo(newArrayIdx);
-      // Preserve word index for RSVP
-      const currentWordIdx = rsvpState.currentWordIndex;
-      rsvpActions.seekToSegment(newArrayIdx, currentWordIdx);
-      scrollActions.seekTo(newArrayIdx);
-      trackActions.seekTo(newArrayIdx);
-    }
-  }, [loaderState.segments, playbackActions, rsvpActions, scrollActions, trackActions, rsvpState.currentWordIndex]);
+  }, [
+    showFormattedView,
+    activeState.isPlaying,
+    computeFormattedCursor,
+    translators,
+    cursorAbsIdx,
+    dispatch,
+  ]);
 
   /* ---- Auto-play after chapter auto-advance ---- */
   useEffect(() => {
-    if (!hasAppliedInitialSeek.current) return;
+    if (!isLive) return;
     if (autoAdvanceRef.current && loaderState.segments.length > 0) {
       autoAdvanceRef.current = false;
-      activeActions.seekTo(0);
-      setTimeout(() => activeActions.play(), 300);
+      // The cursor is already at abs=0 of the new chapter (from
+      // CHAPTER_NAV in onPlaybackComplete). All engines will have
+      // aligned via useCursorAlignedEngine. Just resume playback.
+      setTimeout(() => wrappedActiveActions.play(), 300);
     }
-  }, [loaderState.segments, activeActions]);
+  }, [loaderState.segments, isLive, wrappedActiveActions]);
 
-  /* ---- Mode switching (shared logic) ---- */
+  /* ---- Mode switching: dispatch + setReadingMode ---- */
+  // No more cross-engine seekTo. The cursor stays put; MODE_SWITCH
+  // bumps revision so the newly-active engine's useCursorAlignedEngine
+  // effect picks up alignment. Old engines pause via the explicit
+  // pause calls below.
   const switchToMode = useCallback((next: ReadingMode) => {
     playbackActions.pause();
     rsvpActions.pause();
     scrollActions.pause();
     trackActions.pause();
+    formattedScrollActionsRaw.pause();
+    formattedTrackActionsRaw.pause();
 
-    // Get current position/wpm from the active engine
-    let curIdx: number;
-    let curWpm: number;
-    const cur = readingMode;
-    if (cur === 'rsvp') {
-      curIdx = rsvpState.currentSegmentIndex;
-      curWpm = rsvpState.wpm;
-    } else if (cur === 'scroll') {
-      curIdx = scrollState.currentIndex;
-      curWpm = scrollState.wpm;
-    } else if (cur === 'track') {
-      curIdx = trackState.currentIndex;
-      curWpm = trackState.wpm;
-    } else {
-      curIdx = playbackState.currentIndex;
-      curWpm = playbackState.wpm;
-    }
-
-    // Sync the target engine
+    // Carry wpm forward to the engine pair the new mode will use.
+    const curWpm = activeState.wpm;
     if (next === 'rsvp') {
-      rsvpActions.seekToSegment(curIdx);
       rsvpActions.setWpm(curWpm);
     } else if (next === 'scroll') {
-      scrollActions.seekTo(curIdx);
       scrollActions.setWpm(curWpm);
+      formattedScrollActionsRaw.setWpm(curWpm);
     } else if (next === 'track') {
-      trackActions.seekTo(curIdx);
       trackActions.setWpm(curWpm);
+      formattedTrackActionsRaw.setWpm(curWpm);
     } else {
-      playbackActions.seekTo(curIdx);
       playbackActions.setWpm(curWpm);
     }
 
+    dispatch({ type: 'MODE_SWITCH' });
     setReadingMode(next);
-  }, [readingMode, playbackActions, rsvpActions, scrollActions, trackActions, playbackState.currentIndex, playbackState.wpm, rsvpState.currentSegmentIndex, rsvpState.wpm, scrollState.currentIndex, scrollState.wpm, trackState.currentIndex, trackState.wpm]);
+  }, [
+    activeState.wpm,
+    playbackActions,
+    rsvpActions,
+    scrollActions,
+    trackActions,
+    formattedScrollActionsRaw,
+    formattedTrackActionsRaw,
+    dispatch,
+  ]);
 
   const handleToggleMode = useCallback(() => {
     const modeOrder: ReadingMode[] = ['phrase', 'rsvp', 'scroll', 'track'];
@@ -899,96 +918,124 @@ function ActiveReader({
     }
   }, [readingMode, switchToMode]);
 
-  /* ---- Progress saver (enabled only after initial seek) ---- */
-  // Use the tracked absolute segment_index which survives array shifts from
-  // backward prefetch, rather than computing from the array each render.
-  const currentSegmentRealIndex = loaderState.segments[activeState.currentIndex]?.segment_index
-    ?? trackedSegmentIndexRef.current;
-
+  /* ---- Progress saver ---- */
+  // Reads from cursor + restore state via context; the only props are
+  // the things the cursor doesn't carry (wpm, readingMode, getLiveWordIndex).
   useProgressSaver({
     publicationId,
-    chapterId: currentChapterId,
-    segmentIndex: currentSegmentRealIndex,
-    wordIndex: readingMode === 'rsvp' ? rsvpState.currentWordIndex : 0,
     wpm: activeState.wpm,
     readingMode,
-    enabled: saverEnabled,
+    getLiveWordIndex: rsvpActions.getLiveWordIndex,
   });
 
-  const currentSegment = loaderState.segments[activeState.currentIndex] ?? null;
+  const currentSegment = loaderState.segments[activeArrayIdx] ?? null;
 
   /* ---- Chapter announcements ---- */
   useEffect(() => {
-    if (currentChapter && hasAppliedInitialSeek.current) {
+    if (currentChapter && isLive) {
       announce(`Chapter: ${currentChapter.title}`);
     }
-  }, [currentChapter, announce]);
+  }, [currentChapter, announce, isLive]);
 
-  /* ---- Chapter navigation ---- */
+  /* ---- Chapter navigation (TOC, prev/next) ---- */
+  // Dispatch dispatches the cursor; engines align; in formatted view,
+  // a separate effect below scrolls the section into view.
+  const navigateToSection = useCallback((idx: number) => {
+    if (idx < 0 || idx >= chapters.length) return;
+    dispatch({
+      type: 'TOC_JUMP',
+      payload: {
+        chapterId: chapters[idx].id,
+        chapterIdx: idx,
+        absoluteSegmentIndex: 0,
+      },
+    });
+  }, [chapters, dispatch]);
+
+  // Scroll the formatted view into view whenever the cursor lands on a
+  // new chapter via something other than a user scroll. The previous
+  // beginProgrammaticScroll guard is gone — the IntersectionObserver
+  // inside FormattedView still suppresses its own programmatic-scroll
+  // echo via scrollSectionIntoView's internal flag.
+  const lastScrolledChapterIdxRef = useRef<number>(-1);
+  useEffect(() => {
+    if (!showFormattedView) return;
+    if (cursorOrigin === 'user-scroll') return;
+    if (cursorOrigin === 'engine') return;
+    if (lastScrolledChapterIdxRef.current === cursorChapterIdx) return;
+    lastScrolledChapterIdxRef.current = cursorChapterIdx;
+    requestAnimationFrame(() => {
+      formattedViewRef.current?.scrollSectionIntoView(cursorChapterIdx);
+    });
+  }, [showFormattedView, cursorChapterIdx, cursorOrigin, cursorRevision]);
+
   const handlePrevChapter = useCallback(() => {
-    if (chapterIdx > 0) {
-      setChapterIdx((i) => i - 1);
-      activeActions.seekTo(0);
+    if (cursorChapterIdx > 0) {
+      navigateToSection(cursorChapterIdx - 1);
     }
-  }, [chapterIdx, activeActions]);
+  }, [cursorChapterIdx, navigateToSection]);
 
   const handleNextChapter = useCallback(() => {
-    if (chapterIdx < chapters.length - 1) {
-      setChapterIdx((i) => i + 1);
-      activeActions.seekTo(0);
+    if (cursorChapterIdx < chapters.length - 1) {
+      navigateToSection(cursorChapterIdx + 1);
     }
-  }, [chapterIdx, chapters.length, activeActions]);
+  }, [cursorChapterIdx, chapters.length, navigateToSection]);
 
   /* ---- Orientation resilience ---- */
   useOrientationResilience(
     useCallback(() => {
-      onSegmentChange(activeState.currentIndex);
-    }, [onSegmentChange, activeState.currentIndex]),
+      onSegmentChangeForPrefetch(activeArrayIdx);
+    }, [onSegmentChangeForPrefetch, activeArrayIdx]),
   );
 
   /* ---- Keyboard handling ---- */
   useKeyboardHandling({
-    onTogglePlay: activeActions.togglePlayPause,
-    onSpeedUp: useCallback(() => activeActions.adjustWpm(25), [activeActions]),
-    onSpeedDown: useCallback(() => activeActions.adjustWpm(-25), [activeActions]),
+    onTogglePlay: wrappedActiveActions.togglePlayPause,
+    onSpeedUp: useCallback(() => wrappedActiveActions.adjustWpm(25), [wrappedActiveActions]),
+    onSpeedDown: useCallback(() => wrappedActiveActions.adjustWpm(-25), [wrappedActiveActions]),
     onNextChunk: useCallback(
-      () => activeActions.seekTo(activeState.currentIndex + 1),
-      [activeActions, activeState.currentIndex],
+      () => wrappedActiveActions.seekTo(activeArrayIdx + 1),
+      [wrappedActiveActions, activeArrayIdx],
     ),
     onPrevChunk: useCallback(
-      () => activeActions.seekTo(activeState.currentIndex - 1),
-      [activeActions, activeState.currentIndex],
+      () => wrappedActiveActions.seekTo(activeArrayIdx - 1),
+      [wrappedActiveActions, activeArrayIdx],
     ),
     onNextChapter: handleNextChapter,
     onPrevChapter: handlePrevChapter,
   });
 
-  /* ---- Keep screen awake during playback ---- */
+  /* ---- Wake lock ---- */
   useWakeLock(activeState.isPlaying || wasPlayingBeforeLost);
 
-  /* ---- Signal playing state globally (for fading peripheral UI like ThemeToggle) ---- */
+  /* ---- Global playing attribute (for ThemeToggle fade) ---- */
   useEffect(() => {
     document.documentElement.toggleAttribute('data-playing', activeState.isPlaying);
     return () => document.documentElement.removeAttribute('data-playing');
   }, [activeState.isPlaying]);
 
   /* ---- Render ---- */
-  // Detect PDF vs HTML formatted view by checking section meta.
   const isPdfBook =
     !isImageBook &&
     chapters.length > 0 &&
     chapters[0].meta != null &&
     typeof (chapters[0].meta as Record<string, unknown>).startPage === 'number';
 
-  // Visible-section callback used by the formatted views.
+  // FormattedView's IntersectionObserver fires on scroll-to-different-section.
+  // Convert to a CHAPTER_NAV dispatch.
   const handleVisibleSectionChange = useCallback(
     (idx: number) => {
-      if (idx !== chapterIdx) {
-        setChapterIdx(idx);
-        activeActions.seekTo(0);
-      }
+      if (idx === cursorChapterIdx) return;
+      dispatch({
+        type: 'CHAPTER_NAV',
+        payload: {
+          chapterId: chapters[idx].id,
+          chapterIdx: idx,
+          reset: true,
+        },
+      });
     },
-    [chapterIdx, activeActions],
+    [cursorChapterIdx, chapters, dispatch],
   );
 
   return (
@@ -1006,10 +1053,9 @@ function ActiveReader({
         open={tocOpen}
         chapters={chapters}
         tocTree={tocTree}
-        currentSectionIndex={chapterIdx}
+        currentSectionIndex={cursorChapterIdx}
         onJump={(idx) => {
-          setChapterIdx(idx);
-          activeActions.seekTo(0);
+          navigateToSection(idx);
         }}
         onClose={() => setTocOpen(false)}
       />
@@ -1027,21 +1073,24 @@ function ActiveReader({
             totalPages={chapters[0]?.meta && typeof (chapters[0].meta as any).pageCount === 'number'
               ? (chapters[0].meta as any).pageCount as number
               : 9999}
-            currentPageIndex={currentSegmentRealIndex}
+            currentPageIndex={cursorAbsIdx}
             onVisiblePageChange={(idx) => {
-              if (idx !== currentSegmentRealIndex) {
-                activeActions.seekTo(idx);
+              if (idx !== cursorAbsIdx) {
+                dispatch({
+                  type: 'USER_SEEK',
+                  payload: { absoluteSegmentIndex: idx },
+                });
               }
             }}
-            onTap={activeState.isPlaying ? activeActions.pause : undefined}
+            onTap={activeState.isPlaying ? wrappedActiveActions.pause : undefined}
           />
         ) : isPdfBook ? (
           <PdfFormattedView
             publicationId={publicationId}
             chapters={chapters}
-            currentSectionIndex={chapterIdx}
+            currentSectionIndex={cursorChapterIdx}
             onVisibleSectionChange={handleVisibleSectionChange}
-            onTap={activeState.isPlaying ? activeActions.pause : undefined}
+            onTap={activeState.isPlaying ? wrappedActiveActions.pause : undefined}
           />
         ) : (
           <>
@@ -1049,9 +1098,9 @@ function ActiveReader({
               ref={formattedViewRef}
               publicationId={publicationId}
               chapters={chapters}
-              currentSectionIndex={chapterIdx}
+              currentSectionIndex={cursorChapterIdx}
               onVisibleSectionChange={handleVisibleSectionChange}
-              onTap={activeState.isPlaying ? activeActions.pause : undefined}
+              onTap={activeState.isPlaying ? wrappedActiveActions.pause : undefined}
               velocityProfileRef={velocityProfileRef}
               showPauseCursor={!activeState.isPlaying}
             />
@@ -1066,11 +1115,11 @@ function ActiveReader({
 
       {!showFormattedView && (
       <GestureLayer
-        onTap={activeState.isPlaying ? activeActions.pause : undefined}
+        onTap={activeState.isPlaying ? wrappedActiveActions.pause : undefined}
         onSwipeLeft={activeState.isPlaying ? handleNextChapter : undefined}
         onSwipeRight={activeState.isPlaying ? handlePrevChapter : undefined}
-        onSwipeUp={activeState.isPlaying ? () => activeActions.adjustWpm(25) : undefined}
-        onSwipeDown={activeState.isPlaying ? () => activeActions.adjustWpm(-25) : undefined}
+        onSwipeUp={activeState.isPlaying ? () => wrappedActiveActions.adjustWpm(25) : undefined}
+        onSwipeDown={activeState.isPlaying ? () => wrappedActiveActions.adjustWpm(-25) : undefined}
         enabled={activeState.isPlaying}
       >
         <FocusChunkOverlay
@@ -1082,8 +1131,8 @@ function ActiveReader({
           rsvpOrpIndex={rsvpState.orpIndex}
           rsvpWpm={rsvpState.wpm}
           segments={loaderState.segments}
-          currentIndex={activeState.currentIndex}
-          onSeek={activeActions.seekTo}
+          currentIndex={activeArrayIdx}
+          onSeek={wrappedActiveActions.seekTo}
           scrollContainerRef={scrollContainerRef}
           scrollItemRefs={scrollItemRefsMap}
         />
@@ -1168,13 +1217,13 @@ function ActiveReader({
         isPlaying={activeState.isPlaying || wasPlayingBeforeLost}
         wpm={activeState.wpm}
         progress={activeState.progress}
-        onTogglePlay={activeActions.togglePlayPause}
-        onSetWpm={activeActions.setWpm}
-        onAdjustWpm={activeActions.adjustWpm}
+        onTogglePlay={wrappedActiveActions.togglePlayPause}
+        onSetWpm={wrappedActiveActions.setWpm}
+        onAdjustWpm={wrappedActiveActions.adjustWpm}
         onPrevChapter={handlePrevChapter}
         onNextChapter={handleNextChapter}
-        hasPrevChapter={chapterIdx > 0}
-        hasNextChapter={chapterIdx < chapters.length - 1}
+        hasPrevChapter={cursorChapterIdx > 0}
+        hasNextChapter={cursorChapterIdx < chapters.length - 1}
         mode={readingMode}
         onToggleMode={handleToggleMode}
         onSetMode={handleSetMode}

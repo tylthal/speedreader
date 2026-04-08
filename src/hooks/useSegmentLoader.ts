@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import type { Segment } from '../types';
 import { getSegments } from '../api/client';
 
@@ -23,6 +23,34 @@ interface SegmentLoaderActions {
   checkPrefetch: (index: number) => void;
   loadBackward: () => void;
   reload: () => void;
+  /**
+   * Resolve when the loaded window covers the given absolute segment
+   * index. Used by RestoreCoordinator to gate the pending → applied
+   * transition until the saved target segment actually lives in the
+   * loaded array. Today the loader fetches the entire chapter on the
+   * first batch, so this resolves on the very next render in practice;
+   * the contract is here so RestoreCoordinator stays right when we
+   * eventually cap chapter prefetch.
+   */
+  ensureWindowFor: (absoluteIdx: number) => Promise<void>;
+}
+
+/**
+ * Coordinate-system translators. Engines and consumers work in the
+ * canonical absolute segment_index space (matches the column on the
+ * segments table); the loader exposes a partial array. These helpers
+ * are how everyone crosses the boundary without each engine carrying
+ * its own trackedSegmentIndexRef.
+ *
+ * Both directions are stable across array shifts caused by backward
+ * prefetch — `arrayToAbsolute` reads segment_index from the segment
+ * row, and `absoluteToArrayIndex` searches the current array.
+ */
+export interface SegmentLoaderTranslators {
+  arrayToAbsolute: (arrayIdx: number) => number | null;
+  absoluteToArrayIndex: (absoluteIdx: number) => number | null;
+  hasAbsoluteIndex: (absoluteIdx: number) => boolean;
+  loadedAbsoluteRange: () => { start: number; end: number };
 }
 
 const DEFAULT_BATCH_SIZE = 50;
@@ -32,7 +60,7 @@ const DATA_SAVER_PREFETCH_THRESHOLD = 5;
 
 export function useSegmentLoader(
   options: UseSegmentLoaderOptions
-): [SegmentLoaderState, SegmentLoaderActions] {
+): [SegmentLoaderState, SegmentLoaderActions, SegmentLoaderTranslators] {
   const {
     publicationId,
     chapterId,
@@ -57,6 +85,47 @@ export function useSegmentLoader(
   loadedRangeRef.current = loadedRange;
   const totalSegmentsRef = useRef(totalSegments);
   totalSegmentsRef.current = totalSegments;
+  const segmentsRef = useRef(segments);
+  segmentsRef.current = segments;
+
+  // Pending ensureWindowFor() resolvers — one per outstanding caller.
+  // The fetch loop checks this set after every successful batch and
+  // resolves callers whose target index is now covered.
+  type PendingEnsure = {
+    abs: number;
+    resolve: () => void;
+    reject: (err: Error) => void;
+  };
+  const pendingEnsureRef = useRef<PendingEnsure[]>([]);
+
+  const flushEnsurers = useCallback(() => {
+    if (pendingEnsureRef.current.length === 0) return;
+    const segs = segmentsRef.current;
+    const total = totalSegmentsRef.current;
+    const loaded = loadedRangeRef.current;
+    const stillPending: PendingEnsure[] = [];
+    for (const p of pendingEnsureRef.current) {
+      // Covered by the current array?
+      const found = segs.some((s) => s.segment_index === p.abs);
+      if (found) {
+        p.resolve();
+        continue;
+      }
+      // Past end of chapter (saved index out of bounds) — also resolve;
+      // the engine will clamp on its own.
+      if (total > 0 && p.abs >= total) {
+        p.resolve();
+        continue;
+      }
+      // No more segments coming for this range and we never landed on it.
+      if (loaded.end >= total && total > 0) {
+        p.reject(new Error('absolute index not in loaded chapter'));
+        continue;
+      }
+      stillPending.push(p);
+    }
+    pendingEnsureRef.current = stillPending;
+  }, []);
 
   const fetchBatch = useCallback(
     async (start: number, end: number, append: boolean) => {
@@ -71,23 +140,25 @@ export function useSegmentLoader(
         totalSegmentsRef.current = batch.total_segments;
 
         setSegments((prev) => {
-          if (!append) return batch.segments;
-
-          // Merge and deduplicate by segment_index
-          const existing = new Map(prev.map((s) => [s.segment_index, s]));
-          for (const seg of batch.segments) {
-            existing.set(seg.segment_index, seg);
+          let next: Segment[];
+          if (!append) {
+            next = batch.segments;
+          } else {
+            // Merge and deduplicate by segment_index
+            const existing = new Map(prev.map((s) => [s.segment_index, s]));
+            for (const seg of batch.segments) {
+              existing.set(seg.segment_index, seg);
+            }
+            // Sort by segment_index to maintain order
+            next = Array.from(existing.values()).sort(
+              (a, b) => a.segment_index - b.segment_index
+            );
           }
-          // Sort by segment_index to maintain order
-          return Array.from(existing.values()).sort(
-            (a, b) => a.segment_index - b.segment_index
-          );
+          segmentsRef.current = next;
+          return next;
         });
 
         // Use the actual end of returned data, not the requested end.
-        // Near the end of a chapter the API may return fewer segments than
-        // requested; using the requested `end` would overshoot and prevent
-        // further prefetch from being triggered.
         const actualEnd = batch.segments.length > 0
           ? Math.max(...batch.segments.map((s) => s.segment_index)) + 1
           : end;
@@ -95,6 +166,9 @@ export function useSegmentLoader(
         const newStart = append ? Math.min(loadedRangeRef.current.start, start) : start;
         setLoadedRange({ start: newStart, end: newEnd });
         loadedRangeRef.current = { start: newStart, end: newEnd };
+
+        // Resolve any ensureWindowFor() callers whose target is now in.
+        flushEnsurers();
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Failed to load segments';
         setError(message);
@@ -120,19 +194,27 @@ export function useSegmentLoader(
         }
       }
     },
-    [publicationId, chapterId]
+    [publicationId, chapterId, flushEnsurers]
   );
 
   // Initial load when chapterId changes
   const initialFetchedRef = useRef(false);
   useEffect(() => {
     setSegments([]);
+    segmentsRef.current = [];
     setLoadedRange({ start: 0, end: 0 });
     loadedRangeRef.current = { start: 0, end: 0 };
     setTotalSegments(0);
     totalSegmentsRef.current = 0;
     setError(null);
     pendingPrefetchRef.current = null;
+
+    // Reject any in-flight ensurers from the previous chapter — their
+    // absolute index is meaningless in the new chapter's coordinate space.
+    for (const p of pendingEnsureRef.current) {
+      p.reject(new Error('chapter changed before window could be ensured'));
+    }
+    pendingEnsureRef.current = [];
 
     // Load the entire chapter from the start. Chapters are small enough
     // (avg ~500 segments, max ~1600) that loading everything up front is
@@ -167,9 +249,6 @@ export function useSegmentLoader(
       }
 
       // Backward prefetch: approaching the start of loaded segments
-      // (e.g. user resumed mid-chapter and scrolled back).
-      // Only trigger when actually moving backward (currentIndex > 0),
-      // not on the initial position which is already at the right spot.
       if (
         currentIndex > 0 &&
         range.start > 0 &&
@@ -201,12 +280,94 @@ export function useSegmentLoader(
 
   const reload = useCallback(() => {
     setSegments([]);
+    segmentsRef.current = [];
     setLoadedRange({ start: 0, end: 0 });
     loadedRangeRef.current = { start: 0, end: 0 };
     setError(null);
     pendingPrefetchRef.current = null;
     fetchBatch(0, batchSize, false);
   }, [batchSize, fetchBatch]);
+
+  const ensureWindowFor = useCallback(
+    (absoluteIdx: number): Promise<void> => {
+      const segs = segmentsRef.current;
+      // Already covered?
+      if (segs.some((s) => s.segment_index === absoluteIdx)) {
+        return Promise.resolve();
+      }
+      const total = totalSegmentsRef.current;
+      if (total > 0 && absoluteIdx >= total) {
+        return Promise.resolve();
+      }
+      return new Promise<void>((resolve, reject) => {
+        pendingEnsureRef.current.push({ abs: absoluteIdx, resolve, reject });
+        // If we're not currently fetching and the target is outside the
+        // loaded range, trigger a forward batch toward it. The default
+        // initial fetch already covers the entire chapter so this branch
+        // is mostly future-proofing.
+        const range = loadedRangeRef.current;
+        if (
+          !fetchingRef.current &&
+          absoluteIdx >= range.end &&
+          (total === 0 || absoluteIdx < total)
+        ) {
+          const start = range.end;
+          const end = Math.min(absoluteIdx + batchSize, total > 0 ? total : 999999);
+          fetchBatch(start, end, true);
+        }
+      });
+    },
+    [batchSize, fetchBatch]
+  );
+
+  // Translators. Wrapped in a memo so the object reference is stable
+  // across renders that don't change segments — engines and effects
+  // depend on it via useEffect/useMemo deps.
+  const translators = useMemo<SegmentLoaderTranslators>(() => {
+    return {
+      arrayToAbsolute: (arrayIdx: number) => {
+        const segs = segmentsRef.current;
+        if (arrayIdx < 0 || arrayIdx >= segs.length) return null;
+        return segs[arrayIdx].segment_index;
+      },
+      absoluteToArrayIndex: (absoluteIdx: number) => {
+        const segs = segmentsRef.current;
+        if (segs.length === 0) return null;
+        // Binary search by segment_index — segments[] is kept sorted by
+        // segment_index on insert (see fetchBatch merge path).
+        let lo = 0;
+        let hi = segs.length - 1;
+        while (lo <= hi) {
+          const mid = (lo + hi) >> 1;
+          const v = segs[mid].segment_index;
+          if (v === absoluteIdx) return mid;
+          if (v < absoluteIdx) lo = mid + 1;
+          else hi = mid - 1;
+        }
+        return null;
+      },
+      hasAbsoluteIndex: (absoluteIdx: number) => {
+        const segs = segmentsRef.current;
+        if (segs.length === 0) return false;
+        // Same binary search as above; reuse via inline copy to avoid
+        // an extra function call hop.
+        let lo = 0;
+        let hi = segs.length - 1;
+        while (lo <= hi) {
+          const mid = (lo + hi) >> 1;
+          const v = segs[mid].segment_index;
+          if (v === absoluteIdx) return true;
+          if (v < absoluteIdx) lo = mid + 1;
+          else hi = mid - 1;
+        }
+        return false;
+      },
+      loadedAbsoluteRange: () => ({ ...loadedRangeRef.current }),
+    };
+    // Re-emit when segments[] changes so consumers that read translators
+    // inside an effect dep array re-run correctly.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [segments]);
 
   const state: SegmentLoaderState = {
     segments,
@@ -216,5 +377,9 @@ export function useSegmentLoader(
     loadedRange,
   };
 
-  return [state, { checkPrefetch, loadBackward, reload }];
+  return [
+    state,
+    { checkPrefetch, loadBackward, reload, ensureWindowFor },
+    translators,
+  ];
 }

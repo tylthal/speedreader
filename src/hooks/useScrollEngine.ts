@@ -49,6 +49,14 @@ interface UseScrollEngineOptions {
   onScrollTick?: (centerY: number) => number | null;
   initialWpm?: number;
   onSegmentChange?: (index: number) => void;
+  /**
+   * Fires from the segment-detection branch of the rAF tick loop only —
+   * never from seekTo. Used by ReaderViewport to dispatch ENGINE_TICK
+   * into the cursor reducer. Coalescing happens upstream: the segment
+   * detector already gates on integer index changes, so the cadence is
+   * naturally bounded.
+   */
+  onCursorTick?: (arrayIdx: number) => void;
   onComplete?: () => void;
 }
 
@@ -72,6 +80,7 @@ export function useScrollEngine(
     onScrollTick,
     initialWpm = DEFAULT_WPM,
     onSegmentChange,
+    onCursorTick,
     onComplete,
   } = options;
 
@@ -111,6 +120,8 @@ export function useScrollEngine(
   totalSegmentsRef.current = totalSegments;
   const onSegmentChangeRef = useRef(onSegmentChange);
   onSegmentChangeRef.current = onSegmentChange;
+  const onCursorTickRef = useRef(onCursorTick);
+  onCursorTickRef.current = onCursorTick;
   const onCompleteRef = useRef(onComplete);
   onCompleteRef.current = onComplete;
 
@@ -151,6 +162,7 @@ export function useScrollEngine(
         setCurrentIndex(newIdx);
         currentIndexRef.current = newIdx;
         onSegmentChangeRef.current?.(newIdx);
+        onCursorTickRef.current?.(newIdx);
       }
       return;
     }
@@ -178,6 +190,7 @@ export function useScrollEngine(
       setCurrentIndex(closestIdx);
       currentIndexRef.current = closestIdx;
       onSegmentChangeRef.current?.(closestIdx);
+      onCursorTickRef.current?.(closestIdx);
     }
   }, [containerRef, itemOffsetsRef]);
 

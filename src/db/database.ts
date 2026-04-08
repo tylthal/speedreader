@@ -76,7 +76,13 @@ export interface DBReadingProgress {
   id?: number
   publication_id: number
   chapter_id: number
-  segment_index: number
+  /**
+   * Canonical segment_index (matches segments.segment_index). Renamed
+   * from `segment_index` in schema v4 — the PR2 cursor refactor moved
+   * everyone onto absolute coordinates so callers no longer have to
+   * track an array index alongside it.
+   */
+  absolute_segment_index: number
   word_index: number
   wpm: number
   reading_mode: string
@@ -151,11 +157,23 @@ class SpeedReaderDB extends Dexie {
     })
 
     // v3: blob_storage table — fallback for OPFS writes that fail on mobile
-    // WebKit (FileSystemFileHandle.createWritable() is unsupported or
-    // restricted on iOS Safari before 18). The primary key is a namespaced
-    // string, see DBBlobStorage doc above. Existing rows in other tables are
-    // untouched by this version bump.
+    // WebKit. See DBBlobStorage doc above.
     this.version(3).stores({
+      publications: '++id, status, content_type, created_at',
+      chapters: '++id, publication_id, [publication_id+chapter_index]',
+      segments: '++id, chapter_id, [chapter_id+segment_index]',
+      image_pages: '++id, chapter_id, [chapter_id+page_index]',
+      reading_progress: '++id, &publication_id',
+      blob_storage: '&key',
+    })
+
+    // v4: cursor refactor. The reading_progress row's segment_index field
+    // becomes absolute_segment_index — same column shape, the rename only
+    // matters at the typed-table level. No new indexes; the unique
+    // publication_id index already covers reads. The app is pre-launch so
+    // we don't need a true upgrade path — v4 just bumps the version so
+    // anybody on v3 takes the next ensureSchemaWipe() pass.
+    this.version(4).stores({
       publications: '++id, status, content_type, created_at',
       chapters: '++id, publication_id, [publication_id+chapter_index]',
       segments: '++id, chapter_id, [chapter_id+segment_index]',
@@ -178,7 +196,10 @@ export const db = new SpeedReaderDB()
 // the very first call to ensureSchemaWipe(); callers must `await` it before
 // touching the db.
 
-const SCHEMA_WIPE_FLAG = 'speedreader-schema-v2-wiped'
+// Bumped to v4 with the cursor refactor — the reading_progress field
+// rename means any v2/v3 row becomes ambiguous. Pre-launch wipe is the
+// cheapest correct migration.
+const SCHEMA_WIPE_FLAG = 'speedreader-schema-v4-wiped'
 
 let wipePromise: Promise<void> | null = null
 

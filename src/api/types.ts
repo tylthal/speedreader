@@ -95,17 +95,21 @@ export interface SegmentBatch {
 export interface ReadingProgress {
   publication_id: number
   chapter_id: number
-  segment_index: number
+  /** Canonical segment_index. Renamed from segment_index in the cursor refactor. */
+  absolute_segment_index: number
   word_index: number
   wpm: number
   reading_mode: string
   updated_at: string
+  /** Cumulative segments read across all chapters preceding this one,
+   *  plus this chapter's absolute_segment_index. Used by BookCard for the
+   *  home-screen progress bar. Computed at read time, not persisted. */
   segments_read: number
 }
 
 export interface ProgressInput {
   chapter_id: number
-  segment_index: number
+  absolute_segment_index: number
   word_index: number
   wpm: number
   reading_mode: string

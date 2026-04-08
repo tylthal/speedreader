@@ -35,7 +35,7 @@ export default function BookCard({
   const getProgressPercent = useCallback(() => {
     if (!progress) return 0;
     if (pub.content_type === 'image' && pub.total_pages > 0) {
-      return Math.round(((progress.segment_index + 1) / pub.total_pages) * 100);
+      return Math.round(((progress.absolute_segment_index + 1) / pub.total_pages) * 100);
     }
     if (pub.content_type !== 'image' && pub.total_segments > 0) {
       return Math.round((progress.segments_read / pub.total_segments) * 100);
