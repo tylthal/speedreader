@@ -321,18 +321,22 @@
   position: relative;
 }
 
-/* CSS-hidden formatted view: stays in the flex layout (so scroll
-   position, scroll height, segment range index, velocity profile,
-   and innerHTML are all preserved across pause→play→pause cycles),
-   but invisible and not interactive while the focus overlay is
-   showing during phrase/RSVP playback. The focus overlay is itself
-   position:absolute so it overlays this without any layout fight.
-   We deliberately do NOT change position here — toggling between
-   static and absolute would cause the scroll container to re-layout
-   and could reset scrollTop, undoing the auto-scroll target. */
+/* Hidden formatted view: removed from layout via display:none so the
+   GestureLayer (a flex sibling that takes flex:1) gets the full
+   available space for the focus overlay during phrase/RSVP playback.
+   We use display:none rather than visibility:hidden because flex
+   siblings with visibility:hidden still compete for layout space —
+   and FormattedView's flex-basis:auto + scrollable content always
+   wins, squeezing GestureLayer to zero height and making the focus
+   overlay invisible / untappable. The expensive caches that the
+   always-mount strategy is meant to preserve (innerHTML, velocity
+   profile, segment range index, materialized DOM ranges) all
+   survive display:none because React doesn't unmount the component
+   — the elements stay in the DOM and the refs stay populated. The
+   only thing that resets is the scrollTop, which the auto-scroll
+   effect recovers immediately on the next pause. */
 .formatted-view--hidden {
-  visibility: hidden;
-  pointer-events: none;
+  display: none;
 }
 
 /* Current-segment highlight overlay. ReaderViewport computes the band
