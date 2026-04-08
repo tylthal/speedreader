@@ -479,46 +479,36 @@ function ActiveReader({
     });
   }, [showFormattedView, chapterIdx, cursorOrigin, cursorRevision]);
 
-  /* ---- Current-segment highlight band ---- */
-  // Always paints the band on cursor changes while showFormattedView is
-  // true — including engine ticks (so the band follows live playback in
-  // scroll/track modes) and user scrolls (so the band follows the
-  // user's finger). Re-fires on layoutVersion bumps so late content
-  // loads (innerHTML write, image decode, font reflow) update the band
-  // against the fresh geometry.
+  /* ---- Current-segment highlight ---- */
+  // Calls into FormattedView's imperative handle. The component owns
+  // the per-section text→DOM-range index, materializes per-line rects
+  // via Range.getClientRects(), and renders multi-line bands that hug
+  // the actual words. Falls back to a proportional / velocity-profile
+  // estimate (also inside FormattedView) when the matcher can't
+  // locate a segment.
+  //
+  // Re-fires on cursor changes (so the band follows live engine ticks
+  // and user scrolls) and on layoutVersion bumps (so late content
+  // loads — innerHTML write, image decode, font reflow — update the
+  // rects against the fresh geometry).
   useEffect(() => {
     const handle = formattedViewRef.current;
     if (!handle) return;
     if (!showFormattedView) {
-      handle.setHighlightBand(null);
+      handle.setHighlightForSegment(chapterIdx, -1, []);
       return;
     }
     const segs = loaderState.segments;
     const arrIdx = translators.absoluteToArrayIndex(absoluteSegmentIndex);
     if (segs.length === 0 || arrIdx == null) {
-      handle.setHighlightBand(null);
+      handle.setHighlightForSegment(chapterIdx, -1, []);
       return;
     }
 
     let cancelled = false;
     const raf = requestAnimationFrame(() => {
       if (cancelled) return;
-      const container = handle.getScrollContainer();
-      const sectionEl = handle.getSectionEl(chapterIdx);
-      if (!container || !sectionEl) return;
-      // Skip if the section hasn't been laid out yet — body innerHTML
-      // is written async after the image loader resolves, so on the
-      // very first effect run after FormattedView mounts, the section
-      // is just a title h1. Wait for layoutVersion to bump.
-      if (sectionEl.getBoundingClientRect().height < 80) return;
-      const band = computeHighlightBand(
-        arrIdx,
-        segs,
-        sectionEl,
-        container,
-        velocityProfileRef.current,
-      );
-      if (band) handle.setHighlightBand(band);
+      handle.setHighlightForSegment(chapterIdx, arrIdx, segs);
     });
     return () => {
       cancelled = true;
@@ -586,26 +576,15 @@ function ActiveReader({
     const raf = requestAnimationFrame(() => {
       if (cancelled) return;
       const container = handle.getScrollContainer();
-      const sectionEl = handle.getSectionEl(chapterIdx);
-      if (!container || !sectionEl) return;
-      // Wait for the section to actually be laid out. On first mount
-      // after a pause-from-phrase, the body innerHTML is written async
-      // (image loader is a Promise). Until it lands the section is
-      // just a ~30px title h1, and computing a scroll target against
-      // that puts the user at the wrong place. Bail; we'll re-fire
-      // when layoutVersion bumps after the velocity profile rebuilds.
-      if (sectionEl.getBoundingClientRect().height < 80) return;
+      if (!container) return;
+      // Use the SAME highlight pipeline to get the segment's geometry —
+      // word-accurate when the matcher succeeds, proportional fallback
+      // when it doesn't. This guarantees the scroll target and the
+      // visible band stay aligned.
+      const info = handle.setHighlightForSegment(chapterIdx, arrIdx, segs);
+      if (!info) return; // section not yet laid out — wait for layoutVersion bump
 
-      const band = computeHighlightBand(
-        arrIdx,
-        segs,
-        sectionEl,
-        container,
-        velocityProfileRef.current,
-      );
-      if (!band) return;
-
-      const segCenterY = band.topPx + band.heightPx / 2;
+      const segCenterY = info.topPx + info.heightPx / 2;
       const viewportH = container.clientHeight;
       const targetScroll = segCenterY - viewportH * 0.4;
       const maxScroll = Math.max(0, container.scrollHeight - viewportH);
@@ -967,128 +946,3 @@ function useDerivedProgress(
   return effectiveTotal > 0 ? absoluteIndex / effectiveTotal : 0;
 }
 
-/* ------------------------------------------------------------------ */
-/*  computeHighlightBand                                               */
-/* ------------------------------------------------------------------ */
-//
-// Returns the y-range of the given segment within the formatted view's
-// scroll-container coordinate system. Three accuracy tiers, from best
-// to fallback:
-//
-//   1. Velocity-profile + word-count weighted (block-accurate). The
-//      profile already partitions the section into blocks with known
-//      topPx/heightPx and a per-block "weight" (effective word count).
-//      We map cumulative segment word-count to cumulative weight, then
-//      walk the profile to find the matching block + interpolate the
-//      block-relative offset.
-//
-//   2. Word-count weighted proportional. No profile yet — distribute
-//      segments across the section's height by their cumulative
-//      word-count fraction. Better than naive proportional for chapters
-//      with very uneven segment sizes (short title segments etc.).
-//
-//   3. Pure proportional. Equal slices per segment. Used when word
-//      counts are missing (zero) or absent.
-//
-// The function is pure: same inputs, same output. It reads section
-// geometry via getBoundingClientRect — slightly expensive, but called
-// only on cursor/layout changes, not in any rAF hot path.
-
-function computeHighlightBand(
-  arrIdx: number,
-  segments: { word_count?: number }[],
-  sectionEl: HTMLElement,
-  container: HTMLDivElement,
-  profile: VelocityProfile | null,
-): { topPx: number; heightPx: number } | null {
-  const segCount = segments.length;
-  if (segCount === 0 || arrIdx < 0 || arrIdx >= segCount) return null;
-
-  const containerRect = container.getBoundingClientRect();
-  const sectionRect = sectionEl.getBoundingClientRect();
-  const sectionTop =
-    sectionRect.top - containerRect.top + container.scrollTop;
-  const sectionH = sectionRect.height;
-  if (sectionH <= 0) return null;
-
-  // Cumulative word counts. Word counts of 0 fall back to 1 so each
-  // segment has at least equal weight (this matches the chunker's
-  // intent — even a "title" segment gets some space).
-  let cumBefore = 0;
-  for (let i = 0; i < arrIdx; i++) {
-    cumBefore += Math.max(1, segments[i].word_count ?? 1);
-  }
-  const segWords = Math.max(1, segments[arrIdx].word_count ?? 1);
-  const cumAfter = cumBefore + segWords;
-  let totalWords = cumAfter;
-  for (let i = arrIdx + 1; i < segCount; i++) {
-    totalWords += Math.max(1, segments[i].word_count ?? 1);
-  }
-
-  // Tier 1: velocity profile available — find this section's block
-  // entries and use them for accurate per-block positioning.
-  if (profile && profile.entries.length > 0) {
-    const sectionBottom = sectionTop + sectionH;
-    // Filter to entries that fall within this section. The profile is
-    // built once for the whole formatted view (every chapter), so we
-    // need to slice. Tolerance of a few px to handle margin overlap.
-    const sectionEntries: { topPx: number; heightPx: number; weight: number }[] = [];
-    for (const e of profile.entries) {
-      if (e.bottomPx <= sectionTop + 1) continue;
-      if (e.topPx >= sectionBottom - 1) break; // entries are sorted
-      sectionEntries.push({
-        topPx: e.topPx,
-        heightPx: e.heightPx,
-        weight: e.weight,
-      });
-    }
-
-    if (sectionEntries.length > 0) {
-      let sectionTotalWeight = 0;
-      for (const e of sectionEntries) sectionTotalWeight += e.weight;
-      if (sectionTotalWeight > 0) {
-        const startWeight = (cumBefore / totalWords) * sectionTotalWeight;
-        const endWeight = (cumAfter / totalWords) * sectionTotalWeight;
-        const topPx = weightToPx(startWeight, sectionEntries);
-        const bottomPx = weightToPx(endWeight, sectionEntries);
-        const heightPx = Math.max(2, bottomPx - topPx);
-        return { topPx, heightPx };
-      }
-    }
-  }
-
-  // Tier 2: word-count weighted proportional within the section.
-  if (totalWords > 0) {
-    const startFrac = cumBefore / totalWords;
-    const endFrac = cumAfter / totalWords;
-    return {
-      topPx: sectionTop + startFrac * sectionH,
-      heightPx: Math.max(2, (endFrac - startFrac) * sectionH),
-    };
-  }
-
-  // Tier 3: pure proportional fallback.
-  return {
-    topPx: sectionTop + (arrIdx / segCount) * sectionH,
-    heightPx: Math.max(2, sectionH / segCount),
-  };
-}
-
-/** Walk weight-sorted entries until cumulative weight reaches target;
- *  interpolate within the matched entry to a precise pixel offset. */
-function weightToPx(
-  targetWeight: number,
-  entries: { topPx: number; heightPx: number; weight: number }[],
-): number {
-  let cum = 0;
-  for (const e of entries) {
-    if (cum + e.weight >= targetWeight) {
-      const frac = e.weight > 0 ? (targetWeight - cum) / e.weight : 0;
-      return e.topPx + Math.max(0, Math.min(1, frac)) * e.heightPx;
-    }
-    cum += e.weight;
-  }
-  // Past the end — clamp to bottom of last entry.
-  const last = entries[entries.length - 1];
-  return last.topPx + last.heightPx;
-}

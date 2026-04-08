@@ -11,6 +11,12 @@ import type { Chapter } from '../api/client'
 import { getImageBlobWithSource, type ImageBlobSource } from '../lib/fileStorage'
 import { useContentTap } from '../hooks/useContentTap'
 import { buildProfile, type VelocityProfile } from '../lib/velocityProfile'
+import {
+  buildSegmentRangeIndex,
+  materializeRangeRects,
+  type SegmentRangeIndex,
+  type RectInContainer,
+} from './formattedView/segmentRangeIndex'
 
 interface FormattedViewProps {
   publicationId: number
@@ -42,16 +48,25 @@ interface FormattedViewProps {
 }
 
 /**
- * Translucent band painted at the current segment's vertical range.
- * Coordinates are in scroll-container space (already include scrollTop)
- * so the band scrolls with the content. Computed by ReaderViewport
- * from the cursor and pushed in via the imperative handle below; the
- * component itself stays ignorant of positionStore so the innerHTML
- * write path doesn't intersect any new render paths.
+ * Minimal segment shape the highlight system needs from the parent.
+ * Decoupled from the full Segment type so this component doesn't pull
+ * in db/parser types just for highlighting.
  */
-export interface HighlightBand {
+export interface HighlightSegment {
+  text: string
+  word_count?: number
+}
+
+/** Result returned from setHighlightForSegment so the parent can reuse
+ *  the band geometry for auto-scroll without doing a second lookup. */
+export interface HighlightInfo {
+  /** Top of the topmost rect, in scroll-container coordinates. */
   topPx: number
+  /** Total height covered by all rects (top of first rect → bottom of last). */
   heightPx: number
+  /** True iff the result came from the DOM-range matcher (word-accurate),
+   *  false if it fell back to the proportional / velocity-profile estimate. */
+  accurate: boolean
 }
 
 /**
@@ -59,10 +74,16 @@ export interface HighlightBand {
  * ReaderViewport reaches in for the things that can't be expressed as
  * props without forcing a re-render of the section innerHTML write path.
  *
- *   - Scroll container + section element for the cursor mapping math
+ *   - Scroll container + section element for legacy callers
  *   - rebuildProfile / settleImages for the play-time layout settle
  *   - scrollSectionIntoView for explicit nav (TOC click, chapter buttons)
- *   - setHighlightBand for the current-segment highlight overlay
+ *   - setHighlightForSegment is the ONLY highlight entry point. It
+ *     looks up (or builds, if needed) the per-section text→DOM-range
+ *     index, materializes per-line rects via Range.getClientRects(),
+ *     and renders multi-line bands that hug the actual words. Falls
+ *     back to a proportional / velocity-profile estimate when the
+ *     text matcher can't locate a particular segment. Pass arrIdx=-1
+ *     to clear the highlight.
  */
 export interface FormattedViewHandle {
   getScrollContainer: () => HTMLDivElement | null
@@ -70,8 +91,11 @@ export interface FormattedViewHandle {
   rebuildProfile: () => void
   settleImages: (sectionIdx: number) => Promise<void>
   scrollSectionIntoView: (idx: number) => void
-  /** Set or clear the current-segment highlight band. Pass null to hide. */
-  setHighlightBand: (band: HighlightBand | null) => void
+  setHighlightForSegment: (
+    sectionIdx: number,
+    arrIdx: number,
+    segments: ReadonlyArray<HighlightSegment>,
+  ) => HighlightInfo | null
 }
 
 const OPFS_SRC_RE = /<img\s[^>]*?src=["']opfs:([^"']+)["']/gi
@@ -244,12 +268,19 @@ const FormattedView = forwardRef<FormattedViewHandle, FormattedViewProps>(functi
   const tapHandlers = useContentTap(onTap)
   const containerRef = useRef<HTMLDivElement>(null)
   const sectionRefs = useRef<Map<number, HTMLElement>>(new Map())
-  // Current-segment highlight band. Imperatively set via the handle —
-  // ReaderViewport owns the cursor subscription and computes the band
-  // from positionStore + section layout. Keeping the state here means
-  // the band can re-render in isolation without re-rendering the
-  // section innerHTML write path.
-  const [highlightBand, setHighlightBand] = useState<HighlightBand | null>(null)
+  // Multi-line highlight rects for the current segment. Each entry
+  // represents one visual line of the segment, in scroll-container
+  // coordinates. The renderer maps each rect to an absolute-positioned
+  // div so the highlight hugs the actual text instead of spanning the
+  // full container width.
+  const [highlightRects, setHighlightRects] = useState<RectInContainer[] | null>(null)
+  // Per-section text→DOM-range cache. Built lazily on the first
+  // setHighlightForSegment call for a section, invalidated inline in
+  // the innerHTML-write effect when the body content changes. Stores
+  // node+offset pairs (not rects), so the cache survives layout-only
+  // shifts (font size, image decode, theme toggles); only the derived
+  // rects are recomputed via Range.getClientRects() per cursor change.
+  const segmentIndexRef = useRef<Map<number, SegmentRangeIndex>>(new Map())
   // Suppression flag for the IntersectionObserver below — flipped on
   // by scrollSectionIntoView() while a programmatic scroll is in flight,
   // cleared on scrollend (with a 400ms timer fallback). Without this,
@@ -360,6 +391,11 @@ const FormattedView = forwardRef<FormattedViewHandle, FormattedViewProps>(functi
       if (el.dataset.lastHtml === html) continue
       el.innerHTML = html
       el.dataset.lastHtml = html
+      // Invalidate the segment-range cache for this section — the
+      // text nodes the cached ranges referenced have just been
+      // replaced. The cache is rebuilt on the next
+      // setHighlightForSegment call for this section.
+      segmentIndexRef.current.delete(idx)
       didWrite = true
     }
     if (didWrite) {
@@ -564,8 +600,79 @@ const FormattedView = forwardRef<FormattedViewHandle, FormattedViewProps>(functi
           }),
         )
       },
-      setHighlightBand: (band) => {
-        setHighlightBand(band)
+      setHighlightForSegment: (sectionIdx, arrIdx, segments) => {
+        // Clear request: arrIdx === -1 OR segments empty.
+        if (arrIdx < 0 || segments.length === 0) {
+          setHighlightRects(null)
+          return null
+        }
+        const container = containerRef.current
+        const sectionEl = sectionRefs.current.get(sectionIdx)
+        if (!container || !sectionEl) {
+          setHighlightRects(null)
+          return null
+        }
+        // Section must actually be laid out — body innerHTML lands
+        // async after the image loader resolves.
+        if (sectionEl.getBoundingClientRect().height < 80) {
+          setHighlightRects(null)
+          return null
+        }
+
+        // Build (or hit cache) the per-section text→DOM-range index.
+        let index = segmentIndexRef.current.get(sectionIdx)
+        if (!index) {
+          index = buildSegmentRangeIndex(sectionEl, segments)
+          segmentIndexRef.current.set(sectionIdx, index)
+        }
+
+        const range = index[arrIdx]
+        if (range) {
+          // Word-accurate path: materialize per-line rects from the
+          // live Range. The rects come from getClientRects() so they
+          // reflect the current layout (font size, image decode).
+          const rects = materializeRangeRects(range, container)
+          if (rects.length > 0) {
+            setHighlightRects(rects)
+            let topMin = Infinity
+            let bottomMax = -Infinity
+            for (const r of rects) {
+              if (r.topPx < topMin) topMin = r.topPx
+              if (r.topPx + r.heightPx > bottomMax) bottomMax = r.topPx + r.heightPx
+            }
+            return {
+              topPx: topMin,
+              heightPx: Math.max(2, bottomMax - topMin),
+              accurate: true,
+            }
+          }
+        }
+
+        // Fallback: text matcher couldn't find this segment (or the
+        // Range produced no rects — hidden via CSS, etc). Use the
+        // proportional / velocity-profile estimate so we still show
+        // SOMETHING for that one segment.
+        const fallback = computeProportionalBand(
+          arrIdx,
+          segments,
+          sectionEl,
+          container,
+          velocityProfileRef?.current ?? null,
+        )
+        if (!fallback) {
+          setHighlightRects(null)
+          return null
+        }
+        // Render the fallback as a single full-width rect.
+        const containerRect = container.getBoundingClientRect()
+        const fallbackRect: RectInContainer = {
+          topPx: fallback.topPx,
+          leftPx: 0,
+          widthPx: containerRect.width,
+          heightPx: fallback.heightPx,
+        }
+        setHighlightRects([fallbackRect])
+        return { ...fallback, accurate: false }
       },
     }),
     // velocityProfileRef is stable across renders (it's a ref) so we don't
@@ -579,16 +686,19 @@ const FormattedView = forwardRef<FormattedViewHandle, FormattedViewProps>(functi
 
   return (
     <div className="formatted-view" ref={containerRef} {...tapHandlers}>
-      {highlightBand && (
+      {highlightRects?.map((r, i) => (
         <div
+          key={i}
           className="formatted-view__highlight"
           aria-hidden="true"
           style={{
-            top: `${highlightBand.topPx}px`,
-            height: `${highlightBand.heightPx}px`,
+            top: `${r.topPx}px`,
+            left: `${r.leftPx}px`,
+            width: `${r.widthPx}px`,
+            height: `${r.heightPx}px`,
           }}
         />
-      )}
+      ))}
       {diagEnabled && imageDiag && (
         <div
           style={{
@@ -669,3 +779,107 @@ const FormattedView = forwardRef<FormattedViewHandle, FormattedViewProps>(functi
 })
 
 export default FormattedView
+
+/* ------------------------------------------------------------------ */
+/*  Proportional fallback                                              */
+/* ------------------------------------------------------------------ */
+//
+// Used by setHighlightForSegment when the DOM-range matcher fails to
+// locate a particular segment (whitespace mismatch, alt-text-only
+// content, hidden elements, etc). Returns a single-band estimate
+// derived from segment word counts and the velocity profile's
+// per-block topPx/heightPx weights — significantly more accurate than
+// pure proportional, but still approximate. The caller renders a
+// single full-width rect from this output.
+//
+// This helper used to live in ReaderViewport; it moved here when
+// FormattedView became the sole owner of highlight math. It is
+// intentionally NOT exported — only the imperative handle's
+// setHighlightForSegment uses it.
+
+function computeProportionalBand(
+  arrIdx: number,
+  segments: ReadonlyArray<HighlightSegment>,
+  sectionEl: HTMLElement,
+  container: HTMLDivElement,
+  profile: VelocityProfile | null,
+): { topPx: number; heightPx: number } | null {
+  const segCount = segments.length
+  if (segCount === 0 || arrIdx < 0 || arrIdx >= segCount) return null
+
+  const containerRect = container.getBoundingClientRect()
+  const sectionRect = sectionEl.getBoundingClientRect()
+  const sectionTop =
+    sectionRect.top - containerRect.top + container.scrollTop
+  const sectionH = sectionRect.height
+  if (sectionH <= 0) return null
+
+  let cumBefore = 0
+  for (let i = 0; i < arrIdx; i++) {
+    cumBefore += Math.max(1, segments[i].word_count ?? 1)
+  }
+  const segWords = Math.max(1, segments[arrIdx].word_count ?? 1)
+  const cumAfter = cumBefore + segWords
+  let totalWords = cumAfter
+  for (let i = arrIdx + 1; i < segCount; i++) {
+    totalWords += Math.max(1, segments[i].word_count ?? 1)
+  }
+
+  // Tier 1: velocity profile (block-accurate proportional).
+  if (profile && profile.entries.length > 0) {
+    const sectionBottom = sectionTop + sectionH
+    const sectionEntries: { topPx: number; heightPx: number; weight: number }[] = []
+    for (const e of profile.entries) {
+      if (e.bottomPx <= sectionTop + 1) continue
+      if (e.topPx >= sectionBottom - 1) break
+      sectionEntries.push({
+        topPx: e.topPx,
+        heightPx: e.heightPx,
+        weight: e.weight,
+      })
+    }
+    if (sectionEntries.length > 0) {
+      let sectionTotalWeight = 0
+      for (const e of sectionEntries) sectionTotalWeight += e.weight
+      if (sectionTotalWeight > 0) {
+        const startWeight = (cumBefore / totalWords) * sectionTotalWeight
+        const endWeight = (cumAfter / totalWords) * sectionTotalWeight
+        const topPx = weightToPx(startWeight, sectionEntries)
+        const bottomPx = weightToPx(endWeight, sectionEntries)
+        return { topPx, heightPx: Math.max(2, bottomPx - topPx) }
+      }
+    }
+  }
+
+  // Tier 2: word-count weighted proportional within the section.
+  if (totalWords > 0) {
+    const startFrac = cumBefore / totalWords
+    const endFrac = cumAfter / totalWords
+    return {
+      topPx: sectionTop + startFrac * sectionH,
+      heightPx: Math.max(2, (endFrac - startFrac) * sectionH),
+    }
+  }
+
+  // Tier 3: pure proportional.
+  return {
+    topPx: sectionTop + (arrIdx / segCount) * sectionH,
+    heightPx: Math.max(2, sectionH / segCount),
+  }
+}
+
+function weightToPx(
+  targetWeight: number,
+  entries: { topPx: number; heightPx: number; weight: number }[],
+): number {
+  let cum = 0
+  for (const e of entries) {
+    if (cum + e.weight >= targetWeight) {
+      const frac = e.weight > 0 ? (targetWeight - cum) / e.weight : 0
+      return e.topPx + Math.max(0, Math.min(1, frac)) * e.heightPx
+    }
+    cum += e.weight
+  }
+  const last = entries[entries.length - 1]
+  return last.topPx + last.heightPx
+}
