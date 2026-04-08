@@ -281,6 +281,20 @@ function ActiveReader({
   const formattedViewRef = useRef<FormattedViewHandle>(null);
   const velocityProfileRef = useRef<VelocityProfile | null>(null);
 
+  /* ---- Layout-version counter for the formatted view ---- */
+  // FormattedView writes its body innerHTML in a useEffect that depends
+  // on an async image loader, so on first mount the section heights
+  // reflect only the title h1 — any auto-scroll computed at that
+  // moment lands at the wrong offset. We bump this version every time
+  // the velocity profile rebuilds (which fires after innerHTML lands
+  // and on every ResizeObserver settle), and the auto-scroll +
+  // highlight effects depend on it so they re-run against the real
+  // geometry.
+  const [layoutVersion, setLayoutVersion] = useState(0);
+  const onFormattedLayoutChange = useCallback(() => {
+    setLayoutVersion((v) => v + 1);
+  }, []);
+
   /* ---- Gaze tracker ---- */
   const [gazeState, gazeRef, gazeActions] = useGazeTracker();
   const [showCalibration, setShowCalibration] = useState(false);
@@ -469,10 +483,9 @@ function ActiveReader({
   // Always paints the band on cursor changes while showFormattedView is
   // true — including engine ticks (so the band follows live playback in
   // scroll/track modes) and user scrolls (so the band follows the
-  // user's finger). Reads section geometry from the formatted view
-  // handle and the velocity profile (when available) for accurate
-  // per-block positioning. Falls back to word-weighted proportional
-  // when no profile, then to pure proportional.
+  // user's finger). Re-fires on layoutVersion bumps so late content
+  // loads (innerHTML write, image decode, font reflow) update the band
+  // against the fresh geometry.
   useEffect(() => {
     const handle = formattedViewRef.current;
     if (!handle) return;
@@ -487,14 +500,17 @@ function ActiveReader({
       return;
     }
 
-    // Defer one frame so chapter-into-view scrolls (if any) land first
-    // and the section geometry is fresh.
     let cancelled = false;
     const raf = requestAnimationFrame(() => {
       if (cancelled) return;
       const container = handle.getScrollContainer();
       const sectionEl = handle.getSectionEl(chapterIdx);
       if (!container || !sectionEl) return;
+      // Skip if the section hasn't been laid out yet — body innerHTML
+      // is written async after the image loader resolves, so on the
+      // very first effect run after FormattedView mounts, the section
+      // is just a title h1. Wait for layoutVersion to bump.
+      if (sectionEl.getBoundingClientRect().height < 80) return;
       const band = computeHighlightBand(
         arrIdx,
         segs,
@@ -516,34 +532,51 @@ function ActiveReader({
     isPlaying,
     loaderState.segments,
     translators,
+    layoutVersion,
   ]);
 
   /* ---- Auto-scroll the formatted view to the current segment ---- */
-  // Two trigger conditions:
+  // Three trigger conditions:
   //   1. The cursor moves via something other than user-scroll/engine
   //      (toc/chapter-nav/user-seek/restore/display-mode/mode-switch)
-  //   2. showFormattedView flips from false → true (the user paused in
-  //      phrase/rsvp and the formatted view is now visible). The cursor
-  //      itself didn't move, so we detect this via wasFormattedRef.
+  //   2. showFormattedView flips from false → true (user paused in
+  //      phrase/rsvp; formatted view is now visible). The cursor
+  //      itself didn't move, so we detect this via pendingScrollRef.
+  //   3. layoutVersion bumps while pendingScrollRef is set — the
+  //      formatted view's bodies just landed/grew, retry the scroll
+  //      against the now-real section geometry.
   //
   // The engine path is suppressed during play because the engine is
   // pushing scrollTop directly each frame (scroll/track) or the
-  // formatted view isn't visible (phrase/rsvp). On the pause transition,
-  // the wasFormattedRef branch fires once and lands the user at the
-  // cursor.
+  // formatted view isn't visible (phrase/rsvp).
+  //
+  // pendingScrollRef is the "we want to scroll but haven't been able
+  // to yet" latch. Set on transition-in or external cursor move,
+  // cleared once a successful scroll lands. Survives multiple effect
+  // re-runs while waiting for layout to settle.
+  const pendingScrollRef = useRef(false);
   const wasFormattedRef = useRef(false);
   useEffect(() => {
     const handle = formattedViewRef.current;
     if (!handle) return;
     if (!showFormattedView) {
       wasFormattedRef.current = false;
+      pendingScrollRef.current = false;
       return;
     }
+
+    // Detect transitions to mark a scroll as pending. We track three
+    // distinct sources that should trigger a scroll:
+    //   - showFormattedView just flipped true (transitionedIn)
+    //   - cursor commit with a non-engine non-user-scroll origin
     const transitionedIn = !wasFormattedRef.current;
     wasFormattedRef.current = true;
+    if (transitionedIn) pendingScrollRef.current = true;
+    if (cursorOrigin !== 'user-scroll' && cursorOrigin !== 'engine') {
+      pendingScrollRef.current = true;
+    }
 
-    if (cursorOrigin === 'user-scroll') return;
-    if (cursorOrigin === 'engine' && !transitionedIn) return;
+    if (!pendingScrollRef.current) return;
 
     const segs = loaderState.segments;
     const arrIdx = translators.absoluteToArrayIndex(absoluteSegmentIndex);
@@ -555,6 +588,14 @@ function ActiveReader({
       const container = handle.getScrollContainer();
       const sectionEl = handle.getSectionEl(chapterIdx);
       if (!container || !sectionEl) return;
+      // Wait for the section to actually be laid out. On first mount
+      // after a pause-from-phrase, the body innerHTML is written async
+      // (image loader is a Promise). Until it lands the section is
+      // just a ~30px title h1, and computing a scroll target against
+      // that puts the user at the wrong place. Bail; we'll re-fire
+      // when layoutVersion bumps after the velocity profile rebuilds.
+      if (sectionEl.getBoundingClientRect().height < 80) return;
+
       const band = computeHighlightBand(
         arrIdx,
         segs,
@@ -566,8 +607,6 @@ function ActiveReader({
 
       const segCenterY = band.topPx + band.heightPx / 2;
       const viewportH = container.clientHeight;
-      // Land the segment at ~40% down the viewport — slightly above
-      // center, leaves the upcoming text visible.
       const targetScroll = segCenterY - viewportH * 0.4;
       const maxScroll = Math.max(0, container.scrollHeight - viewportH);
       const clamped = Math.max(0, Math.min(targetScroll, maxScroll));
@@ -580,6 +619,7 @@ function ActiveReader({
           ? 'auto'
           : 'smooth';
       container.scrollTo({ top: clamped, behavior });
+      pendingScrollRef.current = false;
     });
     return () => {
       cancelled = true;
@@ -593,6 +633,7 @@ function ActiveReader({
     cursorRevision,
     loaderState.segments,
     translators,
+    layoutVersion,
   ]);
 
   const handlePrevChapter = useCallback(() => {
@@ -786,6 +827,7 @@ function ActiveReader({
               onVisibleSectionChange={handleVisibleSectionChange}
               onTap={isPlaying ? controller.pause : undefined}
               velocityProfileRef={velocityProfileRef}
+              onLayoutChange={onFormattedLayoutChange}
             />
             <VelocityProfileDebugOverlay
               formattedViewRef={formattedViewRef}

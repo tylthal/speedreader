@@ -29,6 +29,16 @@ interface FormattedViewProps {
    * can read the profile each tick without a React re-render.
    */
   velocityProfileRef?: RefObject<VelocityProfile | null>
+  /**
+   * Fired after every velocity-profile rebuild. ReaderViewport uses
+   * this to re-trigger the formatted-view auto-scroll/highlight band
+   * once content has actually laid out — the formatted bodies are
+   * written via innerHTML in a useEffect that depends on the async
+   * image loader, so on first mount the section heights are small
+   * (just the title h1) and any scroll/band computation reads stale
+   * geometry. This callback is the "layout settled" signal.
+   */
+  onLayoutChange?: () => void
 }
 
 /**
@@ -223,9 +233,14 @@ const FormattedView = forwardRef<FormattedViewHandle, FormattedViewProps>(functi
     onVisibleSectionChange,
     onTap,
     velocityProfileRef,
+    onLayoutChange,
   },
   ref,
 ) {
+  // Stabilize the parent's onLayoutChange in a ref so rebuildProfileNow
+  // doesn't need to re-create itself when the parent re-renders.
+  const onLayoutChangeRef = useRef(onLayoutChange)
+  onLayoutChangeRef.current = onLayoutChange
   const tapHandlers = useContentTap(onTap)
   const containerRef = useRef<HTMLDivElement>(null)
   const sectionRefs = useRef<Map<number, HTMLElement>>(new Map())
@@ -380,6 +395,11 @@ const FormattedView = forwardRef<FormattedViewHandle, FormattedViewProps>(functi
     if (!velocityProfileRef) return
     profileGenerationRef.current += 1
     velocityProfileRef.current = buildProfile(container, profileGenerationRef.current)
+    // Tell the parent the section layout has settled (or shifted —
+    // late image decode, font load, etc). The parent re-runs its
+    // formatted-view auto-scroll + highlight band against the fresh
+    // geometry.
+    onLayoutChangeRef.current?.()
   }
 
   // ResizeObserver: watch every section for height changes and rebuild the
