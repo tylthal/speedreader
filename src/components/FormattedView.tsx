@@ -29,15 +29,6 @@ interface FormattedViewProps {
    * can read the profile each tick without a React re-render.
    */
   velocityProfileRef?: RefObject<VelocityProfile | null>
-  /**
-   * When true, render a subtle horizontal line at the vertical center of
-   * the visible viewport. This is the "playback will start here" indicator
-   * shown while paused — the engine reads container.scrollTop + clientHeight/2
-   * as the start point in scroll/track formatted modes, and the segment-
-   * proportional cursor mapping uses the same position for the other modes.
-   * Caller passes !isPlaying.
-   */
-  showPauseCursor?: boolean
 }
 
 /**
@@ -218,7 +209,6 @@ const FormattedView = forwardRef<FormattedViewHandle, FormattedViewProps>(functi
     onVisibleSectionChange,
     onTap,
     velocityProfileRef,
-    showPauseCursor,
   },
   ref,
 ) {
@@ -544,67 +534,8 @@ const FormattedView = forwardRef<FormattedViewHandle, FormattedViewProps>(functi
   const diagEnabled = isImageDiagEnabled()
   const uploadDiag = diagEnabled ? readUploadDiag(publicationId) : null
 
-  // Pause-mode "playback will start here" indicator. Position is the
-  // vertical center of the formatted-view container's visible area —
-  // matches centerY = scrollTop + clientHeight/2 used by the engine and
-  // the cursor mapping. We track it via state so it follows window
-  // resizes; scroll events don't change it because the line stays at
-  // the viewport center, not at a content position.
-  const [pauseCursorRect, setPauseCursorRect] = useState<{
-    top: number
-    left: number
-    width: number
-  } | null>(null)
-  useEffect(() => {
-    if (!showPauseCursor) {
-      setPauseCursorRect(null)
-      return
-    }
-    const update = () => {
-      const container = containerRef.current
-      if (!container) return
-      const rect = container.getBoundingClientRect()
-      setPauseCursorRect({
-        top: rect.top + rect.height / 2,
-        left: rect.left,
-        width: rect.width,
-      })
-    }
-    update()
-    window.addEventListener('resize', update)
-    // Layout shifts inside the formatted view (e.g. images decoding) can
-    // change container.clientHeight if the container has flex sizing.
-    // ResizeObserver catches that without polling.
-    const ro = new ResizeObserver(update)
-    if (containerRef.current) ro.observe(containerRef.current)
-    return () => {
-      window.removeEventListener('resize', update)
-      ro.disconnect()
-    }
-  }, [showPauseCursor])
-
   return (
     <div className="formatted-view" ref={containerRef} {...tapHandlers}>
-      {pauseCursorRect && (
-        <div
-          aria-hidden="true"
-          style={{
-            position: 'fixed',
-            top: pauseCursorRect.top,
-            left: pauseCursorRect.left,
-            width: pauseCursorRect.width,
-            height: 2,
-            marginTop: -1,
-            background: 'currentColor',
-            opacity: 0.18,
-            pointerEvents: 'none',
-            zIndex: 40,
-            // Soft glow on either side so the line reads as "current
-            // reading position" rather than "page divider".
-            boxShadow: '0 0 8px 1px currentColor',
-          }}
-        />
-      )}
       {diagEnabled && imageDiag && (
         <div
           style={{

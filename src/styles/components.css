@@ -638,6 +638,17 @@
   cursor: pointer;
   border-radius: 8px;
   contain: layout style;
+  transition: background 0.18s ease;
+}
+
+/* Pause-mode "this is where playback will resume" indicator. Replaces
+   the previous horizontal line across the formatted-view viewport —
+   the segment itself gets a subtle tinted background so the user can
+   see exactly which chunk they stopped on. Uses currentColor at low
+   opacity so it tracks the active theme automatically. */
+.focus-scroll__item--current {
+  background: color-mix(in srgb, currentColor 10%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 12%, transparent);
 }
 
 /* Scroll mode playing: no pointer events (engine auto-scrolls) */

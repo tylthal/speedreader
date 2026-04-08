@@ -229,7 +229,11 @@ function PausedScrollView({
         <div
           key={seg.id}
           ref={(el) => setItemRef(idx, el)}
-          className="focus-scroll__item"
+          className={
+            idx === currentIndex
+              ? 'focus-scroll__item focus-scroll__item--current'
+              : 'focus-scroll__item'
+          }
           onClick={() => onSeek(idx)}
         >
           <SegmentContent segment={seg} />
