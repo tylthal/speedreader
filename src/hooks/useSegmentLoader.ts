@@ -8,7 +8,6 @@ interface UseSegmentLoaderOptions {
   batchSize?: number; // default 50
   prefetchThreshold?: number; // segments remaining before prefetch, default 20
   dataSaver?: boolean; // reduce prefetch aggressiveness
-  initialSegmentIndex?: number; // start loading from this segment
 }
 
 interface SegmentLoaderState {
@@ -67,7 +66,6 @@ export function useSegmentLoader(
     dataSaver = false,
     batchSize = dataSaver ? DATA_SAVER_BATCH_SIZE : DEFAULT_BATCH_SIZE,
     prefetchThreshold = dataSaver ? DATA_SAVER_PREFETCH_THRESHOLD : DEFAULT_PREFETCH_THRESHOLD,
-    initialSegmentIndex = 0,
   } = options;
 
   const [segments, setSegments] = useState<Segment[]>([]);
@@ -221,7 +219,14 @@ export function useSegmentLoader(
     // simpler and avoids complex prefetch/scroll-preservation logic.
     initialFetchedRef.current = true;
     fetchBatch(0, 999999, false);
-  }, [chapterId, batchSize, fetchBatch, initialSegmentIndex]);
+    // Intentionally NOT depending on anything that changes per cursor
+    // tick. The cursor refactor previously plumbed initialSegmentIndex
+    // through here as a dep, which caused the entire chapter to be
+    // reloaded on every ENGINE_TICK — engines saw segments=[] and
+    // reset their currentIndexRef to 0, manifesting as "jumps to the
+    // beginning of the book during playback." We only want to refetch
+    // when the chapter or batch sizing actually changes.
+  }, [chapterId, batchSize, fetchBatch]);
 
   const checkPrefetch = useCallback(
     (currentIndex: number) => {

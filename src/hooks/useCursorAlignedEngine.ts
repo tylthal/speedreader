@@ -15,8 +15,16 @@ interface UseCursorAlignedEngineOpts {
   cursorWordIndex?: number
   /** Engine-supplied alignment hook. Translates the absolute index to
    *  the engine's local array coordinate and seeks. Must NOT publish
-   *  back through onCursorTick or we re-enter the loop. */
-  alignToCursor: (absoluteIdx: number, wordIdx: number) => void
+   *  back through onCursorTick or we re-enter the loop.
+   *
+   *  Returns true if the seek actually applied; false if the translation
+   *  could not be performed (e.g. segments are not yet loaded). The
+   *  hook uses the return value to know whether to latch this revision
+   *  as "done" — a false return leaves lastAppliedRev unchanged so the
+   *  effect re-fires when alignToCursor's identity next changes (which
+   *  happens when the loader's translators update on segment arrival).
+   */
+  alignToCursor: (absoluteIdx: number, wordIdx: number) => boolean
   /** Restore gate. Skipping alignment until live keeps the saver on the
    *  saved position rather than letting an early ENGINE_TICK overwrite it. */
   isLive: boolean
@@ -35,10 +43,15 @@ interface UseCursorAlignedEngineOpts {
  *
  * The `cursorOrigin === 'engine'` short-circuit is load-bearing: it
  * breaks the engine→cursor→engine feedback loop without needing a
- * one-shot ref. If alignToCursor were ever to publish back through
- * onCursorTick (it must not), the loop would still terminate after one
- * pass because the cursor position wouldn't change — but the assert
- * costs nothing and makes the contract explicit.
+ * one-shot ref.
+ *
+ * The `lastAppliedRev` ref tracks the last revision we successfully
+ * applied — NOT the last revision we attempted. This matters during
+ * cold open: when restore-status flips to live before the loader has
+ * delivered segments, the first alignment attempt translates to null
+ * and returns false. We leave lastAppliedRev unchanged so that when the
+ * loader's translators update (alignToCursor identity changes), the
+ * effect re-runs and the alignment lands.
  */
 export function useCursorAlignedEngine({
   cursorRevision,
@@ -49,9 +62,6 @@ export function useCursorAlignedEngine({
   isLive,
   isActive = true,
 }: UseCursorAlignedEngineOpts): void {
-  // Track the last revision we acted on so an effect re-fire from a
-  // dependency churn other than the cursor revision (e.g. alignToCursor
-  // identity change) doesn't re-seek the engine for no reason.
   const lastAppliedRev = useRef<number>(-1)
 
   useEffect(() => {
@@ -59,8 +69,10 @@ export function useCursorAlignedEngine({
     if (!isLive) return
     if (cursorOrigin === 'engine') return
     if (lastAppliedRev.current === cursorRevision) return
-    lastAppliedRev.current = cursorRevision
-    alignToCursor(cursorAbsoluteIndex, cursorWordIndex)
+    const ok = alignToCursor(cursorAbsoluteIndex, cursorWordIndex)
+    // Latch only on a successful seek. A failure (translator returned
+    // null) is left pending so the next dep change re-fires the effect.
+    if (ok) lastAppliedRev.current = cursorRevision
   }, [
     isActive,
     isLive,

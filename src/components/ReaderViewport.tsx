@@ -331,7 +331,6 @@ function ActiveReader({
     publicationId,
     chapterId: currentChapterId,
     dataSaver: isDataSaver,
-    initialSegmentIndex: cursorAbsIdx,
   });
 
   useEffect(() => {
@@ -652,8 +651,9 @@ function ActiveReader({
 
   const alignPlayback = useCallback((abs: number) => {
     const arr = translators.absoluteToArrayIndex(abs);
-    if (arr == null) return;
+    if (arr == null) return false;
     playbackActions.seekTo(arr);
+    return true;
   }, [translators, playbackActions]);
   useCursorAlignedEngine({
     cursorRevision,
@@ -666,8 +666,9 @@ function ActiveReader({
 
   const alignRsvp = useCallback((abs: number, word: number) => {
     const arr = translators.absoluteToArrayIndex(abs);
-    if (arr == null) return;
+    if (arr == null) return false;
     rsvpActions.seekToSegment(arr, word);
+    return true;
   }, [translators, rsvpActions]);
   useCursorAlignedEngine({
     cursorRevision,
@@ -681,8 +682,9 @@ function ActiveReader({
 
   const alignFocusScroll = useCallback((abs: number) => {
     const arr = translators.absoluteToArrayIndex(abs);
-    if (arr == null) return;
+    if (arr == null) return false;
     scrollActions.seekTo(arr);
+    return true;
   }, [translators, scrollActions]);
   useCursorAlignedEngine({
     cursorRevision,
@@ -695,8 +697,9 @@ function ActiveReader({
 
   const alignFocusTrack = useCallback((abs: number) => {
     const arr = translators.absoluteToArrayIndex(abs);
-    if (arr == null) return;
+    if (arr == null) return false;
     trackActions.seekTo(arr);
+    return true;
   }, [translators, trackActions]);
   useCursorAlignedEngine({
     cursorRevision,
@@ -709,8 +712,9 @@ function ActiveReader({
 
   const alignFormattedScroll = useCallback((abs: number) => {
     const arr = translators.absoluteToArrayIndex(abs);
-    if (arr == null) return;
+    if (arr == null) return false;
     formattedScrollActionsRaw.seekTo(arr);
+    return true;
   }, [translators, formattedScrollActionsRaw]);
   useCursorAlignedEngine({
     cursorRevision,
@@ -723,8 +727,9 @@ function ActiveReader({
 
   const alignFormattedTrack = useCallback((abs: number) => {
     const arr = translators.absoluteToArrayIndex(abs);
-    if (arr == null) return;
+    if (arr == null) return false;
     formattedTrackActionsRaw.seekTo(arr);
+    return true;
   }, [translators, formattedTrackActionsRaw]);
   useCursorAlignedEngine({
     cursorRevision,
