@@ -63,6 +63,17 @@ function commit(patch: Partial<PositionState>, origin: PositionOrigin): void {
 /*  Public store API                                                   */
 /* ------------------------------------------------------------------ */
 
+/* eslint-disable @typescript-eslint/no-explicit-any */
+// Diagnostic hook: expose the store on window in dev so headless tests
+// can read cursor state without subscribing to React. Stripped by Vite
+// in production builds via tree-shaking on `import.meta.env.DEV`.
+if (typeof window !== 'undefined' && (import.meta as any).env?.DEV) {
+  ;(window as any).__positionStore = {
+    snapshot: () => state,
+  }
+}
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
 export const positionStore = {
   /** Stable getter for useSyncExternalStore. */
   getSnapshot(): PositionState {

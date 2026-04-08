@@ -45,16 +45,34 @@ interface FormattedViewProps {
    * geometry. This callback is the "layout settled" signal.
    */
   onLayoutChange?: () => void
+  /**
+   * Whether the formatted view should be visible to the user.
+   * FormattedView stays MOUNTED across the play/pause lifecycle to
+   * avoid the multi-second cost of rewriting innerHTML, rebuilding the
+   * velocity profile, and rebuilding the segment range index every
+   * time the user pauses from phrase/RSVP. When `visible` is false the
+   * component CSS-hides itself and the IntersectionObserver
+   * suppresses dispatches so it doesn't fight with the focus overlay.
+   * Defaults to true.
+   */
+  visible?: boolean
 }
 
 /**
  * Minimal segment shape the highlight system needs from the parent.
  * Decoupled from the full Segment type so this component doesn't pull
- * in db/parser types just for highlighting.
+ * in db/parser types just for highlighting. chapter_id is included so
+ * the highlight pipeline can detect stale-chapter segments (e.g. when
+ * the loader hasn't finished switching chapters yet) and refuse to
+ * match — without this guard the matcher walks chapter A's segments
+ * against chapter B's DOM and produces 0 hits, which downstream falls
+ * through to a giant proportional band that gets clamped to null and
+ * leaves the auto-scroll stuck.
  */
 export interface HighlightSegment {
   text: string
   word_count?: number
+  chapter_id?: number
 }
 
 /** Result returned from setHighlightForSegment so the parent can reuse
@@ -73,34 +91,30 @@ export interface HighlightInfo {
  * Imperative handle exposed via forwardRef. The surface stays minimal —
  * ReaderViewport reaches in for the things that can't be expressed as
  * props without forcing a re-render of the section innerHTML write path.
- *
- *   - Scroll container + section element for the auto-scroll effect
- *   - rebuildProfile / settleImages for the play-time layout settle
- *   - setHighlightForSegment is the ONLY highlight entry point. It
- *     looks up (or builds, if needed) the per-section text→DOM-range
- *     index, materializes per-line rects via Range.getClientRects(),
- *     and renders multi-line bands that hug the actual words. Falls
- *     back to a proportional / velocity-profile estimate when the
- *     text matcher can't locate a particular segment. Pass arrIdx=-1
- *     to clear the highlight.
- *
- * NOTE: scrollSectionIntoView used to live here. It was removed
- * because it raced the auto-scroll effect on TOC clicks (instant-jump
- * to section top, then ~ms later auto-scroll override to a different
- * position, plus a per-chapter latch that blocked re-clicks). The
- * auto-scroll effect in ReaderViewport now owns ALL formatted-view
- * scrolling.
  */
 export interface FormattedViewHandle {
   getScrollContainer: () => HTMLDivElement | null
   getSectionEl: (idx: number) => HTMLElement | null
   rebuildProfile: () => void
   settleImages: (sectionIdx: number) => Promise<void>
+  /** Highlight a single segment. See setHighlightForSegment docstring. */
   setHighlightForSegment: (
     sectionIdx: number,
     arrIdx: number,
     segments: ReadonlyArray<HighlightSegment>,
   ) => HighlightInfo | null
+  /** Mark a window of programmatic scrolling so the IntersectionObserver
+   *  inside FormattedView and the pause-mode scroll listener in
+   *  ReaderViewport both know to suppress their callbacks. The auto-
+   *  scroll effect calls this immediately before container.scrollTo
+   *  and clears it on scrollend (with a 600ms fallback). Without this,
+   *  auto-scroll would race the IO + listener in a feedback loop —
+   *  scrollTo fires a scroll event, listener dispatches USER_SCROLL,
+   *  IO dispatches CHAPTER_NAV, both override the auto-scroll target. */
+  beginProgrammaticScroll: () => void
+  endProgrammaticScroll: () => void
+  /** True iff a programmatic scroll is currently in flight. */
+  isProgrammaticScrollActive: () => boolean
 }
 
 const OPFS_SRC_RE = /<img\s[^>]*?src=["']opfs:([^"']+)["']/gi
@@ -263,6 +277,7 @@ const FormattedView = forwardRef<FormattedViewHandle, FormattedViewProps>(functi
     onTap,
     velocityProfileRef,
     onLayoutChange,
+    visible = true,
   },
   ref,
 ) {
@@ -270,6 +285,10 @@ const FormattedView = forwardRef<FormattedViewHandle, FormattedViewProps>(functi
   // doesn't need to re-create itself when the parent re-renders.
   const onLayoutChangeRef = useRef(onLayoutChange)
   onLayoutChangeRef.current = onLayoutChange
+  // Mirror visible into a ref so the IntersectionObserver callback can
+  // consult it without re-creating the observer on every visibility flip.
+  const visibleRef = useRef(visible)
+  visibleRef.current = visible
   const tapHandlers = useContentTap(onTap)
   const containerRef = useRef<HTMLDivElement>(null)
   const sectionRefs = useRef<Map<number, HTMLElement>>(new Map())
@@ -523,6 +542,11 @@ const FormattedView = forwardRef<FormattedViewHandle, FormattedViewProps>(functi
     const observer = new IntersectionObserver(
       (entries) => {
         if (isProgrammaticScrollRef.current) return
+        // Don't dispatch chapter-nav while the formatted view is hidden
+        // (the user is in phrase/RSVP play mode and the focus overlay
+        // is showing). Otherwise stale layout shifts during play would
+        // commit chapter changes the user can't see.
+        if (!visibleRef.current) return
         let bestIdx = -1
         let bestTop = -Infinity
         for (const entry of entries) {
@@ -566,7 +590,13 @@ const FormattedView = forwardRef<FormattedViewHandle, FormattedViewProps>(functi
       rebuildProfile: () => {
         rebuildProfileNow()
       },
-      // scrollSectionIntoView removed — see FormattedViewHandle docstring.
+      beginProgrammaticScroll: () => {
+        isProgrammaticScrollRef.current = true
+      },
+      endProgrammaticScroll: () => {
+        isProgrammaticScrollRef.current = false
+      },
+      isProgrammaticScrollActive: () => isProgrammaticScrollRef.current,
       settleImages: async (sectionIdx) => {
         // Force every <img> in this section to fully decode before resolving.
         // HTMLImageElement.decode() resolves once the image is parsed AND
@@ -593,6 +623,22 @@ const FormattedView = forwardRef<FormattedViewHandle, FormattedViewProps>(functi
         const container = containerRef.current
         const sectionEl = sectionRefs.current.get(sectionIdx)
         if (!container || !sectionEl) {
+          setHighlightRects(null)
+          return null
+        }
+        // Stale-chapter guard: when the loader hasn't finished switching
+        // chapters (rapid chapter advance during phrase playback can leave
+        // segments[] holding the previous chapter's data for a few frames),
+        // refuse to match. The auto-scroll polling loop will keep retrying
+        // until the loader catches up. Without this guard the matcher
+        // produces 0 hits and the proportional fallback paints in the
+        // wrong place.
+        const targetChapterId = chapters[sectionIdx]?.id
+        if (
+          targetChapterId != null &&
+          segments[0]?.chapter_id != null &&
+          segments[0].chapter_id !== targetChapterId
+        ) {
           setHighlightRects(null)
           return null
         }
@@ -688,7 +734,12 @@ const FormattedView = forwardRef<FormattedViewHandle, FormattedViewProps>(functi
   const uploadDiag = diagEnabled ? readUploadDiag(publicationId) : null
 
   return (
-    <div className="formatted-view" ref={containerRef} {...tapHandlers}>
+    <div
+      className={visible ? 'formatted-view' : 'formatted-view formatted-view--hidden'}
+      ref={containerRef}
+      aria-hidden={!visible}
+      {...tapHandlers}
+    >
       {highlightRects?.map((r, i) => (
         <div
           key={i}

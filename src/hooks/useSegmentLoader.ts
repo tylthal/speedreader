@@ -85,6 +85,21 @@ export function useSegmentLoader(
   totalSegmentsRef.current = totalSegments;
   const segmentsRef = useRef(segments);
   segmentsRef.current = segments;
+  // Track the latest chapterId so that an in-flight fetch can detect
+  // it was started for an old chapter and discard its response. Without
+  // this, rapid chapter changes during phrase playback could leave the
+  // loader holding chapter N's segments while the cursor is in chapter
+  // N+k — the next pause-from-phrase would then try to highlight against
+  // the wrong chapter's segments and fail. The chapter-change effect
+  // also reads it via pendingChapterFetchRef to know whether to schedule
+  // a deferred refetch when an in-flight call finally drains.
+  const chapterIdRef = useRef(chapterId);
+  chapterIdRef.current = chapterId;
+  // Set by the chapter-change effect when it can't immediately call
+  // fetchBatch (because a previous fetch is still in flight). The
+  // previous fetch's finally checks this and kicks off the deferred
+  // fetch for the latest chapter.
+  const pendingChapterFetchRef = useRef<number | null>(null);
 
   // Pending ensureWindowFor() resolvers — one per outstanding caller.
   // The fetch loop checks this set after every successful batch and
@@ -132,8 +147,24 @@ export function useSegmentLoader(
       setIsLoading(true);
       setError(null);
 
+      // Read the chapterId from the ref instead of the useCallback
+      // closure. This makes fetchBatch chapter-agnostic — the recursive
+      // call inside the finally block always targets the LATEST
+      // chapter, even if useCallback hasn't recreated yet. Without
+      // this, the in-flight fetch's recursive retry would re-fetch
+      // the OLD chapter and we'd loop forever on the wrong data.
+      const fetchedChapterId = chapterIdRef.current;
+
       try {
-        const batch = await getSegments(publicationId, chapterId, start, end);
+        const batch = await getSegments(publicationId, fetchedChapterId, start, end);
+
+        // Staleness check: chapterIdRef is updated on every render. If
+        // it doesn't match the chapterId we captured at fetch start,
+        // the loader has moved on. Discard the response.
+        if (chapterIdRef.current !== fetchedChapterId) {
+          return;
+        }
+
         setTotalSegments(batch.total_segments);
         totalSegmentsRef.current = batch.total_segments;
 
@@ -168,11 +199,30 @@ export function useSegmentLoader(
         // Resolve any ensureWindowFor() callers whose target is now in.
         flushEnsurers();
       } catch (err) {
+        // Don't surface errors from a stale fetch — the user has moved on.
+        if (chapterIdRef.current !== fetchedChapterId) {
+          return;
+        }
         const message = err instanceof Error ? err.message : 'Failed to load segments';
         setError(message);
       } finally {
         fetchingRef.current = false;
         setIsLoading(false);
+
+        // Deferred chapter-change fetch: if the chapter changed while we
+        // were fetching, the chapter-change effect couldn't run fetchBatch
+        // (the gate above blocked it). Pick up the pending request now
+        // that we're free.
+        const pendingChap = pendingChapterFetchRef.current;
+        if (pendingChap !== null && pendingChap === chapterIdRef.current) {
+          pendingChapterFetchRef.current = null;
+          fetchBatch(0, 999999, false);
+          return; // skip the per-chapter prefetch flush below — we're starting fresh
+        }
+        // Clear stale pending if it doesn't match the current chapter.
+        if (pendingChap !== null && pendingChap !== chapterIdRef.current) {
+          pendingChapterFetchRef.current = null;
+        }
 
         // If a prefetch was requested while we were fetching, flush it now
         const pending = pendingPrefetchRef.current;
@@ -192,7 +242,7 @@ export function useSegmentLoader(
         }
       }
     },
-    [publicationId, chapterId, flushEnsurers]
+    [publicationId, flushEnsurers]
   );
 
   // Initial load when chapterId changes
@@ -218,7 +268,16 @@ export function useSegmentLoader(
     // (avg ~500 segments, max ~1600) that loading everything up front is
     // simpler and avoids complex prefetch/scroll-preservation logic.
     initialFetchedRef.current = true;
-    fetchBatch(0, 999999, false);
+    if (fetchingRef.current) {
+      // Previous chapter's fetch is still draining. fetchBatch would
+      // bail at its in-flight gate. Stash the chapter so the previous
+      // fetch's finally picks it up — without this, rapid chapter
+      // changes during phrase playback could leave the loader holding
+      // a stale chapter's segments forever.
+      pendingChapterFetchRef.current = chapterId;
+    } else {
+      fetchBatch(0, 999999, false);
+    }
     // Intentionally NOT depending on anything that changes per cursor
     // tick. The cursor refactor previously plumbed initialSegmentIndex
     // through here as a dep, which caused the entire chapter to be

@@ -151,16 +151,61 @@ export function buildSegmentRangeIndex(
   // through `linear`, find each segment as a substring starting at or
   // after the cursor. Sequential preserves order so identical text
   // appearing twice (e.g. "the") is resolved to the right occurrence.
+  //
+  // PERF GUARD RAILS — these matter for big books:
+  //
+  //   1. Per-segment search distance cap. If `target` doesn't appear
+  //      within MAX_SEARCH_DISTANCE characters of the cursor, give up
+  //      on that segment. The default JavaScript `indexOf` walks to the
+  //      END of the string on every miss, so an unmatched segment in a
+  //      1M-char book is O(1M) — and 20K unmatched segments would be
+  //      ~20 BILLION character comparisons. Capping at e.g. 50K chars
+  //      bounds the worst-case to ~1B which is still slow but won't
+  //      block the main thread for 27 seconds.
+  //
+  //   2. Wall-clock budget. Bail out of the entire build after
+  //      MAX_BUILD_MS. The remaining segments are marked null and the
+  //      caller falls back to the proportional band for them. A
+  //      partially-built index is far better than blocking playback.
+  //
+  // Both guards are no-ops on books where the matcher is fast (most
+  // plain prose). They only kick in when something's gone wrong with
+  // text→DOM normalization (e.g. an EPUB with typographic substitutions
+  // the parser stripped but the rendered HTML preserves).
+  const MAX_SEARCH_DISTANCE = 50000
+  const MAX_BUILD_MS = 200
+  const buildStart =
+    typeof performance !== 'undefined' ? performance.now() : Date.now()
+  const linearLen = linear.length
+
   let cursor = 0
   for (let segIdx = 0; segIdx < segments.length; segIdx++) {
     const target = normalizeSegmentText(segments[segIdx].text)
     if (target.length === 0) continue
 
-    const found = linear.indexOf(target, cursor)
+    // Wall-clock guard. Check every 50 segments to avoid the cost of
+    // performance.now() per iteration on fast books.
+    if (segIdx % 50 === 0) {
+      const now =
+        typeof performance !== 'undefined' ? performance.now() : Date.now()
+      if (now - buildStart > MAX_BUILD_MS) {
+        // Out of budget — leave the rest as null. Fallback band will
+        // render for those segments.
+        break
+      }
+    }
+
+    // Bound the indexOf search by truncating the haystack to the
+    // window we're willing to search. Slicing a string is O(n) on
+    // creation but the indexOf inside is bounded so the worst-case
+    // total is O(MAX_SEARCH_DISTANCE) per call instead of O(linearLen).
+    const searchEnd = Math.min(linearLen, cursor + MAX_SEARCH_DISTANCE)
+    const haystack =
+      searchEnd === linearLen ? linear : linear.slice(0, searchEnd)
+    const found = haystack.indexOf(target, cursor)
     if (found === -1) {
-      // Couldn't find this segment from the cursor onward. Don't
-      // advance — the next segment might still match if this one was
-      // anomalous (e.g. an image-alt-text-only segment). Caller falls
+      // Couldn't find this segment within the search window. Don't
+      // advance — the next segment might still match. Caller falls
       // back to proportional for null entries.
       result[segIdx] = null
       continue

@@ -566,6 +566,12 @@ function ActiveReader({
   // so a never-loading section doesn't burn CPU forever.
   const pendingScrollRef = useRef(false);
   const wasFormattedRef = useRef(false);
+  // Last chapterIdx the auto-scroll latched onto. Used to detect
+  // chapter changes that happened during play but the cursor's last
+  // commit was an engine tick (origin='engine'). On pause from phrase/
+  // RSVP, we still want to scroll to the new chapter even though the
+  // most recent commit wasn't a navigation event.
+  const lastAutoScrolledChapterRef = useRef<number>(-1);
   useEffect(() => {
     // CRITICAL: this cleanup branch must run BEFORE the handle check.
     // When the user starts playing in phrase/RSVP, showFormattedView
@@ -590,6 +596,16 @@ function ActiveReader({
       return;
     }
     if (cursorOrigin !== 'engine') {
+      pendingScrollRef.current = true;
+    }
+    // ALSO force a scroll if the chapter changed since the last one we
+    // scrolled to. This catches the pause-from-phrase case: while
+    // playing, the engine auto-advanced through several chapters
+    // (each emitting CHAPTER_NAV → ENGINE_TICK), leaving the cursor at
+    // origin='engine'. The cursor's chapterIdx has moved but neither
+    // transitionedIn nor the non-engine check triggers. The chapter-
+    // mismatch detection here closes that gap.
+    if (chapterIdx !== lastAutoScrolledChapterRef.current) {
       pendingScrollRef.current = true;
     }
 
@@ -667,8 +683,24 @@ function ActiveReader({
         cursorOrigin === 'chapter-nav'
           ? 'auto'
           : 'smooth';
+      // Mark as a programmatic scroll BEFORE firing scrollTo. The
+      // pause-mode scroll listener and FormattedView's
+      // IntersectionObserver both consult this flag and suppress their
+      // callbacks while it's true. Without it, the scroll event from
+      // scrollTo triggers the listener (USER_SCROLL) and the IO
+      // (CHAPTER_NAV), both of which override the auto-scroll target
+      // before the user sees it land.
+      handle.beginProgrammaticScroll();
+      const cleanupProgrammatic = () => {
+        handle.endProgrammaticScroll();
+        container.removeEventListener('scrollend', cleanupProgrammatic as EventListener);
+      };
+      container.addEventListener('scrollend', cleanupProgrammatic as EventListener, { once: true });
+      // Fallback for browsers without scrollend (Safari < 18.2).
+      setTimeout(cleanupProgrammatic, 600);
       container.scrollTo({ top: clamped, behavior });
       pendingScrollRef.current = false;
+      lastAutoScrolledChapterRef.current = chapterIdx;
     };
 
     rafHandle = requestAnimationFrame(tryScroll);
@@ -696,6 +728,9 @@ function ActiveReader({
   }, [chapterIdx, chapters.length, navigateToSection]);
 
   /* ---- Pause-mode scroll listener (formatted view USER_SCROLL) ---- */
+  // Suppressed when handle.isProgrammaticScrollActive() is true so it
+  // doesn't catch our own auto-scroll's events and dispatch a
+  // USER_SCROLL that overrides the cursor.
   // While paused in formatted view, manual scroll updates the cursor
   // position. The controller's seekToAbs is the wrong primitive here
   // because we want origin='user-scroll' (so the scroll-into-view
@@ -710,10 +745,15 @@ function ActiveReader({
 
     let rafScheduled = false;
     const onScroll = () => {
+      // Suppress while a programmatic scroll is in flight — the
+      // auto-scroll effect's container.scrollTo fires scroll events
+      // that we must NOT interpret as user input.
+      if (handle.isProgrammaticScrollActive()) return;
       if (rafScheduled) return;
       rafScheduled = true;
       requestAnimationFrame(() => {
         rafScheduled = false;
+        if (handle.isProgrammaticScrollActive()) return;
         const sectionEl = handle.getSectionEl(chapterIdx);
         if (!sectionEl) return;
         const containerRect = container.getBoundingClientRect();
@@ -847,52 +887,63 @@ function ActiveReader({
         </div>
       )}
 
-      {showFormattedView && (
-        isImageBook ? (
-          <CbzFormattedView
-            publicationId={publicationId}
-            chapterId={currentChapterId}
-            totalPages={chapters[0]?.meta && typeof (chapters[0].meta as any).pageCount === 'number'
-              ? (chapters[0].meta as any).pageCount as number
-              : 9999}
-            currentPageIndex={absoluteSegmentIndex}
-            onVisiblePageChange={(idx) => {
-              if (idx !== absoluteSegmentIndex) {
-                positionStore.setPosition(
-                  { absoluteSegmentIndex: idx, wordIndex: 0 },
-                  'user-seek',
-                );
-              }
-            }}
-            onTap={isPlaying ? userPause : undefined}
-          />
-        ) : isPdfBook ? (
-          <PdfFormattedView
+      {/* CBZ and PDF views are conditionally rendered (they're cheap and
+          rarely used). The HTML FormattedView is ALWAYS mounted to avoid
+          the multi-second remount cost on every pause from phrase/RSVP —
+          its body innerHTML write, velocity profile build, and segment
+          range index build are all amortized over the session. CSS
+          visibility is gated on showFormattedView. The IntersectionObserver
+          inside FormattedView consults the same prop so it doesn't
+          dispatch chapter-nav while hidden. */}
+      {showFormattedView && isImageBook && (
+        <CbzFormattedView
+          publicationId={publicationId}
+          chapterId={currentChapterId}
+          totalPages={chapters[0]?.meta && typeof (chapters[0].meta as any).pageCount === 'number'
+            ? (chapters[0].meta as any).pageCount as number
+            : 9999}
+          currentPageIndex={absoluteSegmentIndex}
+          onVisiblePageChange={(idx) => {
+            if (idx !== absoluteSegmentIndex) {
+              positionStore.setPosition(
+                { absoluteSegmentIndex: idx, wordIndex: 0 },
+                'user-seek',
+              );
+            }
+          }}
+          onTap={isPlaying ? userPause : undefined}
+        />
+      )}
+      {showFormattedView && !isImageBook && isPdfBook && (
+        <PdfFormattedView
+          publicationId={publicationId}
+          chapters={chapters}
+          currentSectionIndex={chapterIdx}
+          onVisibleSectionChange={handleVisibleSectionChange}
+          onTap={isPlaying ? userPause : undefined}
+        />
+      )}
+      {!isImageBook && !isPdfBook && (
+        <>
+          <FormattedView
+            ref={formattedViewRef}
             publicationId={publicationId}
             chapters={chapters}
             currentSectionIndex={chapterIdx}
             onVisibleSectionChange={handleVisibleSectionChange}
             onTap={isPlaying ? userPause : undefined}
+            velocityProfileRef={velocityProfileRef}
+            onLayoutChange={onFormattedLayoutChange}
+            visible={showFormattedView}
           />
-        ) : (
-          <>
-            <FormattedView
-              ref={formattedViewRef}
-              publicationId={publicationId}
-              chapters={chapters}
-              currentSectionIndex={chapterIdx}
-              onVisibleSectionChange={handleVisibleSectionChange}
-              onTap={isPlaying ? userPause : undefined}
-              velocityProfileRef={velocityProfileRef}
-              onLayoutChange={onFormattedLayoutChange}
-            />
+          {showFormattedView && (
             <VelocityProfileDebugOverlay
               formattedViewRef={formattedViewRef}
               velocityProfileRef={velocityProfileRef}
               wpm={wpm}
             />
-          </>
-        )
+          )}
+        </>
       )}
 
       {!showFormattedView && (

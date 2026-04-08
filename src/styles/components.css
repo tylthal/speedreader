@@ -321,6 +321,20 @@
   position: relative;
 }
 
+/* CSS-hidden formatted view: stays in the flex layout (so scroll
+   position, scroll height, segment range index, velocity profile,
+   and innerHTML are all preserved across pause→play→pause cycles),
+   but invisible and not interactive while the focus overlay is
+   showing during phrase/RSVP playback. The focus overlay is itself
+   position:absolute so it overlays this without any layout fight.
+   We deliberately do NOT change position here — toggling between
+   static and absolute would cause the scroll container to re-layout
+   and could reset scrollTop, undoing the auto-scroll target. */
+.formatted-view--hidden {
+  visibility: hidden;
+  pointer-events: none;
+}
+
 /* Current-segment highlight overlay. ReaderViewport computes the band
    from the cursor position + section layout and pushes it in via
    FormattedViewHandle.setHighlightBand. Coordinates are in scroll-
