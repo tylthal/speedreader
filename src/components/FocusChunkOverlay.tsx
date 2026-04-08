@@ -65,29 +65,54 @@ function PausedScrollView({
   const isUserScrolling = useRef(false);
   const scrollTimeout = useRef<ReturnType<typeof setTimeout>>(undefined);
   const programmaticScroll = useRef(false);
+  // Tracks whether the initial mount scroll has run. The "scroll on
+  // currentIndex change" effect must skip the first render — otherwise
+  // it races the initial-mount instant scroll with a smooth scroll
+  // whose animation outlasts the programmatic-scroll cooldown, and
+  // handleScroll's mid-animation snapshot fires onSeek with the wrong
+  // index. That was the "stops in the wrong place" bug.
+  const initialScrollDoneRef = useRef(false);
 
-  // Scroll to current index when it changes (from external seek or initial mount)
-  useEffect(() => {
-    const el = itemRefs.current.get(currentIndex);
-    if (el && !isUserScrolling.current) {
-      programmaticScroll.current = true;
-      el.scrollIntoView({ block: 'center', behavior: 'smooth' });
-      // Reset programmatic flag after scroll completes
-      setTimeout(() => { programmaticScroll.current = false; }, 500);
-    }
-  }, [currentIndex]);
+  // Helper: clear programmaticScroll on the real scrollend event (with
+  // a generous fallback for browsers without scrollend support). The
+  // earlier 100/500ms timeouts were both shorter than the in-flight
+  // smooth-scroll animation, so handleScroll could fire mid-animation
+  // with the flag already cleared.
+  const clearProgrammaticOn = useCallback((container: HTMLDivElement | null) => {
+    const cleanup = () => {
+      programmaticScroll.current = false;
+      container?.removeEventListener('scrollend', cleanup as EventListener);
+    };
+    container?.addEventListener('scrollend', cleanup as EventListener, { once: true });
+    // Fallback: 1500ms is longer than any reasonable smooth scroll animation.
+    setTimeout(cleanup, 1500);
+  }, []);
 
-  // Initial scroll (instant, no animation)
+  // Initial scroll (instant, no animation). Runs once on mount.
   useEffect(() => {
     const el = itemRefs.current.get(currentIndex);
     if (el) {
       programmaticScroll.current = true;
       el.scrollIntoView({ block: 'center', behavior: 'instant' });
-      setTimeout(() => { programmaticScroll.current = false; }, 100);
+      clearProgrammaticOn(containerRef.current);
     }
+    initialScrollDoneRef.current = true;
     // Only on mount
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Scroll to current index when it changes from an external seek.
+  // Skips the very first render — the initial-mount effect above owns
+  // that. After mount we use smooth scroll for visual continuity.
+  useEffect(() => {
+    if (!initialScrollDoneRef.current) return;
+    const el = itemRefs.current.get(currentIndex);
+    if (el && !isUserScrolling.current) {
+      programmaticScroll.current = true;
+      el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      clearProgrammaticOn(containerRef.current);
+    }
+  }, [currentIndex, clearProgrammaticOn]);
 
   // Detect which segment is closest to center on scroll.
   // Throttled via rAF to run at most once per frame, and onSeek is
@@ -113,6 +138,11 @@ function PausedScrollView({
       rafPending.current = true;
       requestAnimationFrame(() => {
         rafPending.current = false;
+        // Re-check the programmatic-scroll flag inside the rAF too:
+        // a programmatic scroll started after handleScroll's outer
+        // check but before the rAF body would otherwise run, racing
+        // the same way the cooldown-timeout fix is meant to prevent.
+        if (programmaticScroll.current) return;
         const container = containerRef.current;
         if (!container) return;
 
