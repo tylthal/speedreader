@@ -92,6 +92,10 @@ export interface HighlightInfo {
   accurate: boolean
 }
 
+interface HighlightRenderOptions {
+  suppressVisual?: boolean
+}
+
 export interface TocTargetInfo {
   topPx: number
   /**
@@ -117,6 +121,7 @@ export interface FormattedViewHandle {
     sectionIdx: number,
     arrIdx: number,
     segments: ReadonlyArray<HighlightSegment>,
+    options?: HighlightRenderOptions,
   ) => HighlightInfo | null
   resolveTocTarget: (
     sectionIdx: number,
@@ -689,7 +694,8 @@ const FormattedView = forwardRef<FormattedViewHandle, FormattedViewProps>(functi
           }),
         )
       },
-      setHighlightForSegment: (sectionIdx, arrIdx, segments) => {
+      setHighlightForSegment: (sectionIdx, arrIdx, segments, options) => {
+        const suppressVisual = options?.suppressVisual ?? false
         // Clear request: arrIdx === -1 OR segments empty.
         if (arrIdx < 0 || segments.length === 0) {
           setHighlightRects(null)
@@ -731,7 +737,7 @@ const FormattedView = forwardRef<FormattedViewHandle, FormattedViewProps>(functi
           // reflect the current layout (font size, image decode).
           const rects = materializeRangeRects(range, container)
           if (rects.length > 0) {
-            setHighlightRects(rects)
+            setHighlightRects(suppressVisual ? null : rects)
             let topMin = Infinity
             let bottomMax = -Infinity
             for (const r of rects) {
@@ -804,7 +810,7 @@ const FormattedView = forwardRef<FormattedViewHandle, FormattedViewProps>(functi
           widthPx: colRect ? colRect.width : containerRect.width,
           heightPx: fallback.heightPx,
         }
-        setHighlightRects([fallbackRect])
+        setHighlightRects(suppressVisual ? null : [fallbackRect])
         return { ...fallback, accurate: false }
       },
       resolveTocTarget: (sectionIdx, htmlAnchor, segments) => {

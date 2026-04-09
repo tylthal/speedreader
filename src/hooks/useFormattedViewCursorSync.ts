@@ -17,6 +17,7 @@ interface CursorTranslators {
 interface UseFormattedViewCursorSyncArgs {
   showFormattedView: boolean
   isPlaying: boolean
+  readingMode: 'phrase' | 'rsvp' | 'scroll' | 'track'
   tocNavigationRevision: number
   chapterIdx: number
   absoluteSegmentIndex: number
@@ -33,6 +34,7 @@ interface UseFormattedViewCursorSyncArgs {
 export function useFormattedViewCursorSync({
   showFormattedView,
   isPlaying,
+  readingMode,
   tocNavigationRevision,
   chapterIdx,
   absoluteSegmentIndex,
@@ -48,6 +50,8 @@ export function useFormattedViewCursorSync({
   const pendingScrollRef = useRef(false)
   const wasFormattedRef = useRef(false)
   const lastAutoScrolledChapterRef = useRef(-1)
+  const suppressVisualHighlight =
+    isPlaying && (readingMode === 'scroll' || readingMode === 'track')
 
   useEffect(() => {
     const handle = formattedViewRef.current
@@ -67,7 +71,9 @@ export function useFormattedViewCursorSync({
     let cancelled = false
     const raf = requestAnimationFrame(() => {
       if (!cancelled) {
-        handle.setHighlightForSegment(chapterIdx, arrIdx, segments)
+        handle.setHighlightForSegment(chapterIdx, arrIdx, segments, {
+          suppressVisual: suppressVisualHighlight,
+        })
       }
     })
 
@@ -80,6 +86,7 @@ export function useFormattedViewCursorSync({
     chapterIdx,
     absoluteSegmentIndex,
     cursorRevision,
+    suppressVisualHighlight,
     segments,
     translators,
     layoutVersion,
@@ -196,7 +203,9 @@ export function useFormattedViewCursorSync({
         }
       }
 
-      const info = handle.setHighlightForSegment(chapterIdx, arrIdx, segments)
+      const info = handle.setHighlightForSegment(chapterIdx, arrIdx, segments, {
+        suppressVisual: suppressVisualHighlight,
+      })
       if (!info) {
         if (attempts < maxAttempts) {
           rafHandle = requestAnimationFrame(tryScroll)
@@ -253,6 +262,7 @@ export function useFormattedViewCursorSync({
     cursorOrigin,
     cursorRevision,
     clearPendingTocTarget,
+    suppressVisualHighlight,
     segments,
     translators,
     layoutVersion,

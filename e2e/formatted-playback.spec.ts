@@ -66,6 +66,15 @@ test.describe('Formatted-view auto-scroll', () => {
     expect(playingScrollTop).toBeGreaterThan(initialScrollTop);
   });
 
+  test('scroll mode hides the formatted highlight band while playing', async ({ page }) => {
+    await expect(page.locator('.formatted-view__highlight')).toHaveCount(1);
+
+    await page.locator('[aria-label="Play reading"]').click();
+    await page.waitForTimeout(800);
+
+    await expect(page.locator('.formatted-view__highlight')).toHaveCount(0);
+  });
+
   test('pause stops the scroll within ~200ms', async ({ page }) => {
     await page.locator('[aria-label="Play reading"]').click();
     await page.waitForTimeout(1500);
