@@ -532,6 +532,16 @@ const FormattedView = forwardRef<FormattedViewHandle, FormattedViewProps>(functi
   // chapter-nav buttons. Visible-section changes from scrolling stay
   // observe-only.
 
+  // Tracks the scrollTop value at the time of the last IO firing. The
+  // IO can fire for two reasons: (1) the user (or programmatic code)
+  // scrolled, OR (2) intersecting elements changed shape due to a
+  // layout reflow (image decode, font load, late innerHTML write).
+  // Only the first kind should commit a chapter change — the second
+  // kind would clobber an in-flight TOC navigation by reporting "the
+  // currently visible section is X" before the auto-scroll has a
+  // chance to move to the new chapter.
+  const lastIOSeenScrollTopRef = useRef(0)
+
   // Watch which section is at the top of the viewport and report it.
   // Deps include only `chapters` so the observer is rebuilt when sections
   // change, not on every parent re-render.
@@ -539,14 +549,34 @@ const FormattedView = forwardRef<FormattedViewHandle, FormattedViewProps>(functi
     const container = containerRef.current
     if (!container) return
 
+    // Initialize the scroll-top baseline so the first IO firing doesn't
+    // mistake "we're at the saved scroll position" for "the user just
+    // scrolled here from somewhere else".
+    lastIOSeenScrollTopRef.current = container.scrollTop
+
     const observer = new IntersectionObserver(
       (entries) => {
+        // ALWAYS update the scroll baseline, even when bailing — that way
+        // a programmatic scroll (which we bail on) leaves the baseline
+        // at the new position, and the next layout-reflow IO firing
+        // recognizes "no scroll happened since" and bails too.
+        const currentScroll = container.scrollTop
+        const scrollChanged = currentScroll !== lastIOSeenScrollTopRef.current
+        lastIOSeenScrollTopRef.current = currentScroll
+
         if (isProgrammaticScrollRef.current) return
         // Don't dispatch chapter-nav while the formatted view is hidden
         // (the user is in phrase/RSVP play mode and the focus overlay
         // is showing). Otherwise stale layout shifts during play would
         // commit chapter changes the user can't see.
         if (!visibleRef.current) return
+        // Layout reflow without an actual scroll. Image decodes, font
+        // loads, and late innerHTML writes all fire intersection
+        // changes; without this guard those firings would commit a
+        // chapter change for whichever section is at scrollTop=0,
+        // clobbering an in-flight TOC navigation.
+        if (!scrollChanged) return
+
         let bestIdx = -1
         let bestTop = -Infinity
         for (const entry of entries) {
@@ -643,8 +673,19 @@ const FormattedView = forwardRef<FormattedViewHandle, FormattedViewProps>(functi
           return null
         }
         // Section must actually be laid out — body innerHTML lands
-        // async after the image loader resolves.
-        if (sectionEl.getBoundingClientRect().height < 80) {
+        // async after the image loader resolves. Match the auto-scroll
+        // effect's check: section has non-zero height AND its body (if
+        // any) has been written. We CAN'T use a simple height threshold
+        // because some chapters (e.g., a "Book I" intro page) are
+        // intentionally tiny — just a title h1 of ~29px.
+        if (sectionEl.getBoundingClientRect().height === 0) {
+          setHighlightRects(null)
+          return null
+        }
+        const bodyForCheck = sectionEl.querySelector(
+          '.formatted-view__body',
+        ) as HTMLElement | null
+        if (bodyForCheck && bodyForCheck.dataset.lastHtml === undefined) {
           setHighlightRects(null)
           return null
         }
@@ -687,7 +728,10 @@ const FormattedView = forwardRef<FormattedViewHandle, FormattedViewProps>(functi
         // chunker emits a single section_title segment whose
         // proportional slot is the entire section height — rendering
         // that as a full-width band paints a giant rectangle over the
-        // whole image. Hide the highlight in that case instead.
+        // whole image. Hide the highlight in that case but still
+        // RETURN the section's position so the auto-scroll has a
+        // valid target — without this, TOC clicks on image-only
+        // chapters loop in the auto-scroll's polling and never scroll.
         const fallback = computeProportionalBand(
           arrIdx,
           segments,
@@ -697,16 +741,29 @@ const FormattedView = forwardRef<FormattedViewHandle, FormattedViewProps>(functi
         )
         if (!fallback) {
           setHighlightRects(null)
-          return null
+          // Last-ditch scroll target: the section's own top. The auto-
+          // scroll caller uses topPx + heightPx/2 as the centering
+          // anchor; for an image-only chapter we want the section
+          // top near the top of the viewport.
+          const sectionRect = sectionEl.getBoundingClientRect()
+          const containerRectFb = container.getBoundingClientRect()
+          const sectionTopInScroll =
+            sectionRect.top - containerRectFb.top + container.scrollTop
+          return {
+            topPx: sectionTopInScroll,
+            heightPx: 0,
+            accurate: false,
+          }
         }
         // Cap the fallback height at ~3 lines of body text. Anything
         // larger is almost certainly the "single segment fills the
         // whole section" case (image-only sections), which should
-        // hide instead of paint a giant box.
+        // hide the highlight band but still return a valid scroll
+        // target so navigation works.
         const MAX_FALLBACK_HEIGHT = 96 // ~3 lines at default font size
         if (fallback.heightPx > MAX_FALLBACK_HEIGHT) {
           setHighlightRects(null)
-          return null
+          return { topPx: fallback.topPx, heightPx: 0, accurate: false }
         }
         // Render the fallback as a single full-width rect inside the
         // formatted column. Use the column's actual bounds, not the

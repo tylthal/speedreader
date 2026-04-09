@@ -641,11 +641,27 @@ function ActiveReader({
         }
         return;
       }
-      // Wait until the body innerHTML has actually landed. On a
-      // remount after pause-from-phrase the section is just a title
-      // h1 (~30 px) for several frames while the image loader
-      // resolves and the innerHTML write fires.
-      if (sectionEl.getBoundingClientRect().height < 80) {
+      // Wait until the section is actually laid out by the browser AND
+      // its body innerHTML has landed. We can't use a simple height
+      // threshold because some chapters (e.g., a "Book I" intro page)
+      // are intentionally tiny — just a title h1 of ~29px — and would
+      // be incorrectly classified as "still loading" by an 80-px gate.
+      // The right signal is:
+      //   1. The section has non-zero height (browser has laid it out)
+      //   2. Either the section has no body element at all (chunker
+      //      emitted no body) OR the body has been written (the
+      //      innerHTML-write effect tags the body with dataset.lastHtml
+      //      after writing).
+      if (sectionEl.getBoundingClientRect().height === 0) {
+        if (attempts < maxAttempts) {
+          rafHandle = requestAnimationFrame(tryScroll);
+        }
+        return;
+      }
+      const bodyEl = sectionEl.querySelector(
+        '.formatted-view__body',
+      ) as HTMLElement | null;
+      if (bodyEl && bodyEl.dataset.lastHtml === undefined) {
         if (attempts < maxAttempts) {
           rafHandle = requestAnimationFrame(tryScroll);
         }
@@ -837,8 +853,13 @@ function ActiveReader({
   const handleVisibleSectionChange = useCallback(
     (idx: number) => {
       if (idx === chapterIdx) return;
-      const currentOrigin = positionStore.getSnapshot().origin;
-      const isUserDriving = currentOrigin === 'user-scroll';
+      // The IntersectionObserver inside FormattedView only fires
+      // dispatches when the user actually scrolled (its scrollTop guard
+      // bails on layout reflows, and the programmatic-scroll flag bails
+      // on auto-scrolls). Anything that reaches us here is therefore a
+      // user-driven scroll, so we always commit with 'user-scroll'
+      // origin — that prevents the auto-scroll effect from snapping the
+      // user back to the start of the new chapter.
       positionStore.setPosition(
         {
           chapterId: chapters[idx].id,
@@ -846,7 +867,7 @@ function ActiveReader({
           absoluteSegmentIndex: 0,
           wordIndex: 0,
         },
-        isUserDriving ? 'user-scroll' : 'chapter-nav',
+        'user-scroll',
       );
     },
     [chapterIdx, chapters],
