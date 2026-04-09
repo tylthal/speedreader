@@ -47,6 +47,7 @@ export default function ControlsBottomSheet({
   const { announce } = useAnnounce();
   const haptics = useHaptics();
   const [showModeList, setShowModeList] = useState(false);
+  const [showTrackOptions, setShowTrackOptions] = useState(false);
 
   const modeMeta: Record<ReadingMode, { label: string; description: string }> = {
     phrase: { label: 'Focus', description: 'One phrase at a time' },
@@ -56,6 +57,7 @@ export default function ControlsBottomSheet({
   };
   const allModes: ReadingMode[] = ['phrase', 'rsvp', 'scroll', 'track'];
   const activeMode = modeMeta[mode];
+  const canShowTrackOptions = mode === 'track' && Boolean(onGazeSensitivityChange || onRecalibrate);
 
   const handleTogglePlay = () => {
     onTogglePlay();
@@ -184,27 +186,48 @@ export default function ControlsBottomSheet({
         {activeMode.label} mode · {wpm} WPM
       </div>
 
+      {canShowTrackOptions && (
+        <div className="controls__advanced">
+          <button
+            className={`controls__advanced-toggle${showTrackOptions ? ' controls__advanced-toggle--active' : ''}`}
+            type="button"
+            aria-expanded={showTrackOptions}
+            onClick={() => {
+              setShowTrackOptions((value) => !value);
+              haptics.tap();
+            }}
+          >
+            {showTrackOptions ? 'Hide tracking options' : 'Tracking options'}
+          </button>
+          <p className="controls__advanced-note">
+            Hands-free mode uses your camera on this device only.
+          </p>
+        </div>
+      )}
+
       {/* Track mode controls */}
-      {mode === 'track' && onGazeSensitivityChange && (
+      {canShowTrackOptions && showTrackOptions && (
         <div className="controls__track-row">
-          <label className="controls__sensitivity-label">
-            Sensitivity
-            <input
-              type="range"
-              min="0.5"
-              max="3"
-              step="0.25"
-              value={gazeSensitivity}
-              onChange={(e) => {
-                const val = parseFloat(e.target.value);
-                onGazeSensitivityChange(val);
-                haptics.tick();
-              }}
-              className="controls__sensitivity-slider"
-              aria-label={`Gaze sensitivity: ${gazeSensitivity.toFixed(1)}x`}
-            />
-            <span className="controls__sensitivity-value">{gazeSensitivity.toFixed(1)}x</span>
-          </label>
+          {onGazeSensitivityChange && (
+            <label className="controls__sensitivity-label">
+              Sensitivity
+              <input
+                type="range"
+                min="0.5"
+                max="3"
+                step="0.25"
+                value={gazeSensitivity}
+                onChange={(e) => {
+                  const val = parseFloat(e.target.value);
+                  onGazeSensitivityChange(val);
+                  haptics.tick();
+                }}
+                className="controls__sensitivity-slider"
+                aria-label={`Gaze sensitivity: ${gazeSensitivity.toFixed(1)}x`}
+              />
+              <span className="controls__sensitivity-value">{gazeSensitivity.toFixed(1)}x</span>
+            </label>
+          )}
           {onRecalibrate && (
             <button
               className="controls__chapter-stop-btn"

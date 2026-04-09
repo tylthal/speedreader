@@ -37,7 +37,7 @@ export default function SettingsPage() {
   const { defaultDisplayMode, setDefaultDisplayMode } = useDefaultDisplayMode();
 
   return (
-    <div className="app-page" role="main" aria-label="Settings" id="main-content">
+    <div className="app-page app-page--settings" role="main" aria-label="Settings" id="main-content">
       <header className="page-header">
         <h1 className="page-header__title">Settings</h1>
         <p className="page-header__subtitle">Customize your reading experience</p>
@@ -101,6 +101,27 @@ export default function SettingsPage() {
               <span className="theme-option__desc">{opt.description}</span>
             </button>
           ))}
+        </div>
+      </section>
+
+      <section className="settings-section">
+        <h2 className="settings-section__title">Hands-free reading</h2>
+        <p className="settings-section__description">
+          Hands-free mode is designed for reading without touching the screen. Tracking runs on-device and only while you choose that mode.
+        </p>
+        <div className="settings-about settings-about--compact">
+          <div className="settings-about__row">
+            <span className="settings-about__label">Privacy</span>
+            <span className="settings-about__value">Camera input stays on this device</span>
+          </div>
+          <div className="settings-about__row">
+            <span className="settings-about__label">Tune it</span>
+            <span className="settings-about__value">Open Tracking options in the reader</span>
+          </div>
+          <div className="settings-about__row">
+            <span className="settings-about__label">Reset</span>
+            <span className="settings-about__value">Recalibrate any time from that panel</span>
+          </div>
         </div>
       </section>
 
