@@ -1212,6 +1212,58 @@ html[data-playing] .reader-header {
   letter-spacing: 0.02em;
 }
 
+@media (min-width: 960px) {
+  .app-shell {
+    background:
+      radial-gradient(circle at top left, color-mix(in srgb, var(--accent) 8%, transparent), transparent 34%),
+      linear-gradient(180deg, color-mix(in srgb, var(--bg-surface) 96%, #fff 4%), var(--bg-surface));
+  }
+
+  .app-shell--with-nav {
+    padding-bottom: 0;
+  }
+
+  .app-page {
+    max-width: 960px;
+    padding-top: calc(2.25rem + env(safe-area-inset-top));
+    padding-bottom: 6rem;
+    padding-left: max(2rem, calc(2rem + env(safe-area-inset-left)));
+    padding-right: max(2rem, calc(2rem + env(safe-area-inset-right)));
+  }
+
+  .page-header {
+    margin-bottom: 2rem;
+  }
+
+  .bottom-nav {
+    left: 50%;
+    right: auto;
+    bottom: 1.25rem;
+    transform: translateX(-50%);
+    width: auto;
+    height: auto;
+    gap: 0.4rem;
+    justify-content: center;
+    padding: 0.45rem;
+    border: 1px solid var(--nav-border);
+    border-radius: 999px;
+    box-shadow: var(--shadow-card-hover);
+  }
+
+  .bottom-nav__tab {
+    flex: 0 0 auto;
+    flex-direction: row;
+    gap: 0.45rem;
+    min-width: 118px;
+    padding: 0.75rem 1rem;
+    border-radius: 999px;
+  }
+
+  .bottom-nav__tab--active {
+    background: var(--accent-subtle);
+  }
+}
+
 /* ==========================================================================
    Book Card
    ========================================================================== */
@@ -1519,6 +1571,18 @@ html[data-playing] .reader-header {
   font-size: 0.8rem;
   color: var(--text-muted);
   line-height: 1.45;
+}
+
+@media (min-width: 960px) {
+  .book-list {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.9rem;
+  }
+
+  .library-section:first-of-type .book-card--featured {
+    max-width: 720px;
+  }
 }
 
 /* ==========================================================================
@@ -2187,6 +2251,11 @@ html[data-playing] .reader-header {
   overflow: hidden;
 }
 
+.settings-about--compact {
+  background: var(--card-bg);
+  border: 1px solid var(--surface-border);
+}
+
 .settings-about__row {
   display: flex;
   align-items: center;
@@ -2210,6 +2279,29 @@ html[data-playing] .reader-header {
   color: var(--text-muted);
   text-align: right;
   max-width: 60%;
+}
+
+@media (min-width: 960px) {
+  .app-page--settings {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1rem 1.25rem;
+    align-content: start;
+  }
+
+  .app-page--settings .page-header,
+  .app-page--settings .settings-section:last-of-type {
+    grid-column: 1 / -1;
+  }
+
+  .app-page--settings .settings-section {
+    margin-bottom: 0;
+    padding: 1.15rem 1.25rem;
+    background: color-mix(in srgb, var(--card-bg) 88%, transparent);
+    border: 1px solid var(--surface-border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-card);
+  }
 }
 
 /* ==========================================================================
@@ -2636,6 +2728,50 @@ html[data-playing] .reader-header {
 .controls__mode-list-item--active {
   color: var(--accent);
   font-weight: 600;
+}
+
+.controls__advanced {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.controls--playing .controls__advanced {
+  opacity: 0;
+  max-height: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.controls__advanced-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  padding: 0.45rem 0.8rem;
+  border: 1px solid var(--surface-border);
+  border-radius: 999px;
+  background: var(--surface-hover);
+  color: var(--text);
+  font-size: 0.76rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+
+.controls__advanced-toggle:hover,
+.controls__advanced-toggle--active {
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+  color: var(--accent);
+}
+
+.controls__advanced-note {
+  margin: 0;
+  font-size: 0.72rem;
+  color: var(--text-muted);
 }
 
 /* ---------- Track Controls Row ---------- */
