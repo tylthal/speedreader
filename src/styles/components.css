@@ -3110,6 +3110,7 @@ html[data-playing] .reader-header {
   display: flex;
   align-items: center;
   justify-content: center;
+  pointer-events: none;
 }
 
 .gaze-error-overlay__content {
@@ -3120,6 +3121,7 @@ html[data-playing] .reader-header {
   max-width: 300px;
   padding: 2rem;
   text-align: center;
+  pointer-events: auto;
 }
 
 .gaze-error-overlay__title {
