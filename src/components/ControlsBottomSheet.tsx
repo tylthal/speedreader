@@ -48,14 +48,19 @@ export default function ControlsBottomSheet({
   const haptics = useHaptics();
   const [showModeList, setShowModeList] = useState(false);
 
-  // PRD §9.3 — Image mode is gone (CBZ now uses formatted view always).
-  const modeNames: Record<string, string> = { phrase: 'Phrase', rsvp: 'RSVP', scroll: 'Scroll', track: 'Track' };
+  const modeMeta: Record<ReadingMode, { label: string; description: string }> = {
+    phrase: { label: 'Focus', description: 'One phrase at a time' },
+    rsvp: { label: 'Word-by-word', description: 'Single words at speed' },
+    scroll: { label: 'Scroll', description: 'Continuous teleprompter view' },
+    track: { label: 'Hands-free', description: 'Scroll with head tracking' },
+  };
   const allModes: ReadingMode[] = ['phrase', 'rsvp', 'scroll', 'track'];
+  const activeMode = modeMeta[mode];
 
   const handleTogglePlay = () => {
     onTogglePlay();
     haptics.tap();
-    announce(isPlaying ? 'Paused' : 'Playing');
+    announce(isPlaying ? 'Paused' : `${activeMode.label} started`);
   };
 
   const handleAdjustWpm = (delta: number) => {
@@ -127,10 +132,10 @@ export default function ControlsBottomSheet({
                 setShowModeList(v => !v);
                 haptics.tap();
               }}
-              aria-label={`Reading mode: ${modeNames[mode]}`}
+              aria-label={`Reading mode: ${activeMode.label}. ${activeMode.description}`}
               aria-expanded={showModeList}
             >
-              {modeNames[mode]} &#9662;
+              {activeMode.label} &#9662;
             </button>
             {showModeList && (
               <div className="controls__mode-list" role="listbox" aria-label="Select reading mode">
@@ -143,13 +148,14 @@ export default function ControlsBottomSheet({
                     onClick={() => {
                       if (m !== mode && onSetMode) {
                         onSetMode(m);
-                        announce(`Switched to ${modeNames[m]} mode`);
+                        announce(`Switched to ${modeMeta[m].label}`);
                       }
                       setShowModeList(false);
                       haptics.tap();
                     }}
                   >
-                    {modeNames[m]}
+                    <span className="controls__mode-list-label">{modeMeta[m].label}</span>
+                    <span className="controls__mode-list-desc">{modeMeta[m].description}</span>
                   </button>
                 ))}
               </div>
@@ -164,14 +170,18 @@ export default function ControlsBottomSheet({
             onClick={() => {
               onToggleStopAtChapter();
               haptics.tap();
-              announce(stopAtChapterEnd ? 'Continuous reading on' : 'Pause between sections on');
+              announce(stopAtChapterEnd ? 'Continue sections on' : 'Pause between sections on');
             }}
-            aria-label={stopAtChapterEnd ? 'Switch to continuous reading' : 'Pause between sections'}
+            aria-label={stopAtChapterEnd ? 'Continue sections automatically' : 'Pause between sections'}
             aria-pressed={stopAtChapterEnd}
           >
-            {stopAtChapterEnd ? 'Sec. Pause' : 'Sec. Auto'}
+            {stopAtChapterEnd ? 'Pause each section' : 'Continue sections'}
           </button>
         )}
+      </div>
+
+      <div className="controls__playing-hint" aria-hidden={!isPlaying}>
+        {activeMode.label} mode · {wpm} WPM
       </div>
 
       {/* Track mode controls */}
@@ -217,7 +227,7 @@ export default function ControlsBottomSheet({
         aria-label={isPlaying ? 'Pause reading' : 'Play reading'}
       >
         <span className="controls__play-bar-icon">{isPlaying ? '\u2759\u2759' : '\u25B6\uFE0E'}</span>
-        <span className="controls__play-bar-label">{isPlaying ? 'Tap to Pause' : 'Tap to Play'}</span>
+        <span className="controls__play-bar-label">{isPlaying ? 'Pause' : 'Start reading'}</span>
       </button>
     </div>
   );

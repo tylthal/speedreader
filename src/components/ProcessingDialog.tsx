@@ -7,9 +7,9 @@ interface ProcessingDialogProps {
 }
 
 const PHASE_LABELS: Record<string, { title: string; subtitle: string }> = {
-  '': { title: 'Preparing...', subtitle: 'Getting your book ready' },
-  parsing: { title: 'Reading', subtitle: 'Extracting text and structure' },
-  chunking: { title: 'Processing', subtitle: 'Splitting into reading segments' },
+  '': { title: 'Opening your book', subtitle: 'Everything stays on this device.' },
+  parsing: { title: 'Reading your book', subtitle: 'Finding chapters, text, and images.' },
+  chunking: { title: 'Getting it ready', subtitle: 'Building the reading view and progress map.' },
 };
 
 export default function ProcessingDialog({ filename, phase, percent }: ProcessingDialogProps) {

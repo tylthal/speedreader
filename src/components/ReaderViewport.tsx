@@ -12,7 +12,7 @@ import {
 } from '../hooks/useTocNavigation';
 import { useFormattedViewCursorSync } from '../hooks/useFormattedViewCursorSync';
 import { useReaderInitialization } from '../hooks/useReaderInitialization';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { setDisplayModePref } from '../api/client';
 import { markFirstChunkRendered } from '../lib/ttfcMetric';
 import type { Chapter, TocNode } from '../api/client';
@@ -83,11 +83,30 @@ export default function ReaderViewport({ publicationId }: ReaderViewportProps) {
   const initState = useReaderInitialization(publicationId);
 
   if (initState.status === 'loading') {
-    return <div className="reader-viewport__loading">Loading...</div>;
+    return (
+      <div className="reader-viewport__loading">
+        <div className="reader-state" role="status" aria-live="polite">
+          <div className="reader-state__icon" aria-hidden="true">A</div>
+          <h1 className="reader-state__title">Opening your book</h1>
+          <p className="reader-state__message">Restoring your place and preparing the reader.</p>
+        </div>
+      </div>
+    );
   }
 
   if (initState.status === 'error') {
-    return <div className="reader-viewport__error">{initState.message}</div>;
+    return (
+      <div className="reader-viewport__error">
+        <div className="reader-state reader-state--error" role="alert">
+          <div className="reader-state__icon" aria-hidden="true">!</div>
+          <h1 className="reader-state__title">Couldn't open this book</h1>
+          <p className="reader-state__message">{initState.message}</p>
+          <Link className="reader-state__action" to="/">
+            Back to Library
+          </Link>
+        </div>
+      </div>
+    );
   }
 
   const { position } = initState;
@@ -534,6 +553,7 @@ function ActiveReader({
         displayMode={displayMode}
         onToggleDisplayMode={isImageBook ? undefined : handleToggleDisplayMode}
         hideDisplayToggle={isImageBook}
+        formattedSuppressed={phraseLikeMode && displayMode === 'formatted'}
         onOpenToc={() => setTocOpen(true)}
         onExit={() => navigate('/')}
       />

@@ -30,6 +30,13 @@ export default function ReaderHeader({
   formattedSuppressed = false,
 }: ReaderHeaderProps) {
   const toggleEnabled = !hideDisplayToggle && Boolean(onToggleDisplayMode)
+  const normalizedBookTitle = bookTitle.trim().toLowerCase()
+  const normalizedSectionTitle = sectionTitle.trim().toLowerCase()
+  const showSectionTitle =
+    sectionTitle.trim().length > 0 &&
+    normalizedBookTitle.length > 0 &&
+    normalizedBookTitle !== normalizedSectionTitle
+
   return (
     <header className="reader-header" role="banner">
       <button
@@ -44,9 +51,11 @@ export default function ReaderHeader({
         <span className="reader-header__book" title={bookTitle}>
           {bookTitle}
         </span>
-        <span className="reader-header__section" title={sectionTitle}>
-          {sectionTitle || 'Untitled'}
-        </span>
+        {showSectionTitle && (
+          <span className="reader-header__section" title={sectionTitle}>
+            {sectionTitle}
+          </span>
+        )}
       </div>
 
       {!hideDisplayToggle && (
@@ -64,7 +73,7 @@ export default function ReaderHeader({
               : 'Formatted view coming soon'
           }
         >
-          {displayMode === 'formatted' ? 'Aa' : 'A'}
+          {displayMode === 'formatted' ? 'Page' : 'Text'}
         </button>
       )}
 
