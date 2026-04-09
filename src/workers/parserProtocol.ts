@@ -1,3 +1,5 @@
+import type { InternalTocNode } from '../lib/tocTree'
+
 /**
  * Message protocol between main thread and parser Web Worker.
  *
@@ -39,12 +41,7 @@ export interface SerializedSection {
   meta?: Record<string, unknown>
 }
 
-export interface SerializedTocNode {
-  title: string
-  sectionIndex: number
-  htmlAnchor?: string | null
-  children?: SerializedTocNode[]
-}
+export type SerializedTocNode = InternalTocNode
 
 export interface SerializedParsedBook {
   title: string

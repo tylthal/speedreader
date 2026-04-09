@@ -9,7 +9,10 @@ import {
   isFileStorageAvailable,
   getCoverUrl as resolveCoverUrl,
 } from '../lib/fileStorage'
+import type { InternalTocNode } from '../lib/tocTree'
+import { mapTocTree, parseTocTreeJson } from '../lib/tocTree'
 import type { WorkerResult } from '../workers/parserProtocol'
+import { buildWorkerResult } from '../workers/buildWorkerResult'
 import type {
   Publication,
   PublicationDetail,
@@ -18,6 +21,7 @@ import type {
   ReadingProgress,
   ProgressInput,
   SegmentInlineImage,
+  TocNode as ApiTocNode,
 } from '../api/types'
 import { getExtForMime } from '../parsers/types'
 
@@ -98,13 +102,7 @@ async function runParse(
   onProgress?: (phase: string, percent: number) => void,
 ): Promise<WorkerResult> {
   const { parseFile } = await import('../parsers')
-  const { chunkSections } = await import('../parsers/chunker')
   type LocalParsedBook = import('../parsers/types').ParsedBook
-  type SerializedCover = import('../workers/parserProtocol').SerializedCover
-  type SerializedImagePage = import('../workers/parserProtocol').SerializedImagePage
-  type SerializedSection = import('../workers/parserProtocol').SerializedSection
-  type SerializedTocNode = import('../workers/parserProtocol').SerializedTocNode
-  type ChunkedSection = import('../workers/parserProtocol').ChunkedSection
 
   console.log('[parse] running on main thread:', filename)
 
@@ -112,81 +110,10 @@ async function runParse(
   const book: LocalParsedBook = await parseFile(data, filename)
   onProgress?.('parsing', 100)
 
-  let cover: SerializedCover | undefined
-  if (book.cover) {
-    cover = {
-      imageData: await book.cover.blob.arrayBuffer(),
-      mimeType: book.cover.mimeType,
-    }
-  }
-
-  type SerializedParsedImage = import('../workers/parserProtocol').SerializedParsedImage
-  let parsedImages: SerializedParsedImage[] | undefined
-  if (book.parsedImages?.length) {
-    parsedImages = []
-    for (const img of book.parsedImages) {
-      parsedImages.push({
-        name: img.name,
-        imageData: await img.blob.arrayBuffer(),
-        mimeType: img.mimeType,
-      })
-    }
-  }
-
-  let imagePages: SerializedImagePage[] | undefined
-  if (book.imagePages?.length) {
-    imagePages = []
-    for (const page of book.imagePages) {
-      imagePages.push({
-        pageIndex: page.pageIndex,
-        imageData: await page.blob.arrayBuffer(),
-        width: page.width,
-        height: page.height,
-        mimeType: page.mimeType,
-      })
-    }
-  }
-
-  const sections: SerializedSection[] = book.sections.map((s) => ({
-    title: s.title,
-    text: s.text,
-    html: s.html,
-    meta: s.meta,
-  }))
-
   onProgress?.('chunking', 0)
-  const chunked = chunkSections(book.sections)
+  const { result } = await buildWorkerResult(book)
   onProgress?.('chunking', 100)
-  const chunkedSections: ChunkedSection[] = chunked.map((c) => ({
-    title: c.title,
-    text: c.text,
-    html: c.html,
-    meta: c.meta,
-    segments: c.segments,
-  }))
-
-  const tocTree: SerializedTocNode[] | undefined = book.tocTree?.map(function map(n): SerializedTocNode {
-    return {
-      title: n.title,
-      sectionIndex: n.sectionIndex,
-      htmlAnchor: n.htmlAnchor ?? null,
-      children: n.children?.map(map),
-    }
-  })
-
-  return {
-    book: {
-      title: book.title,
-      author: book.author,
-      contentType: book.contentType,
-      sections,
-      cover,
-      tocTree,
-      imagePages,
-      parsedImages,
-    },
-    chunkedSections,
-  }
+  return result
 }
 
 // ---------------------------------------------------------------------------
@@ -454,33 +381,14 @@ export class LocalClient implements SpeedReaderClient {
     // Convert the parser-side TocNode (camelCase) to the API surface
     // shape (snake_case). The two types intentionally diverge so the parser
     // doesn't leak into UI imports.
-    type RawTocNode = {
-      title: string
-      sectionIndex: number
-      htmlAnchor?: string | null
-      children?: RawTocNode[]
-    }
-    type ApiTocNode = {
-      title: string
-      section_index: number
-      html_anchor?: string | null
-      children?: ApiTocNode[]
-    }
-    const convert = (n: RawTocNode): ApiTocNode => ({
+    const convert = (n: InternalTocNode): ApiTocNode => ({
       title: n.title,
       section_index: n.sectionIndex,
       html_anchor: n.htmlAnchor ?? null,
-      children: n.children?.map(convert),
+      children: mapTocTree(n.children, convert),
     })
-    let tocTree: ApiTocNode[] | null = null
-    if (pub.toc_json) {
-      try {
-        const raw = JSON.parse(pub.toc_json) as RawTocNode[]
-        tocTree = Array.isArray(raw) ? raw.map(convert) : null
-      } catch {
-        tocTree = null
-      }
-    }
+    const storedToc = parseTocTreeJson(pub.toc_json)
+    const tocTree = storedToc ? mapTocTree(storedToc, convert) ?? null : null
 
     const base = await pubRowToPublication(pub)
     return {

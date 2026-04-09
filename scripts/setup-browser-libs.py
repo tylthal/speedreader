@@ -10,6 +10,7 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BASE_DIR = os.path.join(REPO_ROOT, '.browser-libs')
 DEBS_DIR = os.path.join(BASE_DIR, 'debs')
 ROOT_DIR = os.path.join(BASE_DIR, 'root')
+READY_FILE = os.path.join(BASE_DIR, '.ready')
 MAIN_PACKAGES_URL = 'https://deb.debian.org/debian/dists/bookworm/main/binary-amd64/Packages.xz'
 ALL_PACKAGES_URL = 'https://deb.debian.org/debian/dists/bookworm/main/binary-all/Packages.xz'
 DEBIAN_FILE_BASE = 'https://deb.debian.org/debian/'
@@ -97,6 +98,12 @@ def browser_ld_library_path(root_dir: str) -> str:
 
 def main() -> int:
     ensure_dirs()
+    if os.path.exists(READY_FILE) and os.path.isdir(ROOT_DIR):
+        print('browser libs ready:')
+        print(f'  root: {ROOT_DIR}')
+        print(f'  LD_LIBRARY_PATH={browser_ld_library_path(ROOT_DIR)}')
+        return 0
+
     filename_map = build_filename_map()
     missing = [pkg for pkg in PACKAGES if pkg not in filename_map]
     if missing:
@@ -112,6 +119,9 @@ def main() -> int:
             urllib.request.urlretrieve(DEBIAN_FILE_BASE + rel, deb_path)
         print(f'extract {pkg}')
         subprocess.run(['dpkg-deb', '-x', deb_path, ROOT_DIR], check=True)
+
+    with open(READY_FILE, 'w', encoding='utf-8') as f:
+        f.write('ok\n')
 
     print('browser libs ready:')
     print(f'  root: {ROOT_DIR}')

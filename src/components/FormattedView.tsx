@@ -17,6 +17,11 @@ import {
   type SegmentRangeIndex,
   type RectInContainer,
 } from './formattedView/segmentRangeIndex'
+import {
+  FormattedViewDiagnostics,
+  type ImageDiag,
+  type UploadDiag,
+} from './formattedView/FormattedViewDiagnostics'
 
 interface FormattedViewProps {
   publicationId: number
@@ -104,6 +109,7 @@ export interface TocTargetInfo {
 export interface FormattedViewHandle {
   getScrollContainer: () => HTMLDivElement | null
   getSectionEl: (idx: number) => HTMLElement | null
+  isSectionReady: (idx: number) => boolean
   rebuildProfile: () => void
   settleImages: (sectionIdx: number) => Promise<void>
   /** Highlight a single segment. See setHighlightForSegment docstring. */
@@ -274,17 +280,6 @@ function isImageDiagEnabled(): boolean {
   }
 }
 
-interface UploadDiag {
-  parsedCount: number
-  fileStorageAvailable: boolean
-  attempted: number
-  opfsCount: number
-  dexieCount: number
-  nativeCount: number
-  failedCount: number
-  firstError: string | null
-}
-
 function readUploadDiag(publicationId: number): UploadDiag | null {
   if (typeof localStorage === 'undefined') return null
   try {
@@ -358,12 +353,23 @@ const FormattedView = forwardRef<FormattedViewHandle, FormattedViewProps>(functi
   // Resolved name → blob URL. Pulled from a module-level cache so the URLs
   // persist across mounts/unmounts (StrictMode, HMR, conditional rendering).
   const [imageMap, setImageMap] = useState<Map<string, string>>(new Map())
-  const [imageDiag, setImageDiag] = useState<{
-    expected: number
-    opfsCount: number
-    dexieCount: number
-    missingCount: number
-  } | null>(null)
+
+  const getReadySectionContext = (sectionIdx: number) => {
+    const container = containerRef.current
+    const sectionEl = sectionRefs.current.get(sectionIdx)
+    if (!container || !sectionEl) return null
+
+    const sectionRect = sectionEl.getBoundingClientRect()
+    if (sectionRect.height === 0) return null
+
+    const bodyEl = sectionEl.querySelector(
+      '.formatted-view__body',
+    ) as HTMLElement | null
+    if (bodyEl && bodyEl.dataset.lastHtml === undefined) return null
+
+    return { container, sectionEl, sectionRect, bodyEl }
+  }
+  const [imageDiag, setImageDiag] = useState<ImageDiag | null>(null)
   // Flips true once loadPublicationImages has resolved (success OR failure).
   // The gate below uses this instead of `imageMap.size > 0` because on
   // mobile browsers where OPFS writes silently failed at upload time, the
@@ -655,6 +661,7 @@ const FormattedView = forwardRef<FormattedViewHandle, FormattedViewProps>(functi
     () => ({
       getScrollContainer: () => containerRef.current,
       getSectionEl: (idx) => sectionRefs.current.get(idx) ?? null,
+      isSectionReady: (idx) => getReadySectionContext(idx) != null,
       rebuildProfile: () => {
         rebuildProfileNow()
       },
@@ -688,12 +695,12 @@ const FormattedView = forwardRef<FormattedViewHandle, FormattedViewProps>(functi
           setHighlightRects(null)
           return null
         }
-        const container = containerRef.current
-        const sectionEl = sectionRefs.current.get(sectionIdx)
-        if (!container || !sectionEl) {
+        const context = getReadySectionContext(sectionIdx)
+        if (!context) {
           setHighlightRects(null)
           return null
         }
+        const { container, sectionEl } = context
         // Stale-chapter guard: when the loader hasn't finished switching
         // chapters (rapid chapter advance during phrase playback can leave
         // segments[] holding the previous chapter's data for a few frames),
@@ -710,24 +717,6 @@ const FormattedView = forwardRef<FormattedViewHandle, FormattedViewProps>(functi
           setHighlightRects(null)
           return null
         }
-        // Section must actually be laid out — body innerHTML lands
-        // async after the image loader resolves. Match the auto-scroll
-        // effect's check: section has non-zero height AND its body (if
-        // any) has been written. We CAN'T use a simple height threshold
-        // because some chapters (e.g., a "Book I" intro page) are
-        // intentionally tiny — just a title h1 of ~29px.
-        if (sectionEl.getBoundingClientRect().height === 0) {
-          setHighlightRects(null)
-          return null
-        }
-        const bodyForCheck = sectionEl.querySelector(
-          '.formatted-view__body',
-        ) as HTMLElement | null
-        if (bodyForCheck && bodyForCheck.dataset.lastHtml === undefined) {
-          setHighlightRects(null)
-          return null
-        }
-
         // Build (or hit cache) the per-section text→DOM-range index.
         let index = segmentIndexRef.current.get(sectionIdx)
         if (!index) {
@@ -819,16 +808,9 @@ const FormattedView = forwardRef<FormattedViewHandle, FormattedViewProps>(functi
         return { ...fallback, accurate: false }
       },
       resolveTocTarget: (sectionIdx, htmlAnchor, segments) => {
-        const container = containerRef.current
-        const sectionEl = sectionRefs.current.get(sectionIdx)
-        if (!container || !sectionEl) return null
-
-        const sectionRect = sectionEl.getBoundingClientRect()
-        if (sectionRect.height === 0) return null
-        const bodyEl = sectionEl.querySelector(
-          '.formatted-view__body',
-        ) as HTMLElement | null
-        if (bodyEl && bodyEl.dataset.lastHtml === undefined) return null
+        const context = getReadySectionContext(sectionIdx)
+        if (!context) return null
+        const { container, sectionEl, sectionRect } = context
 
         const anchor = normalizeHtmlAnchor(htmlAnchor)
         if (!anchor) {
@@ -906,52 +888,11 @@ const FormattedView = forwardRef<FormattedViewHandle, FormattedViewProps>(functi
           }}
         />
       ))}
-      {diagEnabled && imageDiag && (
-        <div
-          style={{
-            position: 'sticky',
-            top: 0,
-            zIndex: 50,
-            padding: '8px 12px',
-            background: 'rgba(0,0,0,0.85)',
-            color: '#9ef',
-            font: '12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace',
-            borderBottom: '1px solid rgba(150,200,255,0.3)',
-            textAlign: 'center',
-          }}
-        >
-          <div style={{ color: '#fff', fontWeight: 'bold' }}>
-            read: {imageDiag.opfsCount + imageDiag.dexieCount}/{imageDiag.expected} loaded
-          </div>
-          <div>
-            opfs: {imageDiag.opfsCount} · dexie: {imageDiag.dexieCount} · missing: {imageDiag.missingCount}
-          </div>
-          {uploadDiag && (
-            <>
-              <div style={{ marginTop: 4, color: '#fff', fontWeight: 'bold' }}>
-                upload: parsed {uploadDiag.parsedCount}, attempted {uploadDiag.attempted}
-              </div>
-              <div>
-                opfs: {uploadDiag.opfsCount} · dexie: {uploadDiag.dexieCount} · native: {uploadDiag.nativeCount} · failed: {uploadDiag.failedCount}
-              </div>
-              {!uploadDiag.fileStorageAvailable && (
-                <div style={{ color: '#fc8' }}>file storage was unavailable at upload time</div>
-              )}
-              {uploadDiag.firstError && (
-                <div style={{ color: '#fc8' }}>first err: {uploadDiag.firstError}</div>
-              )}
-            </>
-          )}
-          {!uploadDiag && (
-            <div style={{ color: '#fc8', marginTop: 4 }}>
-              no upload-diag in localStorage — pub uploaded before this build
-            </div>
-          )}
-          {imageDiag.expected === 0 && (
-            <div style={{ color: '#fc8' }}>parser produced no opfs: markers — book has no images</div>
-          )}
-        </div>
-      )}
+      <FormattedViewDiagnostics
+        enabled={diagEnabled}
+        imageDiag={imageDiag}
+        uploadDiag={uploadDiag}
+      />
       <div className="formatted-view__column">
         {chapters.map((ch, idx) => (
           <article

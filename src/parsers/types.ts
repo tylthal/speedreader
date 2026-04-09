@@ -1,3 +1,5 @@
+import type { InternalTocNode } from '../lib/tocTree'
+
 /**
  * Shared types for client-side ebook parsers.
  * Mirrors backend/parser_types.py.
@@ -42,14 +44,7 @@ export interface ParsedCover {
   mimeType: string
 }
 
-export interface TocNode {
-  title: string
-  /** Index into ParsedBook.sections. -1 for display-only parent groupings. */
-  sectionIndex: number
-  /** Optional intra-section fragment target from EPUB NCX/nav data. */
-  htmlAnchor?: string | null
-  children?: TocNode[]
-}
+export type TocNode = InternalTocNode
 
 /**
  * An image referenced by section HTML. The section HTML uses

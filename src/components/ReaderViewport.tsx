@@ -7,6 +7,10 @@ import { useProgressSaver } from '../hooks/useProgressSaver';
 import { useOrientationResilience } from '../hooks/useOrientationResilience';
 import { useKeyboardHandling } from '../hooks/useKeyboardHandling';
 import { useWakeLock } from '../hooks/useWakeLock';
+import {
+  resolvePendingTocScrollTarget,
+  useTocNavigation,
+} from '../hooks/useTocNavigation';
 import { useNavigate } from 'react-router-dom';
 import { getPublication, getProgress, setDisplayModePref } from '../api/client';
 import { useDataSaver } from '../hooks/useDataSaver';
@@ -55,11 +59,6 @@ interface ActiveReaderProps {
   chapters: Chapter[];
   tocTree: TocNode[] | null;
   contentType: ContentType;
-}
-
-interface TocJumpTarget {
-  sectionIndex: number;
-  htmlAnchor?: string | null;
 }
 
 const VALID_MODES: ReadingMode[] = ['phrase', 'rsvp', 'scroll', 'track'];
@@ -285,7 +284,6 @@ function ActiveReader({
   const focusItemRefsMap = useRef<Map<number, HTMLDivElement>>(new Map());
   const formattedViewRef = useRef<FormattedViewHandle>(null);
   const velocityProfileRef = useRef<VelocityProfile | null>(null);
-  const pendingTocTargetRef = useRef<TocJumpTarget | null>(null);
 
   /* ---- Layout-version counter for the formatted view ---- */
   // FormattedView writes its body innerHTML in a useEffect that depends
@@ -479,67 +477,20 @@ function ActiveReader({
   }, [currentChapter, announce, cursorRevision]);
 
   /* ---- Chapter navigation (TOC, prev/next) ---- */
-  const navigateToSection = useCallback((idx: number, htmlAnchor?: string | null) => {
-    if (idx < 0 || idx >= chapters.length) return;
-    controller.pause();
-    pendingTocTargetRef.current = {
-      sectionIndex: idx,
-      htmlAnchor: htmlAnchor?.trim() ? htmlAnchor : null,
-    };
-    positionStore.setPosition(
-      {
-        chapterId: chapters[idx].id,
-        chapterIdx: idx,
-        absoluteSegmentIndex: 0,
-        wordIndex: 0,
-      },
-      'toc',
-    );
-  }, [chapters, controller]);
-
-  useEffect(() => {
-    const pending = pendingTocTargetRef.current;
-    if (!pending) return;
-    if (pending.sectionIndex !== chapterIdx) return;
-    if (!pending.htmlAnchor) {
-      pendingTocTargetRef.current = null;
-      return;
-    }
-
-    const handle = formattedViewRef.current;
-    if (!handle) return;
-    if (loaderState.segments.length === 0) return;
-
-    const target = handle.resolveTocTarget(
-      chapterIdx,
-      pending.htmlAnchor,
-      loaderState.segments,
-    );
-    if (!target) return;
-
-    pendingTocTargetRef.current = null;
-    if (target.arrIdx == null) return;
-
-    const absolute = translators.arrayToAbsolute(target.arrIdx);
-    if (absolute == null || absolute === absoluteSegmentIndex) return;
-
-    positionStore.setPosition(
-      {
-        chapterId: chapters[chapterIdx].id,
-        chapterIdx,
-        absoluteSegmentIndex: absolute,
-        wordIndex: 0,
-      },
-      'toc',
-    );
-  }, [
-    absoluteSegmentIndex,
-    chapterIdx,
+  const {
+    navigateToSection,
+    pendingTocTargetRef,
+    clearPendingTocTarget,
+  } = useTocNavigation({
     chapters,
+    controller,
+    chapterIdx,
+    absoluteSegmentIndex,
     layoutVersion,
-    loaderState.segments,
+    segments: loaderState.segments,
     translators,
-  ]);
+    formattedViewRef,
+  });
 
   // NOTE: there used to be a separate "scroll-section-into-view on
   // chapter change" effect here. It fought with the auto-scroll effect
@@ -706,16 +657,7 @@ function ActiveReader({
       //      emitted no body) OR the body has been written (the
       //      innerHTML-write effect tags the body with dataset.lastHtml
       //      after writing).
-      if (sectionEl.getBoundingClientRect().height === 0) {
-        if (attempts < maxAttempts) {
-          rafHandle = requestAnimationFrame(tryScroll);
-        }
-        return;
-      }
-      const bodyEl = sectionEl.querySelector(
-        '.formatted-view__body',
-      ) as HTMLElement | null;
-      if (bodyEl && bodyEl.dataset.lastHtml === undefined) {
+      if (!handle.isSectionReady(chapterIdx)) {
         if (attempts < maxAttempts) {
           rafHandle = requestAnimationFrame(tryScroll);
         }
@@ -728,36 +670,30 @@ function ActiveReader({
         pendingTocTarget?.sectionIndex === chapterIdx &&
         pendingTocTarget.htmlAnchor
       ) {
-        const tocTarget = handle.resolveTocTarget(
-          chapterIdx,
-          pendingTocTarget.htmlAnchor,
-          segs,
-        );
-        if (tocTarget) {
-          const viewportH = container.clientHeight;
-          const targetScroll = tocTarget.topPx - viewportH * 0.2;
-          const maxScroll = Math.max(0, container.scrollHeight - viewportH);
-          const clamped = Math.max(0, Math.min(targetScroll, maxScroll));
-
-          if (tocTarget.arrIdx != null) {
-            const targetAbs = translators.arrayToAbsolute(tocTarget.arrIdx);
-            if (targetAbs != null && targetAbs !== absoluteSegmentIndex) {
-              positionStore.setPosition(
-                { absoluteSegmentIndex: targetAbs, wordIndex: 0 },
-                'toc',
-              );
-            }
+        const resolvedTocTarget = resolvePendingTocScrollTarget({
+          handle,
+          pendingTarget: pendingTocTarget,
+          sectionIdx: chapterIdx,
+          currentAbsoluteSegmentIndex: absoluteSegmentIndex,
+          segments: segs,
+          translators,
+        });
+        if (resolvedTocTarget) {
+          if (resolvedTocTarget.absoluteSegmentIndex != null) {
+            positionStore.setPosition(
+              { absoluteSegmentIndex: resolvedTocTarget.absoluteSegmentIndex, wordIndex: 0 },
+              'toc',
+            );
           }
-
           handle.beginProgrammaticScroll();
           const cleanupProgrammatic = () => {
             handle.endProgrammaticScroll();
-            container.removeEventListener('scrollend', cleanupProgrammatic as EventListener);
+            resolvedTocTarget.container.removeEventListener('scrollend', cleanupProgrammatic as EventListener);
           };
-          container.addEventListener('scrollend', cleanupProgrammatic as EventListener, { once: true });
+          resolvedTocTarget.container.addEventListener('scrollend', cleanupProgrammatic as EventListener, { once: true });
           setTimeout(cleanupProgrammatic, 600);
-          container.scrollTo({ top: clamped, behavior: 'auto' });
-          pendingTocTargetRef.current = null;
+          resolvedTocTarget.container.scrollTo({ top: resolvedTocTarget.scrollTop, behavior: 'auto' });
+          clearPendingTocTarget();
           pendingScrollRef.current = false;
           lastAutoScrolledChapterRef.current = chapterIdx;
           return;
@@ -826,6 +762,7 @@ function ActiveReader({
     chapterIdx,
     cursorOrigin,
     cursorRevision,
+    clearPendingTocTarget,
     loaderState.segments,
     translators,
     layoutVersion,
