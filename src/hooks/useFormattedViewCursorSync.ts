@@ -17,6 +17,7 @@ interface CursorTranslators {
 interface UseFormattedViewCursorSyncArgs {
   showFormattedView: boolean
   isPlaying: boolean
+  tocNavigationRevision: number
   chapterIdx: number
   absoluteSegmentIndex: number
   cursorOrigin: PositionOrigin
@@ -32,6 +33,7 @@ interface UseFormattedViewCursorSyncArgs {
 export function useFormattedViewCursorSync({
   showFormattedView,
   isPlaying,
+  tocNavigationRevision,
   chapterIdx,
   absoluteSegmentIndex,
   cursorOrigin,
@@ -146,8 +148,7 @@ export function useFormattedViewCursorSync({
       const pendingTocTarget = pendingTocTargetRef.current
       if (
         cursorOrigin === 'toc' &&
-        pendingTocTarget?.sectionIndex === chapterIdx &&
-        pendingTocTarget.htmlAnchor
+        pendingTocTarget?.sectionIndex === chapterIdx
       ) {
         const resolvedTocTarget = resolvePendingTocScrollTarget({
           handle,
@@ -246,6 +247,7 @@ export function useFormattedViewCursorSync({
     }
   }, [
     showFormattedView,
+    tocNavigationRevision,
     chapterIdx,
     absoluteSegmentIndex,
     cursorOrigin,

@@ -38,6 +38,15 @@ interface TocEntry {
   children?: TocEntry[]
 }
 
+interface SpineSectionSource {
+  href: string
+  headingTitle: string | null
+  headingTitles: string[]
+  text: string
+  html: string
+  anchorProgress: Map<string, number>
+}
+
 function normalizePath(path: string): string {
   const trimmed = path.trim().replace(/\\/g, '/')
   if (!trimmed) return ''
@@ -70,6 +79,39 @@ function normalizeTocFragment(fragment: string): string {
   } catch {
     return trimmed
   }
+}
+
+const HTML_ANCHOR_ATTR_RE = /\b(?:id|name)\s*=\s*["']([^"']+)["']/gi
+
+function collectAnchorProgress(html: string): Map<string, number> {
+  const progress = new Map<string, number>()
+  const length = Math.max(html.length, 1)
+  HTML_ANCHOR_ATTR_RE.lastIndex = 0
+
+  let match: RegExpExecArray | null
+  while ((match = HTML_ANCHOR_ATTR_RE.exec(html)) !== null) {
+    const anchor = normalizeTocFragment(match[1] ?? '')
+    if (!anchor || progress.has(anchor)) continue
+    progress.set(anchor, match.index / length)
+  }
+
+  return progress
+}
+
+function normalizeTitleForMatch(title: string | null | undefined): string {
+  return (title ?? '')
+    .toLowerCase()
+    .replace(/\bchapter\b/g, ' ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function titlesLikelyMatch(a: string | null | undefined, b: string | null | undefined): boolean {
+  const left = normalizeTitleForMatch(a)
+  const right = normalizeTitleForMatch(b)
+  if (!left || !right) return false
+  return left === right || left.includes(right) || right.includes(left)
 }
 
 function resolvePath(base: string, relative: string): string {
@@ -233,12 +275,23 @@ function flattenToc(entries: TocEntry[], out: TocEntry[] = []): TocEntry[] {
 }
 
 function firstHeading(doc: Document): string | null {
-  for (const tag of ['h1', 'h2', 'h3']) {
-    const h = doc.querySelector(tag)
-    const t = h?.textContent?.trim()
-    if (t) return t
+  return collectHeadingTitles(doc)[0] ?? null
+}
+
+function collectHeadingTitles(doc: Document): string[] {
+  const titles: string[] = []
+  const seen = new Set<string>()
+
+  for (const heading of Array.from(doc.querySelectorAll('h1, h2, h3, h4, h5, h6'))) {
+    const title = heading.textContent?.trim()
+    if (!title) continue
+    const normalized = normalizeTitleForMatch(title)
+    if (!normalized || seen.has(normalized)) continue
+    seen.add(normalized)
+    titles.push(title)
   }
-  return null
+
+  return titles
 }
 
 /**
@@ -414,18 +467,8 @@ export async function parseEpub(data: ArrayBuffer): Promise<ParsedBook> {
     }
   }
 
-  // Build a flat title lookup keyed by spine filename so per-section titles
-  // can be resolved without walking the tree.
-  const flatToc = flattenToc(tocEntries)
-  const tocTitleByFile = new Map<string, string>()
-  for (const e of flatToc) {
-    if (!tocTitleByFile.has(e.filename) && e.title) {
-      tocTitleByFile.set(e.filename, e.title)
-    }
-  }
-
   // Iterate spine — one section per item, both linear and non-linear (PRD §3.1).
-  const sections: ParsedSection[] = []
+  const sectionSources: SpineSectionSource[] = []
   const spineHrefToSectionIdx = new Map<string, number>()
 
   for (const { id } of spine) {
@@ -442,23 +485,84 @@ export async function parseEpub(data: ArrayBuffer): Promise<ParsedBook> {
     const htmlDoc = new DOMParser().parseFromString(content, 'text/html')
     rewriteImageSources(htmlDoc, imagesByHref, imagesByBasename, chapterDir)
 
-    const tocTitle = tocTitleByFile.get(item.href)
     const headingTitle = firstHeading(htmlDoc)
-    const sectionTitle = tocTitle || headingTitle || 'Untitled'
-
     const body = htmlDoc.body ?? htmlDoc.documentElement
     const text = (body.textContent ?? '').replace(WHITESPACE_RE, ' ').trim()
     const html = sanitizeDocument(htmlDoc)
 
-    spineHrefToSectionIdx.set(item.href, sections.length)
-    sections.push({ title: sectionTitle, text, html })
+    spineHrefToSectionIdx.set(item.href, sectionSources.length)
+    sectionSources.push({
+      href: item.href,
+      headingTitle,
+      headingTitles: collectHeadingTitles(htmlDoc),
+      text,
+      html,
+      anchorProgress: collectAnchorProgress(content),
+    })
   }
+
+  function sectionMatchesTocTitle(
+    section: SpineSectionSource | undefined,
+    tocTitle: string,
+  ): boolean {
+    if (!section) return false
+    return section.headingTitles.some((heading) => titlesLikelyMatch(tocTitle, heading))
+  }
+
+  function resolveTocSectionIndex(entry: TocEntry): number {
+    const directIndex = spineHrefToSectionIdx.get(entry.filename) ?? -1
+    if (directIndex < 0) return -1
+
+    if (!entry.fragment) return directIndex
+
+    const current = sectionSources[directIndex]
+    const next = sectionSources[directIndex + 1]
+    const fragmentProgress = current?.anchorProgress.get(entry.fragment)
+
+    if (
+      fragmentProgress != null &&
+      fragmentProgress >= 0.85 &&
+      next &&
+      !sectionMatchesTocTitle(current, entry.title) &&
+      sectionMatchesTocTitle(next, entry.title)
+    ) {
+      return directIndex + 1
+    }
+
+    return directIndex
+  }
+
+  function shouldDropTocFragment(entry: TocEntry, resolvedSectionIndex: number): boolean {
+    if (!entry.fragment) return false
+    const directIndex = spineHrefToSectionIdx.get(entry.filename) ?? -1
+    return directIndex >= 0 && resolvedSectionIndex !== directIndex
+  }
+
+  // Build a per-section title lookup so end-of-file bridge anchors in the TOC
+  // can title the actual destination section instead of the preceding contents page.
+  const flatToc = flattenToc(tocEntries)
+  const tocTitleBySectionIndex = new Map<number, string>()
+  for (const entry of flatToc) {
+    const sectionIndex = resolveTocSectionIndex(entry)
+    if (sectionIndex >= 0 && entry.title && !tocTitleBySectionIndex.has(sectionIndex)) {
+      tocTitleBySectionIndex.set(sectionIndex, entry.title)
+    }
+  }
+
+  const sections: ParsedSection[] = sectionSources.map((section, index) => ({
+    title:
+      tocTitleBySectionIndex.get(index) ||
+      section.headingTitle ||
+      'Untitled',
+    text: section.text,
+    html: section.html,
+  }))
 
   // Build the TOC tree with section indices for the sidebar.
   function mapTocTree(entries: TocEntry[]): TocNode[] {
     return entries.map((e) => {
       const children = e.children?.length ? mapTocTree(e.children) : undefined
-      let sectionIndex = spineHrefToSectionIdx.get(e.filename) ?? -1
+      let sectionIndex = resolveTocSectionIndex(e)
       if (sectionIndex < 0 && children?.length) {
         const firstMappedChild = children.find((child) => child.sectionIndex >= 0)
         if (firstMappedChild) sectionIndex = firstMappedChild.sectionIndex
@@ -466,7 +570,10 @@ export async function parseEpub(data: ArrayBuffer): Promise<ParsedBook> {
       return {
         title: e.title || 'Untitled',
         sectionIndex,
-        htmlAnchor: e.fragment || null,
+        htmlAnchor:
+          shouldDropTocFragment(e, sectionIndex)
+            ? null
+            : e.fragment || null,
         children,
       }
     })

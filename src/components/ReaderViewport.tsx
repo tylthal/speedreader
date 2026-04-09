@@ -32,6 +32,10 @@ import CbzFormattedView from './CbzFormattedView';
 import type { ContentType } from '../api/client';
 import type { VelocityProfile } from '../lib/velocityProfile';
 import {
+  flattenTocLocations,
+  selectActiveTocLocationKey,
+} from '../lib/tocLocation';
+import {
   positionStore,
   usePositionSelector,
 } from '../state/position/positionStore';
@@ -52,6 +56,15 @@ interface ActiveReaderProps {
   tocTree: TocNode[] | null;
   contentType: ContentType;
 }
+
+interface PreferredTocLocation {
+  key: string | null
+  title: string | null
+  sectionIndex: number | null
+  htmlAnchor: string | null
+}
+
+const preferredTocLocationByPublication = new Map<number, PreferredTocLocation>()
 
 /* ------------------------------------------------------------------ */
 /*  ReaderViewport — Phase 1: load + seed positionStore                */
@@ -116,6 +129,20 @@ function ActiveReader({
   const cursorRevision = usePositionSelector((s) => s.revision);
 
   const [tocOpen, setTocOpen] = useState(false);
+  const [preferredTocLocation, setPreferredTocLocationState] = useState<PreferredTocLocation>(
+    () =>
+      preferredTocLocationByPublication.get(publicationId) ?? {
+        key: null,
+        title: null,
+        sectionIndex: null,
+        htmlAnchor: null,
+      },
+  );
+
+  const setPreferredTocLocation = useCallback((value: PreferredTocLocation) => {
+    preferredTocLocationByPublication.set(publicationId, value);
+    setPreferredTocLocationState(value);
+  }, [publicationId]);
 
   const isImageBook = contentType === 'image';
   const phraseLikeMode = readingMode === 'phrase' || readingMode === 'rsvp';
@@ -318,6 +345,28 @@ function ActiveReader({
   const activeArrayIdx =
     translators.absoluteToArrayIndex(absoluteSegmentIndex) ?? 0;
   const currentSegment = loaderState.segments[activeArrayIdx] ?? null;
+  const flatTocLocations = tocTree ? flattenTocLocations(tocTree) : [];
+  const activeTocLocationKey =
+    (
+      preferredTocLocation.key ||
+      selectActiveTocLocationKey({
+        entries: flatTocLocations,
+        currentSectionIndex: chapterIdx,
+        currentArrayIndex: translators.absoluteToArrayIndex(absoluteSegmentIndex),
+        preferredKey: null,
+        resolveArrayIndex:
+          loaderState.segments.length > 0 &&
+          formattedViewRef.current?.isSectionReady(chapterIdx)
+            ? (entry) => (
+                formattedViewRef.current?.resolveTocTarget(
+                  entry.sectionIndex,
+                  entry.htmlAnchor,
+                  loaderState.segments,
+                )?.arrIdx ?? null
+              )
+            : null,
+      })
+    ) ?? `${chapterIdx}`;
 
   /* ---- Mode switching: just dispatch ---- */
   // pause + setMode. The controller's tick reads mode from the store
@@ -355,6 +404,7 @@ function ActiveReader({
     navigateToSection,
     pendingTocTargetRef,
     clearPendingTocTarget,
+    navigationRevision,
   } = useTocNavigation({
     chapters,
     controller,
@@ -376,6 +426,7 @@ function ActiveReader({
   useFormattedViewCursorSync({
     showFormattedView,
     isPlaying,
+    tocNavigationRevision: navigationRevision,
     chapterIdx,
     absoluteSegmentIndex,
     cursorOrigin,
@@ -489,8 +540,23 @@ function ActiveReader({
         open={tocOpen}
         chapters={chapters}
         tocTree={tocTree}
-        currentSectionIndex={chapterIdx}
-        onJump={(idx, htmlAnchor) => navigateToSection(idx, htmlAnchor)}
+        activeLocationKey={activeTocLocationKey}
+        activeLocationTitle={preferredTocLocation.title}
+        activeLocationSectionIndex={preferredTocLocation.sectionIndex}
+        activeLocationAnchor={preferredTocLocation.htmlAnchor}
+        onJump={(idx, htmlAnchor, tocKey) => {
+          const title =
+            flatTocLocations.find((entry) => entry.key === tocKey)?.title ??
+            chapters[idx]?.title ??
+            'Untitled';
+          setPreferredTocLocation({
+            key: tocKey || `${idx}`,
+            title,
+            sectionIndex: idx,
+            htmlAnchor: htmlAnchor ?? null,
+          });
+          navigateToSection(idx, htmlAnchor);
+        }}
         onClose={() => setTocOpen(false)}
       />
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { RefObject } from 'react'
 import type { Chapter } from '../api/client'
 import type {
@@ -84,6 +84,7 @@ export function useTocNavigation({
   formattedViewRef,
 }: UseTocNavigationArgs) {
   const pendingTocTargetRef = useRef<TocJumpTarget | null>(null)
+  const [navigationRevision, setNavigationRevision] = useState(0)
 
   const clearPendingTocTarget = useCallback(() => {
     pendingTocTargetRef.current = null
@@ -96,6 +97,7 @@ export function useTocNavigation({
       sectionIndex: idx,
       htmlAnchor: htmlAnchor?.trim() ? htmlAnchor : null,
     }
+    setNavigationRevision((value) => value + 1)
     positionStore.setPosition(
       {
         chapterId: chapters[idx].id,
@@ -111,10 +113,7 @@ export function useTocNavigation({
     const pending = pendingTocTargetRef.current
     if (!pending) return
     if (pending.sectionIndex !== chapterIdx) return
-    if (!pending.htmlAnchor) {
-      pendingTocTargetRef.current = null
-      return
-    }
+    if (!pending.htmlAnchor) return
 
     const handle = formattedViewRef.current
     if (!handle?.isSectionReady(chapterIdx)) return
@@ -127,7 +126,6 @@ export function useTocNavigation({
     )
     if (!target) return
 
-    pendingTocTargetRef.current = null
     if (target.arrIdx == null) return
 
     const absolute = translators.arrayToAbsolute(target.arrIdx)
@@ -156,5 +154,6 @@ export function useTocNavigation({
     navigateToSection,
     pendingTocTargetRef,
     clearPendingTocTarget,
+    navigationRevision,
   }
 }
