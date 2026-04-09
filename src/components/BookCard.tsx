@@ -8,6 +8,7 @@ interface BookCardProps {
   onSwipeAction?: (pub: Publication) => void;
   onLongPress?: (pub: Publication, rect: DOMRect) => void;
   onOptions?: (pub: Publication, rect: DOMRect) => void;
+  featured?: boolean;
   swipeLabel?: string;
   swipeColor?: 'accent' | 'danger';
   disabled?: boolean;
@@ -20,6 +21,7 @@ export default function BookCard({
   onSwipeAction,
   onLongPress,
   onOptions,
+  featured,
   swipeLabel = 'Archive',
   swipeColor = 'accent',
   disabled,
@@ -47,6 +49,12 @@ export default function BookCard({
 
   const format = pub.filename?.split('.').pop()?.toUpperCase() || '';
   const pct = getProgressPercent();
+  const progressText = pct > 0 ? `${pct}% complete` : 'New';
+  const supportingMeta = pct > 0
+    ? 'Continue reading'
+    : pub.content_type === 'image' && pub.total_pages > 0
+      ? `${pub.total_pages.toLocaleString()} pages`
+      : 'Ready to start';
 
   const resetSwipe = () => {
     setSwipeOffset(0);
@@ -132,7 +140,7 @@ export default function BookCard({
       )}
 
       <div
-        className={`book-card${disabled ? ' book-card--disabled' : ''}${pub.cover_url ? ' book-card--has-cover' : ''}`}
+        className={`book-card${disabled ? ' book-card--disabled' : ''}${pub.cover_url ? ' book-card--has-cover' : ''}${featured ? ' book-card--featured' : ''}`}
         style={{ transform: `translateX(${swipeOffset}px)` }}
         onClick={handleClick}
         onTouchStart={onTouchStart}
@@ -157,6 +165,12 @@ export default function BookCard({
         )}
 
         <div className="book-card__content">
+          {featured && (
+            <p className="book-card__eyebrow">
+              {pct > 0 ? 'Continue reading' : 'Start here'}
+            </p>
+          )}
+
           <div className="book-card__header">
             <h3 className="book-card__title">{pub.title}</h3>
             <div className="book-card__header-actions">
@@ -179,24 +193,18 @@ export default function BookCard({
           <p className="book-card__author">{pub.author || 'Unknown author'}</p>
 
           <div className="book-card__footer">
-            <span className="book-card__meta">
-              {pub.content_type === 'image'
-                ? `${pub.total_pages.toLocaleString()} pages`
-                : `${pub.total_segments.toLocaleString()} segments`}
+            <span className="book-card__meta">{supportingMeta}</span>
+            <span className={`book-card__progress-label${pct === 0 ? ' book-card__progress-label--new' : ''}`}>
+              {progressText}
             </span>
-            {pct > 0 && (
-              <span className="book-card__progress-label">{pct}%</span>
-            )}
           </div>
 
-          {pct > 0 && (
-            <div className="book-card__progress-track">
-              <div
-                className="book-card__progress-fill"
-                style={{ width: `${Math.min(100, pct)}%` }}
-              />
-            </div>
-          )}
+          <div className="book-card__progress-track">
+            <div
+              className="book-card__progress-fill"
+              style={{ width: `${Math.min(100, pct)}%` }}
+            />
+          </div>
         </div>
       </div>
     </div>

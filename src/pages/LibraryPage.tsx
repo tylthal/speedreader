@@ -48,6 +48,9 @@ export default function LibraryPage() {
   const uploadFabRef = useRef<UploadFABHandle>(null);
   const archiveUndoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const navigate = useNavigate();
+  const featuredPublication = publications[0] ?? null;
+  const remainingPublications = featuredPublication ? publications.slice(1) : [];
+  const featuredProgress = featuredPublication ? progressMap[featuredPublication.id] : undefined;
 
   const fetchPubs = useCallback(async () => {
     try {
@@ -236,7 +239,9 @@ export default function LibraryPage() {
         <p className="page-header__subtitle">
           {publications.length === 0
             ? 'Add a book to get started'
-            : `${publications.length} book${publications.length !== 1 ? 's' : ''}`}
+            : featuredProgress
+              ? 'Pick up where you left off'
+              : `${publications.length} book${publications.length !== 1 ? 's' : ''} ready to read`}
         </p>
       </header>
 
@@ -272,27 +277,62 @@ export default function LibraryPage() {
           }}
         />
       ) : (
-        <div className="book-list">
-          {/* Swipe hint for first-time users */}
-          {publications.length > 0 && publications.length <= 3 && (
-            <p className="book-list__hint">
-              Swipe left to archive or use the menu for more options
-            </p>
+        <>
+          {featuredPublication && (
+            <section className="library-section">
+              <div className="library-section__header">
+                <h2 className="library-section__title">
+                  {featuredProgress ? 'Continue reading' : 'Start here'}
+                </h2>
+                <p className="library-section__description">
+                  {featuredProgress
+                    ? 'Your most recent book is ready where you left off.'
+                    : 'Your newest book is ready to open.'}
+                </p>
+              </div>
+              <BookCard
+                key={featuredPublication.id}
+                pub={featuredPublication}
+                progress={featuredProgress}
+                featured
+                onTap={handleTap}
+                onSwipeAction={handleArchive}
+                onLongPress={handleLongPress}
+                onOptions={handleOpenOptions}
+                swipeLabel="Archive"
+                swipeColor="accent"
+              />
+            </section>
           )}
-          {publications.map((pub) => (
-            <BookCard
-              key={pub.id}
-              pub={pub}
-              progress={progressMap[pub.id]}
-              onTap={handleTap}
-              onSwipeAction={handleArchive}
-              onLongPress={handleLongPress}
-              onOptions={handleOpenOptions}
-              swipeLabel="Archive"
-              swipeColor="accent"
-            />
-          ))}
-        </div>
+
+          {remainingPublications.length > 0 && (
+            <section className="library-section">
+              <div className="library-section__header">
+                <h2 className="library-section__title">Library</h2>
+                {publications.length <= 3 && (
+                  <p className="book-list__hint">
+                    Swipe left to archive or use the menu for more options
+                  </p>
+                )}
+              </div>
+              <div className="book-list">
+                {remainingPublications.map((pub) => (
+                  <BookCard
+                    key={pub.id}
+                    pub={pub}
+                    progress={progressMap[pub.id]}
+                    onTap={handleTap}
+                    onSwipeAction={handleArchive}
+                    onLongPress={handleLongPress}
+                    onOptions={handleOpenOptions}
+                    swipeLabel="Archive"
+                    swipeColor="accent"
+                  />
+                ))}
+              </div>
+            </section>
+          )}
+        </>
       )}
 
       <UploadFAB
