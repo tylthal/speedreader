@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { forwardRef, useImperativeHandle, useRef } from 'react';
 
 interface UploadFABProps {
   onFileSelect: (file: File) => void;
@@ -7,9 +7,16 @@ interface UploadFABProps {
   uploadPercent: number;
 }
 
+export interface UploadFABHandle {
+  openPicker: () => void;
+}
+
 const ACCEPTED = '.epub,.pdf,.txt,.html,.htm,.md,.fb2,.rtf,.docx,.cbz';
 
-export default function UploadFAB({ onFileSelect, uploading, uploadPhase, uploadPercent }: UploadFABProps) {
+const UploadFAB = forwardRef<UploadFABHandle, UploadFABProps>(function UploadFAB(
+  { onFileSelect, uploading, uploadPhase, uploadPercent }: UploadFABProps,
+  ref,
+) {
   const inputRef = useRef<HTMLInputElement>(null);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -18,6 +25,16 @@ export default function UploadFAB({ onFileSelect, uploading, uploadPhase, upload
     // Reset so same file can be re-selected
     e.target.value = '';
   };
+
+  const openPicker = () => {
+    if (!uploading) {
+      inputRef.current?.click();
+    }
+  };
+
+  useImperativeHandle(ref, () => ({
+    openPicker,
+  }), [uploading]);
 
   return (
     <>
@@ -31,7 +48,7 @@ export default function UploadFAB({ onFileSelect, uploading, uploadPhase, upload
       />
       <button
         className={`upload-fab${uploading ? ' upload-fab--uploading' : ''}`}
-        onClick={() => !uploading && inputRef.current?.click()}
+        onClick={openPicker}
         disabled={uploading}
         aria-label={uploading ? `Uploading: ${uploadPhase} ${uploadPercent}%` : 'Upload a book'}
         title="Upload a book"
@@ -55,4 +72,6 @@ export default function UploadFAB({ onFileSelect, uploading, uploadPhase, upload
       </button>
     </>
   );
-}
+});
+
+export default UploadFAB;

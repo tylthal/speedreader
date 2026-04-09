@@ -1,17 +1,32 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   getPublications,
   uploadBook,
   getProgress,
   archivePublication,
+  unarchivePublication,
 } from '../api/client';
 import type { Publication, ReadingProgress } from '../api/client';
 import BookCard from '../components/BookCard';
 import EmptyState from '../components/EmptyState';
-import UploadFAB from '../components/UploadFAB';
+import UploadFAB, { type UploadFABHandle } from '../components/UploadFAB';
 import ActionSheet, { type ActionSheetOption } from '../components/ActionSheet';
 import ProcessingDialog from '../components/ProcessingDialog';
+
+function sortPublications(
+  pubs: Publication[],
+  progressByPublication: Record<number, ReadingProgress>,
+): Publication[] {
+  return [...pubs].sort((a, b) => {
+    const pa = progressByPublication[a.id];
+    const pb = progressByPublication[b.id];
+    if (pa && pb) return new Date(pb.updated_at).getTime() - new Date(pa.updated_at).getTime();
+    if (pa) return -1;
+    if (pb) return 1;
+    return b.id - a.id;
+  });
+}
 
 export default function LibraryPage() {
   const [publications, setPublications] = useState<Publication[]>([]);
@@ -25,7 +40,13 @@ export default function LibraryPage() {
   const [actionSheet, setActionSheet] = useState<{
     pub: Publication;
   } | null>(null);
+  const [archiveUndo, setArchiveUndo] = useState<{
+    pub: Publication;
+    progress?: ReadingProgress;
+  } | null>(null);
   const [dragActive, setDragActive] = useState(false);
+  const uploadFabRef = useRef<UploadFABHandle>(null);
+  const archiveUndoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const navigate = useNavigate();
 
   const fetchPubs = useCallback(async () => {
@@ -43,17 +64,7 @@ export default function LibraryPage() {
         }
       });
       setProgressMap(map);
-
-      // Sort: most recently read first, then unread by id descending
-      pubs.sort((a, b) => {
-        const pa = map[a.id];
-        const pb = map[b.id];
-        if (pa && pb) return new Date(pb.updated_at).getTime() - new Date(pa.updated_at).getTime();
-        if (pa) return -1;
-        if (pb) return 1;
-        return b.id - a.id;
-      });
-      setPublications([...pubs]);
+      setPublications(sortPublications(pubs, map));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load library');
     } finally {
@@ -64,6 +75,26 @@ export default function LibraryPage() {
   useEffect(() => {
     fetchPubs();
   }, [fetchPubs]);
+
+  const clearArchiveUndoTimer = useCallback(() => {
+    if (archiveUndoTimerRef.current) {
+      clearTimeout(archiveUndoTimerRef.current);
+      archiveUndoTimerRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    return () => clearArchiveUndoTimer();
+  }, [clearArchiveUndoTimer]);
+
+  const showArchiveUndo = useCallback((pub: Publication, progress?: ReadingProgress) => {
+    clearArchiveUndoTimer();
+    setArchiveUndo({ pub, progress });
+    archiveUndoTimerRef.current = setTimeout(() => {
+      setArchiveUndo((current) => (current?.pub.id === pub.id ? null : current));
+      archiveUndoTimerRef.current = null;
+    }, 5000);
+  }, [clearArchiveUndoTimer]);
 
   const handleFileSelect = async (file: File) => {
     setUploading(true);
@@ -85,11 +116,42 @@ export default function LibraryPage() {
   };
 
   const handleArchive = async (pub: Publication) => {
+    const removedProgress = progressMap[pub.id];
+    clearArchiveUndoTimer();
+    setArchiveUndo(null);
+    setPublications((prev) => prev.filter((p) => p.id !== pub.id));
+    setProgressMap((prev) => {
+      const next = { ...prev };
+      delete next[pub.id];
+      return next;
+    });
     try {
       await archivePublication(pub.id);
-      setPublications((prev) => prev.filter((p) => p.id !== pub.id));
+      showArchiveUndo(pub, removedProgress);
     } catch (err) {
+      setProgressMap((prev) => {
+        if (!removedProgress) return prev;
+        return { ...prev, [pub.id]: removedProgress };
+      });
+      setPublications((prev) => sortPublications([...prev, pub], {
+        ...progressMap,
+        ...(removedProgress ? { [pub.id]: removedProgress } : {}),
+      }));
       setError(err instanceof Error ? err.message : 'Archive failed');
+    }
+  };
+
+  const handleUndoArchive = async () => {
+    if (!archiveUndo) return;
+    const undoTarget = archiveUndo;
+    clearArchiveUndoTimer();
+    setArchiveUndo(null);
+    try {
+      await unarchivePublication(undoTarget.pub.id);
+      await fetchPubs();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Undo failed');
+      showArchiveUndo(undoTarget.pub, undoTarget.progress);
     }
   };
 
@@ -98,6 +160,10 @@ export default function LibraryPage() {
   };
 
   const handleLongPress = (pub: Publication, _rect: DOMRect) => {
+    setActionSheet({ pub });
+  };
+
+  const handleOpenOptions = (pub: Publication, _rect: DOMRect) => {
     setActionSheet({ pub });
   };
 
@@ -199,14 +265,18 @@ export default function LibraryPage() {
         <EmptyState
           icon="library"
           title="Your library is empty"
-          description="Upload an EPUB, PDF, or other supported format to start reading. Tap the + button below or drag a file here."
+          description="Import an EPUB, PDF, or other supported format to start reading. Your books stay on this device."
+          action={{
+            label: 'Import your first book',
+            onClick: () => uploadFabRef.current?.openPicker(),
+          }}
         />
       ) : (
         <div className="book-list">
           {/* Swipe hint for first-time users */}
           {publications.length > 0 && publications.length <= 3 && (
             <p className="book-list__hint">
-              Swipe left to archive &middot; Long press for options
+              Swipe left to archive or use the menu for more options
             </p>
           )}
           {publications.map((pub) => (
@@ -217,6 +287,7 @@ export default function LibraryPage() {
               onTap={handleTap}
               onSwipeAction={handleArchive}
               onLongPress={handleLongPress}
+              onOptions={handleOpenOptions}
               swipeLabel="Archive"
               swipeColor="accent"
             />
@@ -225,11 +296,24 @@ export default function LibraryPage() {
       )}
 
       <UploadFAB
+        ref={uploadFabRef}
         onFileSelect={handleFileSelect}
         uploading={uploading}
         uploadPhase={uploadPhase}
         uploadPercent={uploadPercent}
       />
+
+      {archiveUndo && (
+        <div className="undo-toast" role="status" aria-live="polite">
+          <div className="undo-toast__content">
+            <span className="undo-toast__label">Archived</span>
+            <span className="undo-toast__title">{archiveUndo.pub.title}</span>
+          </div>
+          <button className="undo-toast__action" type="button" onClick={handleUndoArchive}>
+            Undo
+          </button>
+        </div>
+      )}
 
       {actionSheet && (
         <ActionSheet

@@ -14,6 +14,7 @@ export default function ArchivePage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [actionSheet, setActionSheet] = useState<{ pub: Publication } | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Publication | null>(null);
   const [deleting, setDeleting] = useState<number | null>(null);
 
   const fetchArchived = useCallback(async () => {
@@ -44,7 +45,6 @@ export default function ArchivePage() {
   };
 
   const handleDelete = async (pub: Publication) => {
-    if (!confirm(`Permanently delete "${pub.title}"? This cannot be undone.`)) return;
     setDeleting(pub.id);
     try {
       await deletePublication(pub.id);
@@ -61,6 +61,10 @@ export default function ArchivePage() {
   };
 
   const handleLongPress = (pub: Publication, _rect: DOMRect) => {
+    setActionSheet({ pub });
+  };
+
+  const handleOpenOptions = (pub: Publication, _rect: DOMRect) => {
     setActionSheet({ pub });
   };
 
@@ -90,7 +94,10 @@ export default function ArchivePage() {
             <line x1="11" y1="9" x2="11" y2="14" />
           </svg>
         ),
-        onSelect: () => handleDelete(pub),
+        onSelect: () => {
+          setActionSheet(null);
+          setDeleteTarget(pub);
+        },
       },
     ];
   };
@@ -150,6 +157,7 @@ export default function ArchivePage() {
               onTap={handleTap}
               onSwipeAction={handleRestore}
               onLongPress={handleLongPress}
+              onOptions={handleOpenOptions}
               swipeLabel="Restore"
               swipeColor="accent"
               disabled={deleting === pub.id}
@@ -164,6 +172,30 @@ export default function ArchivePage() {
           subtitle={actionSheet.pub.author || 'Unknown author'}
           options={getActionSheetOptions()}
           onClose={() => setActionSheet(null)}
+        />
+      )}
+
+      {deleteTarget && (
+        <ActionSheet
+          title={`Delete "${deleteTarget.title}"?`}
+          subtitle="This permanently removes the book from your device."
+          options={[
+            {
+              label: 'Delete permanently',
+              variant: 'danger',
+              icon: (
+                <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="3,6 5,6 17,6" />
+                  <path d="M7 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+                  <path d="M15 6v10a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
+                  <line x1="9" y1="9" x2="9" y2="14" />
+                  <line x1="11" y1="9" x2="11" y2="14" />
+                </svg>
+              ),
+              onSelect: () => void handleDelete(deleteTarget),
+            },
+          ]}
+          onClose={() => setDeleteTarget(null)}
         />
       )}
     </div>

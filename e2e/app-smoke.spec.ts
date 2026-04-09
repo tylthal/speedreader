@@ -24,10 +24,10 @@ test.describe('App smoke', () => {
     await expect(page.locator('.book-card')).toHaveCount(1);
 
     await page.getByLabel('Archive').click();
-    await expect(page.getByRole('heading', { name: 'Archive' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Archive', exact: true })).toBeVisible();
 
     await page.getByLabel('Settings').click();
-    await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible();
 
     await page.locator('[aria-label^="Light theme:"]').click();
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');

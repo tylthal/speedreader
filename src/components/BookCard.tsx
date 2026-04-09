@@ -7,6 +7,7 @@ interface BookCardProps {
   onTap: (pub: Publication) => void;
   onSwipeAction?: (pub: Publication) => void;
   onLongPress?: (pub: Publication, rect: DOMRect) => void;
+  onOptions?: (pub: Publication, rect: DOMRect) => void;
   swipeLabel?: string;
   swipeColor?: 'accent' | 'danger';
   disabled?: boolean;
@@ -18,6 +19,7 @@ export default function BookCard({
   onTap,
   onSwipeAction,
   onLongPress,
+  onOptions,
   swipeLabel = 'Archive',
   swipeColor = 'accent',
   disabled,
@@ -113,6 +115,13 @@ export default function BookCard({
     }
   };
 
+  const handleOptionsClick = (e: React.MouseEvent<HTMLButtonElement>) => {
+    e.stopPropagation();
+    if (disabled || !onOptions) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    onOptions(pub, rect);
+  };
+
   return (
     <div className="book-card__wrapper" ref={cardRef}>
       {/* Swipe reveal background */}
@@ -150,7 +159,21 @@ export default function BookCard({
         <div className="book-card__content">
           <div className="book-card__header">
             <h3 className="book-card__title">{pub.title}</h3>
-            {format && <span className="book-card__format">{format}</span>}
+            <div className="book-card__header-actions">
+              {format && <span className="book-card__format">{format}</span>}
+              {onOptions && (
+                <button
+                  className="book-card__menu"
+                  type="button"
+                  aria-label={`More options for ${pub.title}`}
+                  onClick={handleOptionsClick}
+                  onTouchStart={(e) => e.stopPropagation()}
+                  onTouchEnd={(e) => e.stopPropagation()}
+                >
+                  <span aria-hidden="true">•••</span>
+                </button>
+              )}
+            </div>
           </div>
 
           <p className="book-card__author">{pub.author || 'Unknown author'}</p>
