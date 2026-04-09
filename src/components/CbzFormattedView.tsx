@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { getImagePages } from '../api/client'
+import { getImagePages, getImageUrl } from '../api/client'
 import type { ImagePage } from '../api/client'
 import { useContentTap } from '../hooks/useContentTap'
 
@@ -15,10 +15,14 @@ interface CbzFormattedViewProps {
   onTap?: () => void
 }
 
+interface ResolvedImagePage extends ImagePage {
+  src: string
+}
+
 /**
  * Continuous-scroll comic page viewer (PRD §4.5). All pages are loaded
- * upfront — they're already URL.createObjectURL'd at upload time and we
- * lean on lazy <img loading="lazy"> for paint-time efficiency.
+ * upfront and resolved to fresh object URLs at render time so stored page
+ * references remain valid across reloads.
  */
 export default function CbzFormattedView({
   publicationId,
@@ -32,19 +36,37 @@ export default function CbzFormattedView({
   const containerRef = useRef<HTMLDivElement>(null)
   const pageRefs = useRef<Map<number, HTMLDivElement>>(new Map())
   const isProgrammaticScrollRef = useRef(false)
-  const [pages, setPages] = useState<ImagePage[]>([])
+  const [pages, setPages] = useState<ResolvedImagePage[]>([])
 
   useEffect(() => {
     let cancelled = false
+    const objectUrls: string[] = []
+
     getImagePages(publicationId, chapterId, 0, totalPages)
-      .then((batch) => {
-        if (!cancelled) setPages(batch.pages)
+      .then(async (batch) => {
+        const resolved = await Promise.all(
+          batch.pages.map(async (page) => {
+            const src = await getImageUrl(publicationId, page.image_path)
+            if (src?.startsWith('blob:')) objectUrls.push(src)
+            return src ? { ...page, src } : null
+          }),
+        )
+        if (cancelled) {
+          objectUrls.forEach((url) => {
+            if (url.startsWith('blob:')) URL.revokeObjectURL(url)
+          })
+          return
+        }
+        setPages(resolved.filter((page): page is ResolvedImagePage => page !== null))
       })
       .catch(() => {
         if (!cancelled) setPages([])
       })
     return () => {
       cancelled = true
+      objectUrls.forEach((url) => {
+        if (url.startsWith('blob:')) URL.revokeObjectURL(url)
+      })
     }
   }, [publicationId, chapterId, totalPages])
 
@@ -102,7 +124,7 @@ export default function CbzFormattedView({
             className="formatted-view__cbz-page"
           >
             <img
-              src={p.image_path}
+              src={p.src}
               alt=""
               loading="lazy"
               decoding="async"

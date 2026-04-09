@@ -92,6 +92,36 @@ function toProgress(row: DBReadingProgress, segmentsRead: number): ReadingProgre
   }
 }
 
+interface UploadDiag {
+  parsedCount: number
+  fileStorageAvailable: boolean
+  attempted: number
+  opfsCount: number
+  dexieCount: number
+  nativeCount: number
+  failedCount: number
+  firstError: string | null
+}
+
+function recordStoredImageBackend(
+  uploadDiag: UploadDiag,
+  backend: 'opfs' | 'dexie' | 'native',
+): void {
+  if (backend === 'opfs') uploadDiag.opfsCount++
+  else if (backend === 'dexie') uploadDiag.dexieCount++
+  else uploadDiag.nativeCount++
+}
+
+async function persistImageAsset(
+  pubId: number,
+  name: string,
+  data: ArrayBuffer,
+  mimeType: string,
+): Promise<'opfs' | 'dexie' | 'native'> {
+  const blob = new Blob([data], { type: mimeType })
+  return storeImage(pubId, name, blob)
+}
+
 // ---------------------------------------------------------------------------
 // Parsing (main-thread only — Safari/WebKit lacks DOMParser in workers)
 // ---------------------------------------------------------------------------
@@ -150,21 +180,17 @@ export class LocalClient implements SpeedReaderClient {
     })
     const pubId = initialPubId as number
 
-    // Persist cover to OPFS (best-effort).
+    // Persist cover to storage (best-effort).
     let coverPath: string | null = null
     if (book.cover) {
-      if (!isFileStorageAvailable()) {
-        console.warn('[upload] cover present but file storage unavailable')
-      } else {
-        try {
-          const blob = new Blob([book.cover.imageData], { type: book.cover.mimeType })
-          const ext = getExtForMime(book.cover.mimeType)
-          coverPath = await storeCover(pubId, blob, ext)
-          console.log('[upload] cover stored', { pubId, coverPath, mime: book.cover.mimeType, bytes: book.cover.imageData.byteLength })
-        } catch (err) {
-          console.error('[upload] storeCover failed', err)
-          coverPath = null
-        }
+      try {
+        const blob = new Blob([book.cover.imageData], { type: book.cover.mimeType })
+        const ext = getExtForMime(book.cover.mimeType)
+        coverPath = await storeCover(pubId, blob, ext)
+        console.log('[upload] cover stored', { pubId, coverPath, mime: book.cover.mimeType, bytes: book.cover.imageData.byteLength })
+      } catch (err) {
+        console.error('[upload] storeCover failed', err)
+        coverPath = null
       }
     } else {
       console.warn('[upload] no cover extracted from', file.name)
@@ -182,7 +208,7 @@ export class LocalClient implements SpeedReaderClient {
     // pubId. The FormattedView ?diag=1 strip surfaces them on-screen so
     // mobile users can see exactly what happened during their upload
     // without needing browser devtools.
-    const uploadDiag = {
+    const uploadDiag: UploadDiag = {
       parsedCount: book.parsedImages?.length ?? 0,
       fileStorageAvailable: isFileStorageAvailable(),
       attempted: 0,
@@ -192,15 +218,17 @@ export class LocalClient implements SpeedReaderClient {
       failedCount: 0,
       firstError: null as string | null,
     }
-    if (book.parsedImages?.length && isFileStorageAvailable()) {
+    if (book.parsedImages?.length) {
       for (const img of book.parsedImages) {
         uploadDiag.attempted++
         try {
-          const blob = new Blob([img.imageData], { type: img.mimeType })
-          const backend = await storeImage(pubId, img.name, blob)
-          if (backend === 'opfs') uploadDiag.opfsCount++
-          else if (backend === 'dexie') uploadDiag.dexieCount++
-          else if (backend === 'native') uploadDiag.nativeCount++
+          const backend = await persistImageAsset(
+            pubId,
+            img.name,
+            img.imageData,
+            img.mimeType,
+          )
+          recordStoredImageBackend(uploadDiag, backend)
         } catch (err) {
           uploadDiag.failedCount++
           if (!uploadDiag.firstError) {
@@ -210,6 +238,36 @@ export class LocalClient implements SpeedReaderClient {
         }
       }
       console.log('[upload] image storage summary for pub', pubId, uploadDiag)
+    }
+
+    const storedImagePages = new Map<number, { name: string; mimeType: string; width: number; height: number }>()
+    if (book.imagePages?.length) {
+      for (const page of book.imagePages) {
+        const ext = getExtForMime(page.mimeType)
+        const name = `cbz-page-${String(page.pageIndex).padStart(4, '0')}${ext}`
+        uploadDiag.attempted++
+        try {
+          const backend = await persistImageAsset(
+            pubId,
+            name,
+            page.imageData,
+            page.mimeType,
+          )
+          recordStoredImageBackend(uploadDiag, backend)
+          storedImagePages.set(page.pageIndex, {
+            name,
+            mimeType: page.mimeType,
+            width: page.width,
+            height: page.height,
+          })
+        } catch (err) {
+          uploadDiag.failedCount++
+          if (!uploadDiag.firstError) {
+            uploadDiag.firstError = err instanceof Error ? err.message : String(err)
+          }
+          console.warn('[upload] failed to store CBZ page', page.pageIndex, err)
+        }
+      }
     }
     try {
       if (typeof localStorage !== 'undefined') {
@@ -270,15 +328,15 @@ export class LocalClient implements SpeedReaderClient {
             .first()
           if (sectionRow?.id) {
             for (const page of book.imagePages) {
-              const blob = new Blob([page.imageData], { type: page.mimeType })
-              const url = URL.createObjectURL(blob)
+              const storedPage = storedImagePages.get(page.pageIndex)
+              if (!storedPage) continue
               await db.image_pages.add({
                 chapter_id: sectionRow.id,
                 page_index: page.pageIndex,
-                image_path: url,
-                width: page.width,
-                height: page.height,
-                mime_type: page.mimeType,
+                image_path: storedPage.name,
+                width: storedPage.width,
+                height: storedPage.height,
+                mime_type: storedPage.mimeType,
               })
               // One synthetic segment per page. text is empty, duration is
               // a generous default (5 s) so Phrase/RSVP step pages slowly.
@@ -309,12 +367,10 @@ export class LocalClient implements SpeedReaderClient {
       },
     )
 
-    if (isFileStorageAvailable()) {
-      try {
-        await storeBookFile(pubId, file)
-      } catch {
-        // OPFS storage is optional — don't fail the upload
-      }
+    try {
+      await storeBookFile(pubId, file)
+    } catch {
+      // Asset storage is optional — don't fail the upload
     }
 
     const pub = await db.publications.get(pubId)
@@ -363,10 +419,7 @@ export class LocalClient implements SpeedReaderClient {
       await db.publications.delete(id)
     })
 
-    // Clean up OPFS files
-    if (isFileStorageAvailable()) {
-      await deleteBookFiles(id).catch(() => {})
-    }
+    await deleteBookFiles(id).catch(() => {})
   }
 
   async getPublication(id: number): Promise<PublicationDetail> {
@@ -491,13 +544,6 @@ export class LocalClient implements SpeedReaderClient {
         mime_type: r.mime_type,
       })),
     }
-  }
-
-  getImageUrl(imagePath: string): string {
-    // TODO (Phase 4): Read from OPFS and return a blob URL.
-    // For now, return the path as-is (works for migrated data that still
-    // has server-relative paths stored).
-    return imagePath
   }
 
   async getProgress(pubId: number): Promise<ReadingProgress | null> {

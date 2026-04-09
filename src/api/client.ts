@@ -1,6 +1,7 @@
 import type { SpeedReaderClient } from './interface'
 import { LocalClient } from '../db/localClient'
 import { ensureSchemaWipe } from '../db/database'
+import { getImageUrl as resolveImageUrl } from '../lib/fileStorage'
 
 // Re-export all types so consumers don't need to change imports
 export type {
@@ -85,8 +86,8 @@ export function getImagePages(pubId: number, chapterId: number, start: number, e
   return getClient().getImagePages(pubId, chapterId, start, end)
 }
 
-export function getImageUrl(imagePath: string) {
-  return getClient().getImageUrl(imagePath)
+export function getImageUrl(pubId: number, imagePath: string) {
+  return resolveImageUrl(pubId, imagePath)
 }
 
 export function getProgress(pubId: number) {

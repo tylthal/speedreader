@@ -8,15 +8,14 @@ import { useOrientationResilience } from '../hooks/useOrientationResilience';
 import { useKeyboardHandling } from '../hooks/useKeyboardHandling';
 import { useWakeLock } from '../hooks/useWakeLock';
 import {
-  resolvePendingTocScrollTarget,
   useTocNavigation,
 } from '../hooks/useTocNavigation';
+import { useFormattedViewCursorSync } from '../hooks/useFormattedViewCursorSync';
+import { useReaderInitialization } from '../hooks/useReaderInitialization';
 import { useNavigate } from 'react-router-dom';
-import { getPublication, getProgress, setDisplayModePref } from '../api/client';
-import { useDataSaver } from '../hooks/useDataSaver';
-import { markNavigationStart, markFirstChunkRendered } from '../lib/ttfcMetric';
-import type { Chapter, ReadingProgress, TocNode, DisplayMode as ApiDisplayMode } from '../api/client';
-import { readDefaultDisplayMode } from '../hooks/useDefaultDisplayMode';
+import { setDisplayModePref } from '../api/client';
+import { markFirstChunkRendered } from '../lib/ttfcMetric';
+import type { Chapter, TocNode } from '../api/client';
 import type { ReadingMode } from '../types';
 import GestureLayer from './GestureLayer';
 import FocusChunkOverlay from './FocusChunkOverlay';
@@ -46,26 +45,12 @@ interface ReaderViewportProps {
   publicationId: number;
 }
 
-interface InitialPosition {
-  chapters: Chapter[];
-  tocTree: TocNode[] | null;
-  contentType: ContentType;
-  bookTitle: string;
-}
-
 interface ActiveReaderProps {
   publicationId: number;
   bookTitle: string;
   chapters: Chapter[];
   tocTree: TocNode[] | null;
   contentType: ContentType;
-}
-
-const VALID_MODES: ReadingMode[] = ['phrase', 'rsvp', 'scroll', 'track'];
-function coerceMode(raw: string): ReadingMode {
-  if ((VALID_MODES as readonly string[]).includes(raw)) return raw as ReadingMode;
-  if (raw === 'eyetrack') return 'track';
-  return 'phrase';
 }
 
 /* ------------------------------------------------------------------ */
@@ -82,109 +67,7 @@ function coerceMode(raw: string): ReadingMode {
 // its 4-phase machine.
 
 export default function ReaderViewport({ publicationId }: ReaderViewportProps) {
-  const [initState, setInitState] = useState<
-    | { status: 'loading' }
-    | { status: 'error'; message: string }
-    | { status: 'ready'; position: InitialPosition }
-  >({ status: 'loading' });
-
-  useEffect(() => {
-    markNavigationStart();
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    Promise.all([
-      getPublication(publicationId),
-      getProgress(publicationId).catch(() => null),
-    ])
-      .then(([pub, apiProgress]) => {
-        if (cancelled) return;
-
-        const sorted = [...pub.chapters].sort(
-          (a, b) => a.chapter_index - b.chapter_index,
-        );
-
-        if (sorted.length === 0) {
-          setInitState({ status: 'error', message: 'No chapters found in this publication.' });
-          return;
-        }
-
-        // Pick the fresher of API + localStorage. localStorage is read
-        // synchronously here so we can seed the store before mount and
-        // avoid a flash at chapter 0.
-        let progress: ReadingProgress | null = apiProgress;
-        try {
-          const raw = localStorage.getItem(`speedreader_progress_${publicationId}`);
-          if (raw) {
-            const local = JSON.parse(raw) as ReadingProgress;
-            if (!progress || new Date(local.updated_at) > new Date(progress.updated_at)) {
-              progress = local;
-            }
-          }
-        } catch {
-          /* ignore */
-        }
-
-        let chapterIdx = 0;
-        let absoluteSegmentIndex = 0;
-        let wordIndex = 0;
-        let wpm = 250;
-        let readingMode: ReadingMode = 'phrase';
-
-        if (progress) {
-          const savedChapterIdx = sorted.findIndex(
-            (ch) => ch.id === progress!.chapter_id,
-          );
-          if (savedChapterIdx !== -1) {
-            chapterIdx = savedChapterIdx;
-            absoluteSegmentIndex = progress.absolute_segment_index;
-            wordIndex = progress.word_index ?? 0;
-            wpm = progress.wpm;
-            readingMode = coerceMode(progress.reading_mode);
-          }
-        }
-
-        const initialDisplayMode: ApiDisplayMode =
-          pub.display_mode_pref ?? readDefaultDisplayMode();
-
-        // Seed the store *before* mounting ActiveReader so the first
-        // render reads the restored values. revision stays at 0 so the
-        // saver gate (revision > 0) doesn't fire on the seed itself.
-        positionStore.init({
-          chapterId: sorted[chapterIdx].id,
-          chapterIdx,
-          absoluteSegmentIndex,
-          wordIndex,
-          wpm,
-          mode: readingMode,
-          displayMode: initialDisplayMode as DisplayMode,
-          isPlaying: false,
-        });
-
-        setInitState({
-          status: 'ready',
-          position: {
-            chapters: sorted,
-            tocTree: pub.toc_tree ?? null,
-            contentType: (pub.content_type ?? 'text') as ContentType,
-            bookTitle: pub.title,
-          },
-        });
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        setInitState({
-          status: 'error',
-          message: err instanceof Error ? err.message : 'Failed to load publication',
-        });
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [publicationId]);
+  const initState = useReaderInitialization(publicationId);
 
   if (initState.status === 'loading') {
     return <div className="reader-viewport__loading">Loading...</div>;
@@ -261,16 +144,14 @@ function ActiveReader({
 
   const navigate = useNavigate();
   const { announce } = useAnnounce();
-  const isDataSaver = useDataSaver();
 
   const currentChapter = chapters[chapterIdx] ?? chapters[0] ?? null;
   const currentChapterId = currentChapter?.id ?? 0;
 
   /* ---- Segment loader (with translators) ---- */
-  const [loaderState, loaderActions, translators] = useSegmentLoader({
+  const [loaderState, translators] = useSegmentLoader({
     publicationId,
     chapterId: currentChapterId,
-    dataSaver: isDataSaver,
   });
 
   useEffect(() => {
@@ -333,12 +214,6 @@ function ActiveReader({
   }, [chapters, announce]);
 
   const autoAdvanceRef = useRef(false);
-  const onPrefetchHint = useCallback(
-    (arrayIdx: number) => {
-      loaderActions.checkPrefetch(arrayIdx);
-    },
-    [loaderActions],
-  );
 
   const controller = usePlaybackController({
     segments: loaderState.segments,
@@ -349,7 +224,6 @@ function ActiveReader({
     formattedViewRef,
     velocityProfileRef,
     gazeRef,
-    onPrefetchHint,
     onComplete: handleAutoAdvance,
   });
 
@@ -499,274 +373,20 @@ function ActiveReader({
   // (instant-jump-to-section-top). The auto-scroll effect alone is now
   // the single source of truth for ALL formatted-view scrolling. The
   // scrollSectionIntoView imperative method is gone from FormattedView.
-
-  /* ---- Current-segment highlight ---- */
-  // Calls into FormattedView's imperative handle. The component owns
-  // the per-section text→DOM-range index, materializes per-line rects
-  // via Range.getClientRects(), and renders multi-line bands that hug
-  // the actual words. Falls back to a proportional / velocity-profile
-  // estimate (also inside FormattedView) when the matcher can't
-  // locate a segment.
-  //
-  // Re-fires on cursor changes (so the band follows live engine ticks
-  // and user scrolls) and on layoutVersion bumps (so late content
-  // loads — innerHTML write, image decode, font reflow — update the
-  // rects against the fresh geometry).
-  useEffect(() => {
-    const handle = formattedViewRef.current;
-    if (!handle) return;
-    if (!showFormattedView) {
-      handle.setHighlightForSegment(chapterIdx, -1, []);
-      return;
-    }
-    const segs = loaderState.segments;
-    const arrIdx = translators.absoluteToArrayIndex(absoluteSegmentIndex);
-    if (segs.length === 0 || arrIdx == null) {
-      handle.setHighlightForSegment(chapterIdx, -1, []);
-      return;
-    }
-
-    let cancelled = false;
-    const raf = requestAnimationFrame(() => {
-      if (cancelled) return;
-      handle.setHighlightForSegment(chapterIdx, arrIdx, segs);
-    });
-    return () => {
-      cancelled = true;
-      cancelAnimationFrame(raf);
-    };
-  }, [
+  useFormattedViewCursorSync({
     showFormattedView,
-    absoluteSegmentIndex,
+    isPlaying,
     chapterIdx,
-    cursorRevision,
-    loaderState.segments,
-    translators,
-    layoutVersion,
-  ]);
-
-  /* ---- Auto-scroll the formatted view to the current segment ---- */
-  // Three trigger conditions:
-  //   1. The cursor moves via something other than user-scroll/engine
-  //      (toc/chapter-nav/user-seek/restore/display-mode/mode-switch)
-  //   2. showFormattedView flips from false → true (user paused in
-  //      phrase/rsvp; formatted view is now visible). The cursor
-  //      itself didn't move, so we detect this via pendingScrollRef.
-  //   3. layoutVersion bumps while pendingScrollRef is set — the
-  //      formatted view's bodies just landed/grew, retry the scroll
-  //      against the now-real section geometry.
-  //
-  // pendingScrollRef survives multiple effect re-runs while we wait
-  // for layout. Cleared on a successful scroll, on showFormattedView
-  // false, or on user-scroll commits (user pre-empts).
-  //
-  // ROBUSTNESS: instead of relying solely on layoutVersion to fire
-  // the retry, the effect ALSO does its own rAF polling loop. On the
-  // pause-from-phrase path, FormattedView remounts with empty body
-  // divs and the layoutVersion handoff (FormattedView → onLayoutChange
-  // → setLayoutVersion → parent re-render → effect re-fire) goes
-  // through several React passes. The poll cuts that loop short by
-  // checking the section height every frame and committing the
-  // scroll the moment the body content lands. Capped at ~60 frames
-  // so a never-loading section doesn't burn CPU forever.
-  const pendingScrollRef = useRef(false);
-  const wasFormattedRef = useRef(false);
-  // Last chapterIdx the auto-scroll latched onto. Used to detect
-  // chapter changes that happened during play but the cursor's last
-  // commit was an engine tick (origin='engine'). On pause from phrase/
-  // RSVP, we still want to scroll to the new chapter even though the
-  // most recent commit wasn't a navigation event.
-  const lastAutoScrolledChapterRef = useRef<number>(-1);
-  useEffect(() => {
-    // CRITICAL: this cleanup branch must run BEFORE the handle check.
-    // When the user starts playing in phrase/RSVP, showFormattedView
-    // flips false → FormattedView unmounts → formattedViewRef.current
-    // becomes null. If we bailed on the null handle first,
-    // wasFormattedRef would stay true forever, and the next pause
-    // would see transitionedIn=false → pending never set → no auto-
-    // scroll. Reset the latches before any other check.
-    if (!showFormattedView) {
-      wasFormattedRef.current = false;
-      pendingScrollRef.current = false;
-      return;
-    }
-    const handle = formattedViewRef.current;
-    if (!handle) return;
-
-    const transitionedIn = !wasFormattedRef.current;
-    wasFormattedRef.current = true;
-    if (transitionedIn) pendingScrollRef.current = true;
-    if (cursorOrigin === 'user-scroll') {
-      pendingScrollRef.current = false;
-      return;
-    }
-    if (cursorOrigin !== 'engine') {
-      pendingScrollRef.current = true;
-    }
-    // ALSO force a scroll if the chapter changed since the last one we
-    // scrolled to. This catches the pause-from-phrase case: while
-    // playing, the engine auto-advanced through several chapters
-    // (each emitting CHAPTER_NAV → ENGINE_TICK), leaving the cursor at
-    // origin='engine'. The cursor's chapterIdx has moved but neither
-    // transitionedIn nor the non-engine check triggers. The chapter-
-    // mismatch detection here closes that gap.
-    if (chapterIdx !== lastAutoScrolledChapterRef.current) {
-      pendingScrollRef.current = true;
-    }
-
-    if (!pendingScrollRef.current) return;
-
-    let cancelled = false;
-    let rafHandle = 0;
-    let attempts = 0;
-    const maxAttempts = 120; // ~2 seconds at 60fps
-
-    const tryScroll = () => {
-      if (cancelled) return;
-      attempts += 1;
-      if (!pendingScrollRef.current) return;
-
-      // Pull segments and translate inside the loop — on TOC clicks
-      // the loader is mid-fetch and segments arrive several frames
-      // later. The poll naturally waits for them.
-      const segs = loaderState.segments;
-      const arrIdx = translators.absoluteToArrayIndex(absoluteSegmentIndex);
-      if (segs.length === 0 || arrIdx == null) {
-        if (attempts < maxAttempts) {
-          rafHandle = requestAnimationFrame(tryScroll);
-        }
-        return;
-      }
-
-      const container = handle.getScrollContainer();
-      const sectionEl = handle.getSectionEl(chapterIdx);
-      if (!container || !sectionEl) {
-        if (attempts < maxAttempts) {
-          rafHandle = requestAnimationFrame(tryScroll);
-        }
-        return;
-      }
-      // Wait until the section is actually laid out by the browser AND
-      // its body innerHTML has landed. We can't use a simple height
-      // threshold because some chapters (e.g., a "Book I" intro page)
-      // are intentionally tiny — just a title h1 of ~29px — and would
-      // be incorrectly classified as "still loading" by an 80-px gate.
-      // The right signal is:
-      //   1. The section has non-zero height (browser has laid it out)
-      //   2. Either the section has no body element at all (chunker
-      //      emitted no body) OR the body has been written (the
-      //      innerHTML-write effect tags the body with dataset.lastHtml
-      //      after writing).
-      if (!handle.isSectionReady(chapterIdx)) {
-        if (attempts < maxAttempts) {
-          rafHandle = requestAnimationFrame(tryScroll);
-        }
-        return;
-      }
-
-      const pendingTocTarget = pendingTocTargetRef.current;
-      if (
-        cursorOrigin === 'toc' &&
-        pendingTocTarget?.sectionIndex === chapterIdx &&
-        pendingTocTarget.htmlAnchor
-      ) {
-        const resolvedTocTarget = resolvePendingTocScrollTarget({
-          handle,
-          pendingTarget: pendingTocTarget,
-          sectionIdx: chapterIdx,
-          currentAbsoluteSegmentIndex: absoluteSegmentIndex,
-          segments: segs,
-          translators,
-        });
-        if (resolvedTocTarget) {
-          if (resolvedTocTarget.absoluteSegmentIndex != null) {
-            positionStore.setPosition(
-              { absoluteSegmentIndex: resolvedTocTarget.absoluteSegmentIndex, wordIndex: 0 },
-              'toc',
-            );
-          }
-          handle.beginProgrammaticScroll();
-          const cleanupProgrammatic = () => {
-            handle.endProgrammaticScroll();
-            resolvedTocTarget.container.removeEventListener('scrollend', cleanupProgrammatic as EventListener);
-          };
-          resolvedTocTarget.container.addEventListener('scrollend', cleanupProgrammatic as EventListener, { once: true });
-          setTimeout(cleanupProgrammatic, 600);
-          resolvedTocTarget.container.scrollTo({ top: resolvedTocTarget.scrollTop, behavior: 'auto' });
-          clearPendingTocTarget();
-          pendingScrollRef.current = false;
-          lastAutoScrolledChapterRef.current = chapterIdx;
-          return;
-        }
-      }
-
-      // Use the SAME highlight pipeline to get the segment's geometry —
-      // word-accurate when the matcher succeeds, proportional fallback
-      // when it doesn't. This guarantees the scroll target and the
-      // visible band stay aligned.
-      const info = handle.setHighlightForSegment(chapterIdx, arrIdx, segs);
-      if (!info) {
-        if (attempts < maxAttempts) {
-          rafHandle = requestAnimationFrame(tryScroll);
-        }
-        return;
-      }
-
-      const segCenterY = info.topPx + info.heightPx / 2;
-      const viewportH = container.clientHeight;
-      const targetScroll = segCenterY - viewportH * 0.4;
-      const maxScroll = Math.max(0, container.scrollHeight - viewportH);
-      const clamped = Math.max(0, Math.min(targetScroll, maxScroll));
-
-      // 'auto' (instant) for any deliberate jump — TOC click, prev/next
-      // chapter, restore, display-mode toggle, mode-switch, or the
-      // pause-from-phrase transition. 'smooth' for fine adjustments
-      // (user-seek via keyboard prev/next chunk).
-      const behavior: ScrollBehavior =
-        transitionedIn ||
-        cursorOrigin === 'restore' ||
-        cursorOrigin === 'display-mode' ||
-        cursorOrigin === 'mode-switch' ||
-        cursorOrigin === 'toc' ||
-        cursorOrigin === 'chapter-nav'
-          ? 'auto'
-          : 'smooth';
-      // Mark as a programmatic scroll BEFORE firing scrollTo. The
-      // pause-mode scroll listener and FormattedView's
-      // IntersectionObserver both consult this flag and suppress their
-      // callbacks while it's true. Without it, the scroll event from
-      // scrollTo triggers the listener (USER_SCROLL) and the IO
-      // (CHAPTER_NAV), both of which override the auto-scroll target
-      // before the user sees it land.
-      handle.beginProgrammaticScroll();
-      const cleanupProgrammatic = () => {
-        handle.endProgrammaticScroll();
-        container.removeEventListener('scrollend', cleanupProgrammatic as EventListener);
-      };
-      container.addEventListener('scrollend', cleanupProgrammatic as EventListener, { once: true });
-      // Fallback for browsers without scrollend (Safari < 18.2).
-      setTimeout(cleanupProgrammatic, 600);
-      container.scrollTo({ top: clamped, behavior });
-      pendingScrollRef.current = false;
-      lastAutoScrolledChapterRef.current = chapterIdx;
-    };
-
-    rafHandle = requestAnimationFrame(tryScroll);
-    return () => {
-      cancelled = true;
-      if (rafHandle) cancelAnimationFrame(rafHandle);
-    };
-  }, [
-    showFormattedView,
     absoluteSegmentIndex,
-    chapterIdx,
     cursorOrigin,
     cursorRevision,
-    clearPendingTocTarget,
-    loaderState.segments,
-    translators,
     layoutVersion,
-  ]);
+    segments: loaderState.segments,
+    translators,
+    formattedViewRef,
+    pendingTocTargetRef,
+    clearPendingTocTarget,
+  });
 
   const handlePrevChapter = useCallback(() => {
     if (chapterIdx > 0) navigateToSection(chapterIdx - 1);
@@ -776,70 +396,8 @@ function ActiveReader({
     if (chapterIdx < chapters.length - 1) navigateToSection(chapterIdx + 1);
   }, [chapterIdx, chapters.length, navigateToSection]);
 
-  /* ---- Pause-mode scroll listener (formatted view USER_SCROLL) ---- */
-  // Suppressed when handle.isProgrammaticScrollActive() is true so it
-  // doesn't catch our own auto-scroll's events and dispatch a
-  // USER_SCROLL that overrides the cursor.
-  // While paused in formatted view, manual scroll updates the cursor
-  // position. The controller's seekToAbs is the wrong primitive here
-  // because we want origin='user-scroll' (so the scroll-into-view
-  // effect skips), and we want to reuse the proportional cursor mapping.
-  useEffect(() => {
-    if (!showFormattedView) return;
-    if (isPlaying) return;
-    const handle = formattedViewRef.current;
-    if (!handle) return;
-    const container = handle.getScrollContainer();
-    if (!container) return;
-
-    let rafScheduled = false;
-    const onScroll = () => {
-      // Suppress while a programmatic scroll is in flight — the
-      // auto-scroll effect's container.scrollTo fires scroll events
-      // that we must NOT interpret as user input.
-      if (handle.isProgrammaticScrollActive()) return;
-      if (rafScheduled) return;
-      rafScheduled = true;
-      requestAnimationFrame(() => {
-        rafScheduled = false;
-        if (handle.isProgrammaticScrollActive()) return;
-        const sectionEl = handle.getSectionEl(chapterIdx);
-        if (!sectionEl) return;
-        const containerRect = container.getBoundingClientRect();
-        const sectionRect = sectionEl.getBoundingClientRect();
-        const sectionTop =
-          sectionRect.top - containerRect.top + container.scrollTop;
-        const centerY = container.scrollTop + container.clientHeight / 2;
-        if (centerY < sectionTop || centerY >= sectionTop + sectionRect.height) return;
-        const segs = loaderState.segments;
-        if (segs.length === 0) return;
-        const progress = (centerY - sectionTop) / sectionRect.height;
-        const arr = Math.min(
-          segs.length - 1,
-          Math.max(0, Math.floor(progress * segs.length)),
-        );
-        const abs = translators.arrayToAbsolute(arr);
-        if (abs == null) return;
-        if (abs === positionStore.getSnapshot().absoluteSegmentIndex) return;
-        positionStore.setPosition(
-          { absoluteSegmentIndex: abs, wordIndex: 0 },
-          'user-scroll',
-        );
-      });
-    };
-
-    container.addEventListener('scroll', onScroll, { passive: true });
-    return () => {
-      container.removeEventListener('scroll', onScroll);
-    };
-  }, [showFormattedView, isPlaying, chapterIdx, loaderState.segments, translators]);
-
   /* ---- Orientation resilience ---- */
-  useOrientationResilience(
-    useCallback(() => {
-      onPrefetchHint(activeArrayIdx);
-    }, [onPrefetchHint, activeArrayIdx]),
-  );
+  useOrientationResilience();
 
   /* ---- Keyboard handling ---- */
   const seekToArr = useCallback(
@@ -921,7 +479,7 @@ function ActiveReader({
       <ReaderHeader
         bookTitle={bookTitle}
         sectionTitle={currentChapter?.title ?? 'Untitled'}
-        displayMode={displayMode as ApiDisplayMode}
+        displayMode={displayMode}
         onToggleDisplayMode={isImageBook ? undefined : handleToggleDisplayMode}
         hideDisplayToggle={isImageBook}
         onOpenToc={() => setTocOpen(true)}
@@ -935,11 +493,6 @@ function ActiveReader({
         onJump={(idx, htmlAnchor) => navigateToSection(idx, htmlAnchor)}
         onClose={() => setTocOpen(false)}
       />
-      {isDataSaver && (
-        <div className="data-saver-indicator" aria-label="Data saver active">
-          Data Saver
-        </div>
-      )}
 
       {/* CBZ and PDF views are conditionally rendered (they're cheap and
           rarely used). The HTML FormattedView is ALWAYS mounted to avoid

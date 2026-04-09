@@ -64,6 +64,31 @@ export async function getImageBlob(
   return getImageBlob(pubId, name);
 }
 
+/**
+ * Resolve a stored image reference to a browser-usable URL.
+ * Logical image names are loaded from storage and turned into a fresh
+ * object URL; already-browser-readable URLs are passed through.
+ */
+export async function getImageUrl(
+  pubId: number,
+  imageRef: string,
+): Promise<string | null> {
+  if (!imageRef) return null;
+  if (
+    imageRef.startsWith('blob:') ||
+    imageRef.startsWith('data:') ||
+    imageRef.startsWith('http://') ||
+    imageRef.startsWith('https://') ||
+    imageRef.startsWith('/')
+  ) {
+    return imageRef;
+  }
+
+  const blob = await getImageBlob(pubId, imageRef);
+  if (!blob) return null;
+  return URL.createObjectURL(blob);
+}
+
 export type ImageBlobSource = 'opfs' | 'dexie' | 'native' | 'missing';
 
 /**

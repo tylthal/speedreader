@@ -1,6 +1,7 @@
 import path from 'path'
 import { fileURLToPath } from 'url'
 import { expect, test, type Page } from '@playwright/test'
+import { clearAppState, uploadBookAndWaitForReader } from './helpers'
 
 interface Snapshot {
   scrollTop: number | null
@@ -43,62 +44,11 @@ const CASES: TocCase[] = [
   },
 ]
 
-async function clearReaderState(page: Page) {
-  await page.goto('/', { waitUntil: 'domcontentloaded' })
-  await page.evaluate(async () => {
-    try {
-      localStorage.clear()
-      sessionStorage.clear()
-    } catch {}
-
-    try {
-      const dbs = (await indexedDB.databases?.()) ?? []
-      await Promise.all(
-        dbs.map(
-          (db) =>
-            new Promise<void>((resolve) => {
-              if (!db.name) return resolve()
-              const req = indexedDB.deleteDatabase(db.name)
-              req.onsuccess = () => resolve()
-              req.onerror = () => resolve()
-              req.onblocked = () => resolve()
-            }),
-        ),
-      )
-    } catch {}
-
-    try {
-      const root = await navigator.storage?.getDirectory?.()
-      if (root) {
-        for await (const [name] of root.entries()) {
-          await root.removeEntry(name, { recursive: true }).catch(() => {})
-        }
-      }
-    } catch {}
-  })
-  await page.reload({ waitUntil: 'domcontentloaded' })
-}
-
 async function uploadAndOpenBook(
   page: Page,
   filePath: string,
 ) {
-  await page.locator('input[type="file"]').setInputFiles(filePath)
-
-  const deadline = Date.now() + 180000
-  while (Date.now() < deadline) {
-    if (/\/read\/\d+/.test(page.url())) break
-    if (await page.locator('.reader-viewport').count()) break
-    if (await page.locator('[role="article"]').count()) {
-      await page.locator('[role="article"]').first().click()
-      await page.waitForTimeout(500)
-    } else {
-      await page.waitForTimeout(500)
-    }
-  }
-
-  await page.waitForURL(/\/read\/\d+/, { timeout: 30000 })
-  await page.waitForSelector('.reader-viewport', { timeout: 30000 })
+  await uploadBookAndWaitForReader(page, filePath, 180000)
   await page.waitForTimeout(6000)
 }
 
@@ -140,7 +90,7 @@ test.describe.configure({ mode: 'serial' })
 
 for (const book of CASES) {
   test(`${book.name} TOC navigation stays functional`, async ({ page }) => {
-    await clearReaderState(page)
+    await clearAppState(page)
     await uploadAndOpenBook(page, path.join(TESTBOOK_DIR, book.fileName))
 
     await expect(page.locator('.formatted-view a')).toHaveCount(0)

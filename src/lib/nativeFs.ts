@@ -153,7 +153,7 @@ export async function getImageBlob(
       path: `images/${pubId}/${name}`,
       directory: Directory.Data,
     });
-    return base64ToBlob(result.data as string, 'image/png');
+    return base64ToBlob(result.data as string, mimeFromPath(name));
   } catch {
     return null;
   }
@@ -192,4 +192,15 @@ function base64ToBlob(base64: string, mime: string): Blob {
   const arr = new Uint8Array(bytes.length);
   for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
   return new Blob([arr], { type: mime });
+}
+
+function mimeFromPath(path: string): string {
+  const lower = path.toLowerCase();
+  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
+  if (lower.endsWith('.gif')) return 'image/gif';
+  if (lower.endsWith('.webp')) return 'image/webp';
+  if (lower.endsWith('.svg')) return 'image/svg+xml';
+  if (lower.endsWith('.bmp')) return 'image/bmp';
+  if (lower.endsWith('.tiff') || lower.endsWith('.tif')) return 'image/tiff';
+  return 'image/png';
 }

@@ -1,14 +1,10 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { saveProgress } from '../api/client';
-import type { ReadingProgress } from '../api/client';
 import { positionStore, usePositionSelector } from '../state/position/positionStore';
+import { writeStoredProgress } from '../lib/readerProgress';
 
 interface UseProgressSaverOptions {
   publicationId: number;
-}
-
-function localStorageKey(pubId: number): string {
-  return `speedreader_progress_${pubId}`;
 }
 
 /**
@@ -46,23 +42,13 @@ export function useProgressSaver({ publicationId }: UseProgressSaverOptions): vo
       reading_mode: snap.mode,
     };
 
-    try {
-      const lsData: ReadingProgress = {
-        publication_id: publicationId,
-        chapter_id: snap.chapterId,
-        absolute_segment_index: snap.absoluteSegmentIndex,
-        word_index: snap.wordIndex,
-        wpm: snap.wpm,
-        reading_mode: snap.mode,
-        updated_at: new Date().toISOString(),
-        // BookCard reads the API response's segments_read; the localStorage
-        // value is a placeholder overwritten on the next API success.
-        segments_read: 0,
-      };
-      localStorage.setItem(localStorageKey(publicationId), JSON.stringify(lsData));
-    } catch {
-      /* storage full or unavailable */
-    }
+    writeStoredProgress(publicationId, {
+      chapterId: snap.chapterId,
+      absoluteSegmentIndex: snap.absoluteSegmentIndex,
+      wordIndex: snap.wordIndex,
+      wpm: snap.wpm,
+      readingMode: snap.mode,
+    });
 
     saveProgress(publicationId, data).catch(() => {});
   }, [publicationId]);
@@ -76,21 +62,13 @@ export function useProgressSaver({ publicationId }: UseProgressSaverOptions): vo
     const key = `${publicationId}:${chapterId}:${absoluteSegmentIndex}:${wordIndex}:${wpm}:${readingMode}`;
     if (key !== lastSavedKeyRef.current) {
       lastSavedKeyRef.current = key;
-      try {
-        const lsData: ReadingProgress = {
-          publication_id: publicationId,
-          chapter_id: chapterId,
-          absolute_segment_index: absoluteSegmentIndex,
-          word_index: wordIndex,
-          wpm,
-          reading_mode: readingMode,
-          updated_at: new Date().toISOString(),
-          segments_read: 0,
-        };
-        localStorage.setItem(localStorageKey(publicationId), JSON.stringify(lsData));
-      } catch {
-        /* storage full or unavailable */
-      }
+      writeStoredProgress(publicationId, {
+        chapterId,
+        absoluteSegmentIndex,
+        wordIndex,
+        wpm,
+        readingMode,
+      });
     }
 
     if (apiTimerRef.current) clearTimeout(apiTimerRef.current);
