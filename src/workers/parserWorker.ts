@@ -90,7 +90,12 @@ async function handleParse(req: ParseRequest) {
     post({ type: 'progress', id, phase: 'chunking', percent: 100 })
 
     const tocTree: SerializedTocNode[] | undefined = book.tocTree?.map(function map(n): SerializedTocNode {
-      return { title: n.title, sectionIndex: n.sectionIndex, children: n.children?.map(map) }
+      return {
+        title: n.title,
+        sectionIndex: n.sectionIndex,
+        htmlAnchor: n.htmlAnchor ?? null,
+        children: n.children?.map(map),
+      }
     })
 
     const result: WorkerResult = {

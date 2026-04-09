@@ -23,6 +23,8 @@ export interface TocNode {
   title: string
   /** Index into PublicationDetail.chapters; -1 for display-only parents. */
   section_index: number
+  /** Optional intra-section fragment target from EPUB NCX/nav data. */
+  html_anchor?: string | null
   children?: TocNode[]
 }
 

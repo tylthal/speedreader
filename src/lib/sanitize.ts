@@ -18,7 +18,6 @@ const ALLOWED_TAGS = new Set([
   'blockquote', 'q', 'cite',
   'ul', 'ol', 'li',
   'dl', 'dt', 'dd',
-  'a',
   'code', 'pre', 'kbd', 'samp', 'var',
   'img', 'figure', 'figcaption',
   'div', 'span',
@@ -26,16 +25,9 @@ const ALLOWED_TAGS = new Set([
 ])
 
 const ALLOWED_ATTRS: Record<string, Set<string>> = {
-  a: new Set(['href', 'title']),
   img: new Set(['src', 'alt', 'width', 'height']),
   td: new Set(['colspan', 'rowspan']),
   th: new Set(['colspan', 'rowspan']),
-}
-
-const SAFE_URL_RE = /^(https?:|mailto:|#|\/)/i
-
-function isSafeHref(href: string): boolean {
-  return SAFE_URL_RE.test(href.trim())
 }
 
 /**
@@ -58,18 +50,30 @@ function serializeNode(node: Node): string {
     return ''
   }
 
+  // EPUB bodies often use <a id="..."> / <a name="..."> as fragment
+  // targets, but interactive links are not useful in this reader. Unwrap
+  // the link while preserving the anchor target as a passive span so TOC
+  // fragment navigation still has a stable DOM target.
+  if (tag === 'a') {
+    const anchorId = el.getAttribute('id')?.trim() || el.getAttribute('name')?.trim() || ''
+    const children = serializeChildren(el)
+    if (!anchorId) return children
+    return `<span id="${escapeAttr(anchorId)}">${children}</span>`
+  }
+
   // Unwrap disallowed tags — keep their children.
   if (!ALLOWED_TAGS.has(tag)) {
     return serializeChildren(el)
   }
 
   const attrs: string[] = []
+  const anchorId = el.getAttribute('id')?.trim() || el.getAttribute('name')?.trim() || ''
+  if (anchorId) attrs.push(`id="${escapeAttr(anchorId)}"`)
   const allowed = ALLOWED_ATTRS[tag]
   if (allowed) {
     for (const name of allowed) {
       const value = el.getAttribute(name)
       if (value == null) continue
-      if (name === 'href' && !isSafeHref(value)) continue
       if (name === 'src') {
         // Allowed schemes for image src:
         //   opfs:        — `opfs:{name}` marker resolved by FormattedView

@@ -7,7 +7,7 @@ interface TocSidebarProps {
   /** Hierarchical TOC tree from NCX/PDF outline (PRD §6.4). */
   tocTree?: TocNode[] | null
   currentSectionIndex: number
-  onJump: (sectionIndex: number) => void
+  onJump: (sectionIndex: number, htmlAnchor?: string | null) => void
   onClose: () => void
 }
 
@@ -55,8 +55,8 @@ export default function TocSidebar({
             <TocTree
               nodes={tocTree!}
               currentSectionIndex={currentSectionIndex}
-              onJump={(idx) => {
-                onJump(idx)
+              onJump={(idx, htmlAnchor) => {
+                onJump(idx, htmlAnchor)
                 onClose()
               }}
             />
@@ -67,7 +67,7 @@ export default function TocSidebar({
                   <button
                     className={`toc-sidebar__item${idx === currentSectionIndex ? ' toc-sidebar__item--active' : ''}`}
                     onClick={() => {
-                      onJump(idx)
+                      onJump(idx, null)
                       onClose()
                     }}
                   >
@@ -88,7 +88,7 @@ export default function TocSidebar({
 interface TocTreeProps {
   nodes: TocNode[]
   currentSectionIndex: number
-  onJump: (sectionIndex: number) => void
+  onJump: (sectionIndex: number, htmlAnchor?: string | null) => void
   depth?: number
 }
 
@@ -116,7 +116,7 @@ function TocTreeItem({
 }: {
   node: TocNode
   currentSectionIndex: number
-  onJump: (sectionIndex: number) => void
+  onJump: (sectionIndex: number, htmlAnchor?: string | null) => void
   depth: number
 }) {
   const hasChildren = Array.isArray(node.children) && node.children.length > 0
@@ -145,7 +145,7 @@ function TocTreeItem({
         {isLeaf ? (
           <button
             className={`toc-sidebar__item${isActive ? ' toc-sidebar__item--active' : ''}`}
-            onClick={() => onJump(node.section_index)}
+            onClick={() => onJump(node.section_index, node.html_anchor ?? null)}
           >
             <span className="toc-sidebar__item-title">{node.title || 'Untitled'}</span>
           </button>

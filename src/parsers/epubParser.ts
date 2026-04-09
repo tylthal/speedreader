@@ -38,8 +38,43 @@ interface TocEntry {
   children?: TocEntry[]
 }
 
+function normalizePath(path: string): string {
+  const trimmed = path.trim().replace(/\\/g, '/')
+  if (!trimmed) return ''
+  const withoutHash = trimmed.split('#', 1)[0] ?? ''
+  const withoutQuery = withoutHash.split('?', 1)[0] ?? ''
+  const leadingSlash = withoutQuery.startsWith('/')
+  const out: string[] = []
+  for (const rawPart of withoutQuery.split('/')) {
+    const part = rawPart.trim()
+    if (!part || part === '.') continue
+    if (part === '..') {
+      out.pop()
+      continue
+    }
+    try {
+      out.push(decodeURIComponent(part))
+    } catch {
+      out.push(part)
+    }
+  }
+  const joined = out.join('/')
+  return leadingSlash ? joined.replace(/^\/+/, '') : joined
+}
+
+function normalizeTocFragment(fragment: string): string {
+  const trimmed = fragment.trim().replace(/^#/, '')
+  if (!trimmed) return ''
+  try {
+    return decodeURIComponent(trimmed)
+  } catch {
+    return trimmed
+  }
+}
+
 function resolvePath(base: string, relative: string): string {
-  if (relative.startsWith('/')) return relative.slice(1)
+  if (!relative.trim()) return normalizePath(base)
+  if (relative.startsWith('/')) return normalizePath(relative.slice(1))
   const baseParts = base.split('/')
   baseParts.pop()
   const relParts = relative.split('/')
@@ -47,7 +82,7 @@ function resolvePath(base: string, relative: string): string {
     if (part === '..') baseParts.pop()
     else if (part !== '.') baseParts.push(part)
   }
-  return baseParts.join('/')
+  return normalizePath(baseParts.join('/'))
 }
 
 function dirname(path: string): string {
@@ -90,7 +125,7 @@ function parseOpfManifest(opfDoc: Document, opfDir: string): Map<string, Manifes
     const href = item.getAttribute('href') ?? ''
     const mediaType = item.getAttribute('media-type') ?? ''
     const properties = item.getAttribute('properties') ?? ''
-    const fullHref = opfDir ? `${opfDir}/${href}` : href
+    const fullHref = normalizePath(opfDir ? `${opfDir}/${href}` : href)
     manifest.set(id, { id, href: fullHref, mediaType, properties })
   }
   return manifest
@@ -108,24 +143,41 @@ function parseOpfSpine(opfDoc: Document): SpineItem[] {
 }
 
 function parseNcx(tocDoc: Document, tocHref: string): TocEntry[] {
+  function localName(el: Element | null | undefined): string {
+    if (!el) return ''
+    return (el.localName || el.tagName || '').toLowerCase()
+  }
+
+  function directChildren(parent: Element, name: string): Element[] {
+    return Array.from(parent.children).filter((child) => localName(child) === name)
+  }
+
+  function firstDirectChild(parent: Element | null, name: string): Element | null {
+    if (!parent) return null
+    return directChildren(parent, name)[0] ?? null
+  }
+
   function walk(navPoints: Element[]): TocEntry[] {
     const entries: TocEntry[] = []
     for (const np of navPoints) {
-      const text = np.querySelector(':scope > navLabel > text')?.textContent?.trim() ?? ''
-      const src = np.querySelector(':scope > content')?.getAttribute('src') ?? ''
+      const navLabel = firstDirectChild(np, 'navlabel')
+      const text = firstDirectChild(navLabel, 'text')?.textContent?.trim() ?? ''
+      const src = firstDirectChild(np, 'content')?.getAttribute('src') ?? ''
       const parts = src.split('#')
-      const filename = resolvePath(tocHref, parts[0])
-      const childNavPoints = Array.from(np.querySelectorAll(':scope > navPoint'))
+      const filename = parts[0] ? resolvePath(tocHref, parts[0]) : ''
+      const childNavPoints = directChildren(np, 'navpoint')
       entries.push({
         filename,
-        fragment: parts[1] ?? '',
+        fragment: normalizeTocFragment(parts[1] ?? ''),
         title: text,
         children: childNavPoints.length ? walk(childNavPoints) : undefined,
       })
     }
     return entries
   }
-  const top = Array.from(tocDoc.querySelectorAll('navMap > navPoint'))
+  const navMap =
+    Array.from(tocDoc.getElementsByTagName('*')).find((el) => localName(el) === 'navmap') ?? null
+  const top = navMap ? directChildren(navMap, 'navpoint') : []
   return walk(top)
 }
 
@@ -139,15 +191,25 @@ function parseNavXhtml(navDoc: Document, navHref: string): TocEntry[] {
     const out: TocEntry[] = []
     for (const li of Array.from(ol.children)) {
       if (li.tagName.toLowerCase() !== 'li') continue
-      const a = li.querySelector(':scope > a')
+      const directChildren = Array.from(li.children)
+      const a = directChildren.find((child) => child.tagName.toLowerCase() === 'a') ?? null
+      const labelEl =
+        a ??
+        directChildren.find((child) => {
+          const tag = child.tagName.toLowerCase()
+          return tag !== 'ol' && tag !== 'ul'
+        }) ??
+        null
       const href = a?.getAttribute('href') ?? ''
-      const text = a?.textContent?.trim() ?? ''
+      const text = labelEl?.textContent?.trim() ?? li.textContent?.trim() ?? ''
       const parts = href.split('#')
-      const filename = resolvePath(navHref, parts[0])
-      const childList = li.querySelector(':scope > ol, :scope > ul')
+      const filename = parts[0] ? resolvePath(navHref, parts[0]) : ''
+      const childList =
+        directChildren.find((child) => child.tagName.toLowerCase() === 'ol' || child.tagName.toLowerCase() === 'ul') ??
+        null
       out.push({
         filename,
-        fragment: parts[1] ?? '',
+        fragment: normalizeTocFragment(parts[1] ?? ''),
         title: text,
         children: childList ? walkList(childList) : undefined,
       })
@@ -155,7 +217,10 @@ function parseNavXhtml(navDoc: Document, navHref: string): TocEntry[] {
     return out
   }
 
-  const list = tocNav.querySelector('ol, ul')
+  const list = Array.from(tocNav.children).find((child) => {
+    const tag = child.tagName.toLowerCase()
+    return tag === 'ol' || tag === 'ul'
+  })
   return list ? walkList(list) : []
 }
 
@@ -307,17 +372,32 @@ export async function parseEpub(data: ArrayBuffer): Promise<ParsedBook> {
   const { images: parsedImages, byHref: imagesByHref, byBasename: imagesByBasename } =
     await buildImageManifest(zip, manifest)
 
-  // Resolve TOC (NCX preferred, nav fallback).
+  // Resolve TOC (NCX preferred, nav fallback). Some EPUBs label NCX as
+  // `text/xml`, so we also respect the spine's `toc=` id and `.ncx` hrefs.
   let tocEntries: TocEntry[] = []
-  let tocHrefForLog = ''
+  const spineTocId = opfDoc.querySelector('spine')?.getAttribute('toc') ?? ''
+  const ncxCandidates: ManifestItem[] = []
+  if (spineTocId) {
+    const spineTocItem = manifest.get(spineTocId)
+    if (spineTocItem) ncxCandidates.push(spineTocItem)
+  }
   for (const item of manifest.values()) {
-    if (item.mediaType === 'application/x-dtbncx+xml') {
-      const tocXml = await zip.file(item.href)?.async('text')
-      if (tocXml) {
-        const tocDoc = new DOMParser().parseFromString(tocXml, 'application/xml')
-        tocEntries = parseNcx(tocDoc, item.href)
-        tocHrefForLog = item.href
-      }
+    const hrefLower = item.href.toLowerCase()
+    const mediaLower = item.mediaType.toLowerCase()
+    const isNcxLike =
+      mediaLower === 'application/x-dtbncx+xml' ||
+      mediaLower === 'text/xml' ||
+      hrefLower.endsWith('.ncx')
+    if (!isNcxLike) continue
+    if (!ncxCandidates.includes(item)) ncxCandidates.push(item)
+  }
+  for (const item of ncxCandidates) {
+    const tocXml = await zip.file(item.href)?.async('text')
+    if (!tocXml) continue
+    const tocDoc = new DOMParser().parseFromString(tocXml, 'application/xml')
+    const parsed = parseNcx(tocDoc, item.href)
+    if (parsed.length) {
+      tocEntries = parsed
       break
     }
   }
@@ -328,13 +408,11 @@ export async function parseEpub(data: ArrayBuffer): Promise<ParsedBook> {
         if (navXml) {
           const navDoc = new DOMParser().parseFromString(navXml, 'text/html')
           tocEntries = parseNavXhtml(navDoc, item.href)
-          tocHrefForLog = item.href
           if (tocEntries.length) break
         }
       }
     }
   }
-  void tocHrefForLog
 
   // Build a flat title lookup keyed by spine filename so per-section titles
   // can be resolved without walking the tree.
@@ -379,9 +457,18 @@ export async function parseEpub(data: ArrayBuffer): Promise<ParsedBook> {
   // Build the TOC tree with section indices for the sidebar.
   function mapTocTree(entries: TocEntry[]): TocNode[] {
     return entries.map((e) => {
-      const sectionIndex = spineHrefToSectionIdx.get(e.filename) ?? -1
       const children = e.children?.length ? mapTocTree(e.children) : undefined
-      return { title: e.title || 'Untitled', sectionIndex, children }
+      let sectionIndex = spineHrefToSectionIdx.get(e.filename) ?? -1
+      if (sectionIndex < 0 && children?.length) {
+        const firstMappedChild = children.find((child) => child.sectionIndex >= 0)
+        if (firstMappedChild) sectionIndex = firstMappedChild.sectionIndex
+      }
+      return {
+        title: e.title || 'Untitled',
+        sectionIndex,
+        htmlAnchor: e.fragment || null,
+        children,
+      }
     })
   }
   const tocTree = tocEntries.length ? mapTocTree(tocEntries) : undefined

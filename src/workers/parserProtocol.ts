@@ -42,6 +42,7 @@ export interface SerializedSection {
 export interface SerializedTocNode {
   title: string
   sectionIndex: number
+  htmlAnchor?: string | null
   children?: SerializedTocNode[]
 }
 

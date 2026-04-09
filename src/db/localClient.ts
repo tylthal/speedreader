@@ -166,7 +166,12 @@ async function runParse(
   }))
 
   const tocTree: SerializedTocNode[] | undefined = book.tocTree?.map(function map(n): SerializedTocNode {
-    return { title: n.title, sectionIndex: n.sectionIndex, children: n.children?.map(map) }
+    return {
+      title: n.title,
+      sectionIndex: n.sectionIndex,
+      htmlAnchor: n.htmlAnchor ?? null,
+      children: n.children?.map(map),
+    }
   })
 
   return {
@@ -449,11 +454,22 @@ export class LocalClient implements SpeedReaderClient {
     // Convert the parser-side TocNode (camelCase) to the API surface
     // shape (snake_case). The two types intentionally diverge so the parser
     // doesn't leak into UI imports.
-    type RawTocNode = { title: string; sectionIndex: number; children?: RawTocNode[] }
-    type ApiTocNode = { title: string; section_index: number; children?: ApiTocNode[] }
+    type RawTocNode = {
+      title: string
+      sectionIndex: number
+      htmlAnchor?: string | null
+      children?: RawTocNode[]
+    }
+    type ApiTocNode = {
+      title: string
+      section_index: number
+      html_anchor?: string | null
+      children?: ApiTocNode[]
+    }
     const convert = (n: RawTocNode): ApiTocNode => ({
       title: n.title,
       section_index: n.sectionIndex,
+      html_anchor: n.htmlAnchor ?? null,
       children: n.children?.map(convert),
     })
     let tocTree: ApiTocNode[] | null = null

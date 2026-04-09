@@ -87,6 +87,15 @@ export interface HighlightInfo {
   accurate: boolean
 }
 
+export interface TocTargetInfo {
+  topPx: number
+  /**
+   * Best-effort segment array index nearest the TOC target. Null means the
+   * DOM target exists but couldn't be matched to a specific reader segment.
+   */
+  arrIdx: number | null
+}
+
 /**
  * Imperative handle exposed via forwardRef. The surface stays minimal —
  * ReaderViewport reaches in for the things that can't be expressed as
@@ -103,6 +112,11 @@ export interface FormattedViewHandle {
     arrIdx: number,
     segments: ReadonlyArray<HighlightSegment>,
   ) => HighlightInfo | null
+  resolveTocTarget: (
+    sectionIdx: number,
+    htmlAnchor: string | null | undefined,
+    segments: ReadonlyArray<HighlightSegment>,
+  ) => TocTargetInfo | null
   /** Mark a window of programmatic scrolling so the IntersectionObserver
    *  inside FormattedView and the pause-mode scroll listener in
    *  ReaderViewport both know to suppress their callbacks. The auto-
@@ -151,6 +165,30 @@ const LEADING_HEADING_RE =
 function bodyHasLeadingHeading(html: string | null | undefined): boolean {
   if (!html) return false
   return LEADING_HEADING_RE.test(html)
+}
+
+function escapeAttributeValue(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+}
+
+function findAnchorElement(sectionEl: HTMLElement, htmlAnchor: string): HTMLElement | null {
+  const normalized = htmlAnchor.trim()
+  if (!normalized) return null
+  return (
+    sectionEl.querySelector(`[id="${escapeAttributeValue(normalized)}"]`) as HTMLElement | null
+  ) ?? (
+    sectionEl.querySelector(`[name="${escapeAttributeValue(normalized)}"]`) as HTMLElement | null
+  )
+}
+
+function normalizeHtmlAnchor(value: string | null | undefined): string {
+  const trimmed = (value ?? '').trim().replace(/^#/, '')
+  if (!trimmed) return ''
+  try {
+    return decodeURIComponent(trimmed)
+  } catch {
+    return trimmed
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -779,6 +817,64 @@ const FormattedView = forwardRef<FormattedViewHandle, FormattedViewProps>(functi
         }
         setHighlightRects([fallbackRect])
         return { ...fallback, accurate: false }
+      },
+      resolveTocTarget: (sectionIdx, htmlAnchor, segments) => {
+        const container = containerRef.current
+        const sectionEl = sectionRefs.current.get(sectionIdx)
+        if (!container || !sectionEl) return null
+
+        const sectionRect = sectionEl.getBoundingClientRect()
+        if (sectionRect.height === 0) return null
+        const bodyEl = sectionEl.querySelector(
+          '.formatted-view__body',
+        ) as HTMLElement | null
+        if (bodyEl && bodyEl.dataset.lastHtml === undefined) return null
+
+        const anchor = normalizeHtmlAnchor(htmlAnchor)
+        if (!anchor) {
+          const sectionTop =
+            sectionRect.top - container.getBoundingClientRect().top + container.scrollTop
+          return { topPx: sectionTop, arrIdx: 0 }
+        }
+
+        const anchorEl = findAnchorElement(sectionEl, anchor)
+        if (!anchorEl) return null
+
+        const containerRect = container.getBoundingClientRect()
+        const anchorRect = anchorEl.getBoundingClientRect()
+        const anchorTop = anchorRect.top - containerRect.top + container.scrollTop
+
+        let index = segmentIndexRef.current.get(sectionIdx)
+        if (!index) {
+          index = buildSegmentRangeIndex(sectionEl, segments)
+          segmentIndexRef.current.set(sectionIdx, index)
+        }
+
+        let bestArrIdx: number | null = null
+        let bestDistance = Infinity
+        for (let i = 0; i < index.length; i++) {
+          const range = index[i]
+          if (!range) continue
+          const rects = materializeRangeRects(range, container)
+          if (rects.length === 0) continue
+          let topMin = Infinity
+          let bottomMax = -Infinity
+          for (const r of rects) {
+            if (r.topPx < topMin) topMin = r.topPx
+            if (r.topPx + r.heightPx > bottomMax) bottomMax = r.topPx + r.heightPx
+          }
+          if (anchorTop <= bottomMax) {
+            bestArrIdx = i
+            break
+          }
+          const distance = Math.abs(anchorTop - topMin)
+          if (distance < bestDistance) {
+            bestDistance = distance
+            bestArrIdx = i
+          }
+        }
+
+        return { topPx: anchorTop, arrIdx: bestArrIdx }
       },
     }),
     // velocityProfileRef is stable across renders (it's a ref) so we don't

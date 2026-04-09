@@ -46,6 +46,8 @@ export interface TocNode {
   title: string
   /** Index into ParsedBook.sections. -1 for display-only parent groupings. */
   sectionIndex: number
+  /** Optional intra-section fragment target from EPUB NCX/nav data. */
+  htmlAnchor?: string | null
   children?: TocNode[]
 }
 
