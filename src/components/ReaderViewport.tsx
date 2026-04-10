@@ -66,6 +66,30 @@ interface PreferredTocLocation {
 
 const preferredTocLocationByPublication = new Map<number, PreferredTocLocation>()
 
+function escapeAttributeValue(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+}
+
+function normalizeHtmlAnchor(value: string | null | undefined): string {
+  const trimmed = (value ?? '').trim().replace(/^#/, '')
+  if (!trimmed) return ''
+  try {
+    return decodeURIComponent(trimmed)
+  } catch {
+    return trimmed
+  }
+}
+
+function findAnchorElement(sectionEl: HTMLElement, htmlAnchor: string): HTMLElement | null {
+  const normalized = htmlAnchor.trim()
+  if (!normalized) return null
+  return (
+    sectionEl.querySelector(`[id="${escapeAttributeValue(normalized)}"]`) as HTMLElement | null
+  ) ?? (
+    sectionEl.querySelector(`[name="${escapeAttributeValue(normalized)}"]`) as HTMLElement | null
+  )
+}
+
 /* ------------------------------------------------------------------ */
 /*  ReaderViewport — Phase 1: load + seed positionStore                */
 /* ------------------------------------------------------------------ */
@@ -148,6 +172,7 @@ function ActiveReader({
   const cursorRevision = usePositionSelector((s) => s.revision);
 
   const [tocOpen, setTocOpen] = useState(false);
+  const [visualActiveTocLocationKey, setVisualActiveTocLocationKey] = useState<string | null>(null);
   const [preferredTocLocation, setPreferredTocLocationState] = useState<PreferredTocLocation>(
     () =>
       preferredTocLocationByPublication.get(publicationId) ?? {
@@ -372,14 +397,13 @@ function ActiveReader({
     () => new Map(flatTocLocations.map((entry) => [entry.key, entry.title])),
     [flatTocLocations],
   );
-  const activeTocLocationKey = useMemo(() => {
+  const currentSectionTocLocations = useMemo(
+    () => flatTocLocations.filter((entry) => entry.sectionIndex === chapterIdx),
+    [chapterIdx, flatTocLocations],
+  );
+  const sectionTocLocationKey = useMemo(() => {
     if (preferredTocLocation.key) return preferredTocLocation.key;
     if (flatTocLocations.length === 0) return `${chapterIdx}`;
-
-    const canResolveAnchors =
-      tocOpen &&
-      loaderState.segments.length > 0 &&
-      formattedViewRef.current?.isSectionReady(chapterIdx);
 
     return (
       selectActiveTocLocationKey({
@@ -387,25 +411,94 @@ function ActiveReader({
         currentSectionIndex: chapterIdx,
         currentArrayIndex: translators.absoluteToArrayIndex(absoluteSegmentIndex),
         preferredKey: null,
-        resolveArrayIndex: canResolveAnchors
-          ? (entry) => (
-              formattedViewRef.current?.resolveTocTarget(
-                entry.sectionIndex,
-                entry.htmlAnchor,
-                loaderState.segments,
-              )?.arrIdx ?? null
-            )
-          : null,
-      }) ?? `${chapterIdx}`
+        resolveArrayIndex: null,
+      }) ?? currentSectionTocLocations[0]?.key ?? `${chapterIdx}`
     );
   }, [
     preferredTocLocation.key,
     flatTocLocations,
     chapterIdx,
-    tocOpen,
-    loaderState.segments,
     translators,
     absoluteSegmentIndex,
+    currentSectionTocLocations,
+  ]);
+  const activeTocLocationKey =
+    preferredTocLocation.key ??
+    visualActiveTocLocationKey ??
+    sectionTocLocationKey;
+
+  useEffect(() => {
+    setVisualActiveTocLocationKey(null);
+  }, [chapterIdx, absoluteSegmentIndex, preferredTocLocation.key]);
+
+  useEffect(() => {
+    if (!tocOpen) return;
+    if (preferredTocLocation.key) return;
+    if (currentSectionTocLocations.length <= 1) return;
+
+    const handle = formattedViewRef.current;
+    if (!handle?.isSectionReady(chapterIdx)) return;
+
+    const container = handle.getScrollContainer();
+    const sectionEl = handle.getSectionEl(chapterIdx);
+    if (!container || !sectionEl) return;
+
+    let cancelled = false;
+    let rafId = 0;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+    const resolveActiveKey = () => {
+      if (cancelled) return;
+
+      const containerRect = container.getBoundingClientRect();
+      const sectionRect = sectionEl.getBoundingClientRect();
+      const sectionTop = sectionRect.top - containerRect.top + container.scrollTop;
+      const focusTop = container.scrollTop + container.clientHeight * 0.4;
+
+      let activeKey: string | null = currentSectionTocLocations[0]?.key ?? null;
+      let firstFutureKey: string | null = null;
+
+      for (const entry of currentSectionTocLocations) {
+        let targetTop = sectionTop;
+        const anchor = normalizeHtmlAnchor(entry.htmlAnchor);
+        if (anchor) {
+          const anchorEl = findAnchorElement(sectionEl, anchor);
+          if (!anchorEl) continue;
+          const anchorRect = anchorEl.getBoundingClientRect();
+          targetTop = anchorRect.top - containerRect.top + container.scrollTop;
+        }
+
+        if (targetTop <= focusTop) {
+          activeKey = entry.key;
+          continue;
+        }
+
+        firstFutureKey = entry.key;
+        break;
+      }
+
+      const nextKey = activeKey ?? firstFutureKey ?? currentSectionTocLocations[0]?.key ?? null;
+      if (!cancelled) {
+        setVisualActiveTocLocationKey((prev) => (prev === nextKey ? prev : nextKey));
+      }
+    };
+
+    rafId = requestAnimationFrame(() => {
+      timeoutId = setTimeout(resolveActiveKey, 0);
+    });
+
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(rafId);
+      if (timeoutId) clearTimeout(timeoutId);
+    };
+  }, [
+    tocOpen,
+    preferredTocLocation.key,
+    currentSectionTocLocations,
+    chapterIdx,
+    absoluteSegmentIndex,
+    layoutVersion,
   ]);
 
   /* ---- Mode switching: just dispatch ---- */

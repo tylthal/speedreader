@@ -453,6 +453,15 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
     })
   }, [chapters, imageMap, imagesReady])
 
+  const prioritySectionIndexes = useMemo(() => {
+    if (chapters.length === 0) return []
+    const indexes = new Set<number>()
+    indexes.add(currentSectionIndex)
+    if (currentSectionIndex > 0) indexes.add(currentSectionIndex - 1)
+    if (currentSectionIndex < chapters.length - 1) indexes.add(currentSectionIndex + 1)
+    return [...indexes].sort((a, b) => a - b)
+  }, [chapters.length, currentSectionIndex])
+
   // We set the section body innerHTML *imperatively* via a ref, NOT through
   // dangerouslySetInnerHTML. React 19's reconciler appears to track img
   // elements inside dangerouslySetInnerHTML and "fix" their src attributes
@@ -462,31 +471,65 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
   const bodyRefs = useRef<Map<number, HTMLDivElement>>(new Map())
   useEffect(() => {
     if (!rewrittenSections) return
-    let didWrite = false
-    for (const { idx, html } of rewrittenSections) {
+    let cancelled = false
+    let pendingTimeout: ReturnType<typeof setTimeout> | null = null
+    let pendingRaf = 0
+
+    const sectionHtmlByIndex = new Map(rewrittenSections.map(({ idx, html }) => [idx, html]))
+    const deferredIndexes = rewrittenSections
+      .map(({ idx }) => idx)
+      .filter((idx) => !prioritySectionIndexes.includes(idx))
+
+    const writeSection = (idx: number): boolean => {
+      const html = sectionHtmlByIndex.get(idx)
+      if (html == null) return false
       const el = bodyRefs.current.get(idx)
-      if (!el) continue
-      if (el.dataset.lastHtml === html) continue
+      if (!el) return false
+      if (el.dataset.lastHtml === html) return false
       el.innerHTML = html
       el.dataset.lastHtml = html
-      // Invalidate the segment-range cache for this section — the
-      // text nodes the cached ranges referenced have just been
-      // replaced. The cache is rebuilt on the next
-      // setHighlightForSegment call for this section.
       segmentIndexRef.current.delete(idx)
-      didWrite = true
+      return true
     }
-    if (didWrite) {
-      // Wait one frame for the browser to lay out the new HTML, then rebuild
-      // the velocity profile. Layout might not be final (images still
-      // decoding), but the ResizeObserver below will catch any subsequent
-      // shifts and rebuild again — and the play-time settleImages() path
-      // will force a rebuild before the engine starts.
-      requestAnimationFrame(() => {
+
+    const scheduleProfileRebuild = () => {
+      if (pendingRaf) return
+      pendingRaf = requestAnimationFrame(() => {
+        pendingRaf = 0
         rebuildProfileNow()
       })
     }
-  }, [rewrittenSections])
+
+    let didWritePriority = false
+    for (const idx of prioritySectionIndexes) {
+      didWritePriority = writeSection(idx) || didWritePriority
+    }
+    if (didWritePriority) scheduleProfileRebuild()
+
+    const flushDeferred = () => {
+      if (cancelled) return
+      let wroteChunk = false
+      for (let i = 0; i < 4 && deferredIndexes.length > 0; i += 1) {
+        const idx = deferredIndexes.shift()
+        if (idx == null) break
+        wroteChunk = writeSection(idx) || wroteChunk
+      }
+      if (wroteChunk) scheduleProfileRebuild()
+      if (deferredIndexes.length > 0) {
+        pendingTimeout = setTimeout(flushDeferred, 16)
+      }
+    }
+
+    if (deferredIndexes.length > 0) {
+      pendingTimeout = setTimeout(flushDeferred, 16)
+    }
+
+    return () => {
+      cancelled = true
+      if (pendingTimeout) clearTimeout(pendingTimeout)
+      if (pendingRaf) cancelAnimationFrame(pendingRaf)
+    }
+  }, [prioritySectionIndexes, rewrittenSections])
 
   // ---- Velocity profile build ---------------------------------------------
   //

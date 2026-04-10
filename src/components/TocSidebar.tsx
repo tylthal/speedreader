@@ -34,46 +34,66 @@ function TocSidebar({
   onJump,
   onClose,
 }: TocSidebarProps) {
-  if (!open) return null
-
   const useTree = Array.isArray(tocTree) && tocTree.length > 0
-  const navRef = useRef<HTMLElement | null>(null)
   const listRef = useRef<List>(null)
-  const [contentReady, setContentReady] = useState(false)
-  const [navHeight, setNavHeight] = useState(0)
+  const [listHeight, setListHeight] = useState(360)
+
+  const flatTreeRows = useMemo(() => flattenLeafRows(tocTree ?? null), [tocTree])
+  const useVirtualTreeRows =
+    useTree &&
+    flatTreeRows.length > 0 &&
+    flatTreeRows.every((row) => row.depth === 0 && !row.hasChildren && row.isLeaf)
+  const virtualRows = useMemo<VirtualTocRow[]>(() => {
+    if (useVirtualTreeRows) {
+      return flatTreeRows.map((row) => ({
+        key: row.key,
+        title: row.title || 'Untitled',
+        sectionIndex: row.sectionIndex,
+        htmlAnchor: row.htmlAnchor,
+        depth: row.depth,
+      }))
+    }
+
+    if (useTree) return []
+
+    return chapters.map((chapter, index) => ({
+      key: `${index}`,
+      title: chapter.title || 'Untitled',
+      sectionIndex: index,
+      htmlAnchor: null,
+      depth: 0,
+    }))
+  }, [chapters, flatTreeRows, useTree, useVirtualTreeRows])
 
   useEffect(() => {
-    setContentReady(false)
-    const raf = requestAnimationFrame(() => setContentReady(true))
-    return () => cancelAnimationFrame(raf)
-  }, [])
-
-  useEffect(() => {
-    const navEl = navRef.current
-    if (!navEl) return
+    if (useTree && !useVirtualTreeRows) return
 
     const updateHeight = () => {
-      const nextHeight = Math.max(160, Math.floor(navEl.getBoundingClientRect().height))
-      setNavHeight((prev) => (prev === nextHeight ? prev : nextHeight))
+      const viewportHeight = window.visualViewport?.height ?? window.innerHeight
+      const nextHeight = Math.max(160, Math.floor(viewportHeight - 84))
+      setListHeight((prev) => (prev === nextHeight ? prev : nextHeight))
     }
 
     updateHeight()
-    const observer = new ResizeObserver(updateHeight)
-    observer.observe(navEl)
-    return () => observer.disconnect()
-  }, [])
+    window.visualViewport?.addEventListener('resize', updateHeight)
+    window.addEventListener('resize', updateHeight)
+    return () => {
+      window.visualViewport?.removeEventListener('resize', updateHeight)
+      window.removeEventListener('resize', updateHeight)
+    }
+  }, [useTree, useVirtualTreeRows])
 
   const activeFlatIndex = useMemo(() => {
-    return chapters.findIndex((ch, idx) => (
-      `${idx}` === activeLocationKey ||
+    return virtualRows.findIndex((row) => (
+      row.key === activeLocationKey ||
       (
-        activeLocationTitle === (ch.title || 'Untitled') &&
-        activeLocationSectionIndex === idx &&
-        (activeLocationAnchor ?? null) == null
+        activeLocationTitle === row.title &&
+        activeLocationSectionIndex === row.sectionIndex &&
+        (activeLocationAnchor ?? null) === row.htmlAnchor
       )
     ))
   }, [
-    chapters,
+    virtualRows,
     activeLocationKey,
     activeLocationTitle,
     activeLocationSectionIndex,
@@ -81,17 +101,28 @@ function TocSidebar({
   ])
 
   useEffect(() => {
-    if (!contentReady) return
-    if (useTree) return
+    if (!open) return
+    if (useTree && !useVirtualTreeRows) return
     if (activeFlatIndex < 0) return
-    listRef.current?.scrollToItem(activeFlatIndex, 'center')
-  }, [contentReady, useTree, activeFlatIndex])
+    let rafId = 0
+    let timeoutId: ReturnType<typeof setTimeout> | null = null
+    rafId = requestAnimationFrame(() => {
+      timeoutId = setTimeout(() => {
+        listRef.current?.scrollToItem(activeFlatIndex, 'center')
+      }, 0)
+    })
+    return () => {
+      cancelAnimationFrame(rafId)
+      if (timeoutId) clearTimeout(timeoutId)
+    }
+  }, [open, useTree, useVirtualTreeRows, activeFlatIndex])
 
   return (
     <div
-      className="toc-sidebar"
-      role="dialog"
-      aria-modal="true"
+      className={`toc-sidebar${open ? ' toc-sidebar--open' : ' toc-sidebar--closed'}`}
+      role={open ? 'dialog' : undefined}
+      aria-modal={open ? 'true' : undefined}
+      aria-hidden={open ? undefined : 'true'}
       aria-label="Table of contents"
     >
       <div className="toc-sidebar__backdrop" onClick={onClose} />
@@ -107,12 +138,8 @@ function TocSidebar({
           </button>
         </header>
 
-        <nav className="toc-sidebar__nav" ref={navRef}>
-          {!contentReady ? (
-            <div className="toc-sidebar__loading" role="status" aria-live="polite">
-              Loading contents...
-            </div>
-          ) : useTree ? (
+        <nav className="toc-sidebar__nav">
+          {useTree && !useVirtualTreeRows ? (
             <TocTree
               nodes={tocTree!}
               activeLocationKey={activeLocationKey ?? null}
@@ -128,13 +155,13 @@ function TocSidebar({
             <List
               ref={listRef}
               className="toc-sidebar__virtual-list"
-              height={Math.max(160, navHeight)}
+              height={listHeight}
               width="100%"
-              itemCount={chapters.length}
+              itemCount={virtualRows.length}
               itemSize={46}
               overscanCount={10}
               itemData={{
-                chapters,
+                rows: virtualRows,
                 activeLocationKey: activeLocationKey ?? null,
                 activeLocationTitle: activeLocationTitle ?? null,
                 activeLocationSectionIndex: activeLocationSectionIndex ?? null,
@@ -153,7 +180,7 @@ function TocSidebar({
 }
 
 interface FlatTocRowData {
-  chapters: Chapter[]
+  rows: VirtualTocRow[]
   activeLocationKey: string | null
   activeLocationTitle: string | null
   activeLocationSectionIndex: number | null
@@ -167,34 +194,71 @@ function FlatTocRow({
   style,
   data,
 }: ListChildComponentProps<FlatTocRowData>) {
-  const chapter = data.chapters[index]
-  const tocKey = `${index}`
+  const row = data.rows[index]
+  if (!row) return null
   const isActive =
-    tocKey === data.activeLocationKey ||
+    row.key === data.activeLocationKey ||
     (
-      data.activeLocationTitle === (chapter.title || 'Untitled') &&
-      data.activeLocationSectionIndex === index &&
-      (data.activeLocationAnchor ?? null) == null
+      data.activeLocationTitle === row.title &&
+      data.activeLocationSectionIndex === row.sectionIndex &&
+      (data.activeLocationAnchor ?? null) === row.htmlAnchor
     )
 
   return (
     <div style={style} className="toc-sidebar__virtual-row">
       <button
         className={`toc-sidebar__item${isActive ? ' toc-sidebar__item--active' : ''}`}
-        data-toc-key={tocKey}
-        data-section-index={index}
-        data-html-anchor=""
+        data-toc-key={row.key}
+        data-section-index={row.sectionIndex}
+        data-html-anchor={row.htmlAnchor ?? ''}
         onClick={() => {
-          data.onJump(index, null, tocKey)
+          data.onJump(row.sectionIndex, row.htmlAnchor, row.key)
           data.onClose()
         }}
       >
         <span className="toc-sidebar__item-title">
-          {chapter.title || 'Untitled'}
+          {row.title}
         </span>
       </button>
     </div>
   )
+}
+
+interface VirtualTocRow {
+  key: string
+  title: string
+  sectionIndex: number
+  htmlAnchor: string | null
+  depth: number
+}
+
+interface FlatTreeRow extends VirtualTocRow {
+  hasChildren: boolean
+  isLeaf: boolean
+}
+
+function flattenLeafRows(
+  nodes: TocNode[] | null,
+  parentKey = '',
+  depth = 0,
+): FlatTreeRow[] {
+  if (!nodes?.length) return []
+
+  return nodes.flatMap((node, index) => {
+    const key = parentKey ? `${parentKey}.${index}` : `${index}`
+    const hasChildren = Array.isArray(node.children) && node.children.length > 0
+    const row: FlatTreeRow = {
+      key,
+      title: node.title || 'Untitled',
+      sectionIndex: node.section_index,
+      htmlAnchor: node.html_anchor?.trim() ? node.html_anchor : null,
+      depth,
+      hasChildren,
+      isLeaf: node.section_index >= 0,
+    }
+
+    return [row, ...flattenLeafRows(node.children ?? null, key, depth + 1)]
+  })
 }
 
 interface TocTreeProps {
@@ -260,8 +324,11 @@ function TocTreeItem({
   depth: number
 }) {
   const hasChildren = Array.isArray(node.children) && node.children.length > 0
-  const [expanded, setExpanded] = useState(true)
   const isLeaf = node.section_index >= 0
+  const activeBranch =
+    activeLocationKey === nodeKey ||
+    (activeLocationKey?.startsWith(`${nodeKey}.`) ?? false)
+  const [expanded, setExpanded] = useState(() => depth === 0 || activeBranch)
   const isActive =
     activeLocationKey === nodeKey ||
     (
