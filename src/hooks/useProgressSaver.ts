@@ -50,7 +50,9 @@ export function useProgressSaver({ publicationId }: UseProgressSaverOptions): vo
       readingMode: snap.mode,
     });
 
-    saveProgress(publicationId, data).catch(() => {});
+    saveProgress(publicationId, data).catch((err) => {
+      if (import.meta.env.DEV) console.warn('[ProgressSaver] API save failed:', err);
+    });
   }, [publicationId]);
 
   // Save on cursor change — localStorage immediate, API debounced.

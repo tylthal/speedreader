@@ -5,6 +5,7 @@ import SettingsPage from './pages/SettingsPage'
 import ReaderPage from './pages/ReaderPage'
 import BottomNav from './components/BottomNav'
 import OfflineStatusToast from './components/OfflineStatusToast'
+import UpdateToast from './components/UpdateToast'
 import InstallNudgeBanner from './components/InstallNudgeBanner'
 import PerfOverlay from './components/PerfOverlay'
 import { A11yAnnouncerProvider } from './components/A11yAnnouncer'
@@ -22,6 +23,7 @@ export default function App() {
     <A11yAnnouncerProvider>
       <a href="#main-content" className="skip-link">Skip to content</a>
       <OfflineStatusToast />
+      <UpdateToast />
       <InstallNudgeBanner />
       <PerfOverlay />
       <div className={`app-shell${showNav ? ' app-shell--with-nav' : ''}`}>

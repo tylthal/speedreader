@@ -1,0 +1,61 @@
+import { useState, useEffect, useCallback } from 'react'
+
+/**
+ * Detects when a new service worker is waiting and provides a function
+ * to activate it. Works with vite-plugin-pwa's autoUpdate registration.
+ */
+export function useServiceWorkerUpdate() {
+  const [updateAvailable, setUpdateAvailable] = useState(false)
+
+  useEffect(() => {
+    if (!('serviceWorker' in navigator)) return
+
+    const checkForUpdate = async () => {
+      try {
+        const reg = await navigator.serviceWorker.getRegistration()
+        if (!reg) return
+
+        // New SW already waiting
+        if (reg.waiting) {
+          setUpdateAvailable(true)
+          return
+        }
+
+        // Listen for new SW becoming available
+        reg.addEventListener('updatefound', () => {
+          const newSW = reg.installing
+          if (!newSW) return
+
+          newSW.addEventListener('statechange', () => {
+            if (newSW.state === 'installed' && navigator.serviceWorker.controller) {
+              setUpdateAvailable(true)
+            }
+          })
+        })
+      } catch {
+        // SW registration not available
+      }
+    }
+
+    checkForUpdate()
+  }, [])
+
+  const applyUpdate = useCallback(() => {
+    navigator.serviceWorker.getRegistration().then((reg) => {
+      if (reg?.waiting) {
+        reg.waiting.postMessage({ type: 'SKIP_WAITING' })
+      }
+    }).catch(() => {})
+
+    // Reload once the new SW takes over
+    let refreshing = false
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!refreshing) {
+        refreshing = true
+        window.location.reload()
+      }
+    })
+  }, [])
+
+  return { updateAvailable, applyUpdate }
+}
