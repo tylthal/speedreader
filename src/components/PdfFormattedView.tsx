@@ -54,6 +54,7 @@ export default function PdfFormattedView({
   // Open the PDF + compute page list.
   useEffect(() => {
     let cancelled = false
+    let loadedDoc: any = null
     ;(async () => {
       try {
         const file = await getBookFile(publicationId)
@@ -68,6 +69,7 @@ export default function PdfFormattedView({
           pdfjsLib.GlobalWorkerOptions.workerPort = new PdfWorker()
         }
         const doc = await pdfjsLib.getDocument({ data }).promise
+        loadedDoc = doc
         if (cancelled) {
           doc.destroy()
           return
@@ -96,7 +98,10 @@ export default function PdfFormattedView({
     })()
     return () => {
       cancelled = true
-      try { docRef.current?.destroy() } catch { /* ignore */ }
+      const doc = docRef.current ?? loadedDoc
+      if (doc) {
+        try { doc.destroy() } catch { /* ignore */ }
+      }
       docRef.current = null
     }
   }, [publicationId, chapters])

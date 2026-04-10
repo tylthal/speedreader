@@ -181,10 +181,34 @@ class SpeedReaderDB extends Dexie {
       reading_progress: '++id, &publication_id',
       blob_storage: '&key',
     })
+
+    // -----------------------------------------------------------------------
+    // Post-launch migration template
+    // -----------------------------------------------------------------------
+    // After launch, schema changes MUST use Dexie upgrade callbacks instead
+    // of the one-time wipe above. Example for the next version:
+    //
+    //   this.version(5).stores({
+    //     ...same stores, or add new indexes...
+    //   }).upgrade(async (tx) => {
+    //     // Transform existing rows in a transaction:
+    //     await tx.table('publications').toCollection().modify((pub) => {
+    //       pub.new_field = pub.old_field ?? defaultValue
+    //     })
+    //   })
+    //
+    // Rules:
+    //  1. Never delete the one-time wipe — it still handles pre-v4 → v4.
+    //  2. The upgrade callback runs once per client, inside an IDB transaction.
+    //  3. Test migrations with real data before shipping.
+    //  4. Bump CURRENT_SCHEMA_VERSION below when adding a new version.
   }
 }
 
 export const db = new SpeedReaderDB()
+
+/** Current Dexie schema version. Bump when adding a new version() call. */
+export const CURRENT_SCHEMA_VERSION = 4
 
 // ---------------------------------------------------------------------------
 // One-time wipe (PRD §11)
@@ -195,10 +219,11 @@ export const db = new SpeedReaderDB()
 // A localStorage flag prevents this from running twice. The wipe happens on
 // the very first call to ensureSchemaWipe(); callers must `await` it before
 // touching the db.
+//
+// POST-LAUNCH: This wipe only applies to pre-v4 databases. Future versions
+// use Dexie's upgrade() callbacks instead. Do NOT bump this flag for new
+// versions — add a version(N).upgrade() callback above instead.
 
-// Bumped to v4 with the cursor refactor — the reading_progress field
-// rename means any v2/v3 row becomes ambiguous. Pre-launch wipe is the
-// cheapest correct migration.
 const SCHEMA_WIPE_FLAG = 'speedreader-schema-v4-wiped'
 
 let wipePromise: Promise<void> | null = null

@@ -44,7 +44,7 @@ export default function CbzFormattedView({
 
     getImagePages(publicationId, chapterId, 0, totalPages)
       .then(async (batch) => {
-        const resolved = await Promise.all(
+        const results = await Promise.allSettled(
           batch.pages.map(async (page) => {
             const src = await getImageUrl(publicationId, page.image_path)
             if (src?.startsWith('blob:')) objectUrls.push(src)
@@ -57,7 +57,11 @@ export default function CbzFormattedView({
           })
           return
         }
-        setPages(resolved.filter((page): page is ResolvedImagePage => page !== null))
+        const resolved = results
+          .filter((r): r is PromiseFulfilledResult<ResolvedImagePage | null> => r.status === 'fulfilled')
+          .map((r) => r.value)
+          .filter((page): page is ResolvedImagePage => page !== null)
+        setPages(resolved)
       })
       .catch(() => {
         if (!cancelled) setPages([])
