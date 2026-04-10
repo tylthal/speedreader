@@ -1,6 +1,16 @@
 import { useEffect, useRef } from 'react';
 import { isNative } from '../lib/platform';
 
+/** Cached dynamic import to avoid repeated round-trips. */
+let keepAwakePromise: Promise<typeof import('@capacitor-community/keep-awake')> | null = null;
+
+function getKeepAwake() {
+  if (!keepAwakePromise) {
+    keepAwakePromise = import('@capacitor-community/keep-awake');
+  }
+  return keepAwakePromise;
+}
+
 /**
  * Prevents the screen from dimming/sleeping while active.
  * Uses @capacitor-community/keep-awake on native (Web Wake Lock API
@@ -13,18 +23,22 @@ export function useWakeLock(active: boolean): void {
     if (isNative()) {
       // Native path: use KeepAwake plugin
       if (active) {
-        import('@capacitor-community/keep-awake').then(({ KeepAwake }) => {
-          KeepAwake.keepAwake().catch(() => {});
+        getKeepAwake().then(({ KeepAwake }) => {
+          KeepAwake.keepAwake().catch((err) => {
+            if (import.meta.env.DEV) console.warn('[WakeLock] keepAwake failed:', err);
+          });
+        }).catch((err) => {
+          if (import.meta.env.DEV) console.warn('[WakeLock] import failed:', err);
         });
       } else {
-        import('@capacitor-community/keep-awake').then(({ KeepAwake }) => {
+        getKeepAwake().then(({ KeepAwake }) => {
           KeepAwake.allowSleep().catch(() => {});
-        });
+        }).catch(() => {});
       }
       return () => {
-        import('@capacitor-community/keep-awake').then(({ KeepAwake }) => {
+        getKeepAwake().then(({ KeepAwake }) => {
           KeepAwake.allowSleep().catch(() => {});
-        });
+        }).catch(() => {});
       };
     }
 

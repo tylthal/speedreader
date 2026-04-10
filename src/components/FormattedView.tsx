@@ -230,16 +230,47 @@ interface ImageLoadResult {
 
 interface ImageCacheEntry {
   promise: Promise<ImageLoadResult>
+  /** Track insertion order for LRU eviction */
+  accessOrder: number
 }
 
+const IMAGE_CACHE_MAX = 3
 const imageCache = new Map<number, ImageCacheEntry>()
+let imageCacheOrder = 0
+
+/** Revoke all blob URLs held for a publication and remove from cache. */
+function releasePublicationImages(publicationId: number): void {
+  const entry = imageCache.get(publicationId)
+  if (!entry) return
+  entry.promise.then(({ urls }) => {
+    for (const url of urls.values()) URL.revokeObjectURL(url)
+  }).catch(() => {})
+  imageCache.delete(publicationId)
+}
+
+/** Evict the oldest cache entry when over limit. */
+function evictOldestImageCache(): void {
+  if (imageCache.size <= IMAGE_CACHE_MAX) return
+  let oldestKey: number | null = null
+  let oldestOrder = Infinity
+  for (const [key, entry] of imageCache) {
+    if (entry.accessOrder < oldestOrder) {
+      oldestOrder = entry.accessOrder
+      oldestKey = key
+    }
+  }
+  if (oldestKey != null) releasePublicationImages(oldestKey)
+}
 
 function loadPublicationImages(
   publicationId: number,
   chapters: Chapter[],
 ): Promise<ImageLoadResult> {
   const cached = imageCache.get(publicationId)
-  if (cached) return cached.promise
+  if (cached) {
+    cached.accessOrder = ++imageCacheOrder
+    return cached.promise
+  }
 
   const promise = (async () => {
     const names = collectOpfsNames(chapters)
@@ -273,7 +304,8 @@ function loadPublicationImages(
     }
   })()
 
-  imageCache.set(publicationId, { promise })
+  imageCache.set(publicationId, { promise, accessOrder: ++imageCacheOrder })
+  evictOldestImageCache()
   return promise
 }
 

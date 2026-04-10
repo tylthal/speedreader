@@ -307,26 +307,34 @@ export function useGazeTracker(): [GazeState, React.RefObject<{ direction: GazeD
       const { FaceLandmarker, FilesetResolver } = await import('@mediapipe/tasks-vision');
 
       const loadWithTimeout = async (delegate: 'GPU' | 'CPU'): Promise<import('@mediapipe/tasks-vision').FaceLandmarker> => {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), MODEL_TIMEOUT_MS);
+        let timeout: ReturnType<typeof setTimeout> | undefined;
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          timeout = setTimeout(() => reject(new Error(`Model load timed out (${delegate})`)), MODEL_TIMEOUT_MS);
+        });
 
         try {
           if (import.meta.env.DEV) console.log(`[Gaze] Trying ${delegate} delegate...`);
-          const vision = await FilesetResolver.forVisionTasks(
-            'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm',
-          );
-          const lm = await FaceLandmarker.createFromOptions(vision, {
-            baseOptions: {
-              modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',
-              delegate,
-            },
-            runningMode: 'VIDEO',
-            numFaces: 1,
-            outputFacialTransformationMatrixes: true,
-            outputFaceBlendshapes: false,
-            minFaceDetectionConfidence: 0.5,
-            minTrackingConfidence: 0.5,
-          });
+          const vision = await Promise.race([
+            FilesetResolver.forVisionTasks(
+              'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm',
+            ),
+            timeoutPromise,
+          ]);
+          const lm = await Promise.race([
+            FaceLandmarker.createFromOptions(vision, {
+              baseOptions: {
+                modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',
+                delegate,
+              },
+              runningMode: 'VIDEO',
+              numFaces: 1,
+              outputFacialTransformationMatrixes: true,
+              outputFaceBlendshapes: false,
+              minFaceDetectionConfidence: 0.5,
+              minTrackingConfidence: 0.5,
+            }),
+            timeoutPromise,
+          ]);
           clearTimeout(timeout);
           return lm;
         } catch (err) {
@@ -339,6 +347,10 @@ export function useGazeTracker(): [GazeState, React.RefObject<{ direction: GazeD
       try {
         landmarker = await loadWithTimeout('GPU');
       } catch (gpuErr) {
+        if (!mountedRef.current) {
+          stream.getTracks().forEach(t => t.stop());
+          return false;
+        }
         if (import.meta.env.DEV) console.warn('[Gaze] GPU delegate failed, falling back to CPU:', gpuErr);
         landmarker = await loadWithTimeout('CPU');
       }

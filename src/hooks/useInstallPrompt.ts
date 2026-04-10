@@ -34,18 +34,17 @@ function detectInstalled(): boolean {
   return false
 }
 
+const NATIVE_STATE: InstallPromptState = {
+  canInstall: false,
+  isInstalled: true,
+  platform: (typeof navigator !== 'undefined' && Capacitor.getPlatform() === 'ios' ? 'ios' : 'android') as Platform,
+  install: async () => {},
+  dismiss: () => {},
+  isDismissed: false,
+}
+
 export function useInstallPrompt(): InstallPromptState {
-  // On native Capacitor apps, there is no install prompt
-  if (Capacitor.isNativePlatform()) {
-    return {
-      canInstall: false,
-      isInstalled: true,
-      platform: Capacitor.getPlatform() === 'ios' ? 'ios' : 'android',
-      install: async () => {},
-      dismiss: () => {},
-      isDismissed: false,
-    };
-  }
+  const isNativePlatform = Capacitor.isNativePlatform()
 
   const [platform] = useState<Platform>(detectPlatform)
   const [isInstalled] = useState<boolean>(detectInstalled)
@@ -60,6 +59,7 @@ export function useInstallPrompt(): InstallPromptState {
   const promptRef = useRef<BeforeInstallPromptEvent | null>(null)
 
   useEffect(() => {
+    if (isNativePlatform) return
     const handler = (e: Event) => {
       e.preventDefault()
       const evt = e as BeforeInstallPromptEvent
@@ -69,14 +69,20 @@ export function useInstallPrompt(): InstallPromptState {
 
     window.addEventListener('beforeinstallprompt', handler)
     return () => window.removeEventListener('beforeinstallprompt', handler)
-  }, [])
+  }, [isNativePlatform])
 
   const install = useCallback(async () => {
     const evt = promptRef.current
     if (!evt) return
-    await evt.prompt()
-    const choice = await evt.userChoice
-    if (choice.outcome === 'accepted') {
+    try {
+      await evt.prompt()
+      const choice = await evt.userChoice
+      if (choice.outcome === 'accepted') {
+        promptRef.current = null
+        setPromptEvent(null)
+      }
+    } catch {
+      // Install prompt cancelled or unavailable on this browser
       promptRef.current = null
       setPromptEvent(null)
     }
@@ -90,6 +96,9 @@ export function useInstallPrompt(): InstallPromptState {
       // sessionStorage unavailable
     }
   }, [])
+
+  // On native Capacitor apps, there is no install prompt
+  if (isNativePlatform) return NATIVE_STATE
 
   const canInstall = (() => {
     if (isInstalled) return false

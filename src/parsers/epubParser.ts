@@ -226,7 +226,7 @@ function parseNcx(tocDoc: Document, tocHref: string): TocEntry[] {
 function parseNavXhtml(navDoc: Document, navHref: string): TocEntry[] {
   // Find the <nav epub:type="toc"> element (or any nav).
   const navs = Array.from(navDoc.querySelectorAll('nav'))
-  let tocNav = navs.find((n) => n.getAttribute('epub:type') === 'toc') ?? navs[0]
+  const tocNav = navs.find((n) => n.getAttribute('epub:type') === 'toc') ?? navs[0]
   if (!tocNav) return []
 
   function walkList(ol: Element): TocEntry[] {

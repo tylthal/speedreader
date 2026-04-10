@@ -38,7 +38,7 @@ const DOTTED_ABBREVS_RE = /\b(?:e\.g|i\.e|a\.m|p\.m|a\.k\.a|U\.S|U\.K)\./gi
 
 const ABBR_PLACEHOLDER = '\x00ABBR\x00'
 
-const SENTENCE_SPLIT_RE = /([.!?]["'\)\]]?)\s+(?=[A-Z])/
+const SENTENCE_SPLIT_RE = /([.!?]["')\]]?)\s+(?=[A-Z])/
 
 function splitSentences(text: string): string[] {
   if (!text) return []
