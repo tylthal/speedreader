@@ -66,3 +66,6 @@ android/capacitor-cordova-android-plugins/build/
 *.p12
 *.mobileprovision
 *.p8
+
+# Bundle analysis
+stats.html

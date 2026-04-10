@@ -2,6 +2,7 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 // basicSsl removed — Tailscale provides HTTPS for getUserMedia
 import { VitePWA } from 'vite-plugin-pwa'
+import { visualizer } from 'rollup-plugin-visualizer'
 import { fileURLToPath, URL } from 'node:url'
 
 export default defineConfig({
@@ -106,6 +107,16 @@ export default defineConfig({
       },
     }),
   ],
+  build: {
+    rollupOptions: {
+      plugins: [
+        // Generates stats.html for bundle analysis (run: npx vite build && open stats.html)
+        ...(process.env.ANALYZE
+          ? [visualizer({ open: false, filename: 'stats.html', gzipSize: true })]
+          : []),
+      ],
+    },
+  },
   worker: {
     format: 'es',
   },
