@@ -10,10 +10,6 @@ interface ControlsBottomSheetProps {
   onTogglePlay: () => void;
   onSetWpm: (wpm: number) => void;
   onAdjustWpm: (delta: number) => void;
-  onPrevChapter: () => void;
-  onNextChapter: () => void;
-  hasPrevChapter: boolean;
-  hasNextChapter: boolean;
   mode?: ReadingMode;
   onToggleMode?: () => void;
   onSetMode?: (mode: ReadingMode) => void;
@@ -31,10 +27,6 @@ export default function ControlsBottomSheet({
   onTogglePlay,
   onSetWpm: _onSetWpm,
   onAdjustWpm,
-  onPrevChapter,
-  onNextChapter,
-  hasPrevChapter,
-  hasNextChapter,
   mode = 'phrase',
   onToggleMode,
   onSetMode,
@@ -58,6 +50,19 @@ export default function ControlsBottomSheet({
   const allModes: ReadingMode[] = ['phrase', 'rsvp', 'scroll', 'track'];
   const activeMode = modeMeta[mode];
   const canShowTrackOptions = mode === 'track' && Boolean(onGazeSensitivityChange || onRecalibrate);
+  const sectionFlow = stopAtChapterEnd
+    ? {
+        title: 'Pause at section breaks',
+        description: 'Stops when a new section starts.',
+        announceLabel: 'Pause at section breaks on',
+        ariaLabel: 'Pause at section breaks is on. Stops when a new section starts.',
+      }
+    : {
+        title: 'Auto-continue sections',
+        description: 'Keeps reading into the next section.',
+        announceLabel: 'Auto-continue sections on',
+        ariaLabel: 'Auto-continue sections is on. Keeps reading into the next section.',
+      };
 
   const handleTogglePlay = () => {
     onTogglePlay();
@@ -79,29 +84,6 @@ export default function ControlsBottomSheet({
           className="controls__progress-bar"
           style={{ width: `${progress * 100}%` }}
         />
-      </div>
-
-      {/* Chapter navigation row */}
-      <div className="controls__chapter-row">
-        <button
-          className="controls__btn"
-          onClick={onPrevChapter}
-          disabled={!hasPrevChapter}
-          aria-disabled={!hasPrevChapter ? 'true' : undefined}
-          aria-label="Previous section"
-        >
-          &#9664;
-        </button>
-        <span className="controls__chapter-spacer" />
-        <button
-          className="controls__btn"
-          onClick={onNextChapter}
-          disabled={!hasNextChapter}
-          aria-disabled={!hasNextChapter ? 'true' : undefined}
-          aria-label="Next section"
-        >
-          &#9654;
-        </button>
       </div>
 
       {/* Main controls row */}
@@ -164,23 +146,27 @@ export default function ControlsBottomSheet({
             )}
           </div>
         )}
+      </div>
 
-        {/* Stop at section end */}
-        {onToggleStopAtChapter && (
+      {onToggleStopAtChapter && (
+        <div className="controls__secondary-row">
           <button
-            className={`controls__chapter-stop-btn${stopAtChapterEnd ? ' controls__chapter-stop-btn--active' : ''}`}
+            className={`controls__flow-card${stopAtChapterEnd ? ' controls__flow-card--active' : ''}`}
+            type="button"
             onClick={() => {
               onToggleStopAtChapter();
               haptics.tap();
-              announce(stopAtChapterEnd ? 'Continue sections on' : 'Pause between sections on');
+              announce(stopAtChapterEnd ? 'Auto-continue sections on' : 'Pause at section breaks on');
             }}
-            aria-label={stopAtChapterEnd ? 'Continue sections automatically' : 'Pause between sections'}
+            aria-label={sectionFlow.ariaLabel}
             aria-pressed={stopAtChapterEnd}
           >
-            {stopAtChapterEnd ? 'Pause each section' : 'Continue sections'}
+            <span className="controls__flow-eyebrow">Section flow</span>
+            <span className="controls__flow-title">{sectionFlow.title}</span>
+            <span className="controls__flow-description">{sectionFlow.description}</span>
           </button>
-        )}
-      </div>
+        </div>
+      )}
 
       <div className="controls__playing-hint" aria-hidden={!isPlaying}>
         {activeMode.label} mode · {wpm} WPM
@@ -230,7 +216,7 @@ export default function ControlsBottomSheet({
           )}
           {onRecalibrate && (
             <button
-              className="controls__chapter-stop-btn"
+              className="controls__secondary-pill"
               onClick={() => {
                 onRecalibrate();
                 haptics.tap();

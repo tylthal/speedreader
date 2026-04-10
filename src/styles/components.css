@@ -801,11 +801,11 @@ html[data-playing] .reader-header {
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
   border-top: 1px solid var(--surface-border);
-  padding: 8px 12px;
-  padding-bottom: calc(8px + env(safe-area-inset-bottom));
+  padding: 10px 12px;
+  padding-bottom: calc(10px + env(safe-area-inset-bottom));
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
   color: var(--text);
   transition: background 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
 }
@@ -822,16 +822,16 @@ html[data-playing] .reader-header {
   box-shadow: none;
 }
 
-.controls__chapter-row,
 .controls__main-row,
+.controls__secondary-row,
 .controls__play-bar,
 .controls__playing-hint {
   transition: transform 0.4s ease, opacity 0.4s ease, max-height 0.4s ease;
-  max-height: 80px;
+  max-height: 120px;
 }
 
-.controls--playing .controls__chapter-row,
-.controls--playing .controls__main-row {
+.controls--playing .controls__main-row,
+.controls--playing .controls__secondary-row {
   transform: translateY(100%);
   opacity: 0;
   max-height: 0;
@@ -866,13 +866,6 @@ html[data-playing] .reader-header {
   height: 100%;
   background: var(--accent);
   transition: width 0.15s linear;
-}
-
-.controls__chapter-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
 }
 
 .controls__exit-btn {
@@ -1006,14 +999,22 @@ html[data-playing] .reader-header {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 12px;
+  gap: 12px 14px;
   flex-wrap: wrap;
+}
+
+.controls__secondary-row {
+  display: flex;
+  justify-content: stretch;
 }
 
 .controls__wpm-group {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface-hover) 82%, transparent);
 }
 
 .controls__wpm-label {
@@ -2593,12 +2594,11 @@ html[data-playing] .reader-header {
 .transcript__row--highlighted-blue { border-left-color: #2196f3; }
 .transcript__row--highlighted-pink { border-left-color: #e91e63; }
 
-/* ---------- Bookmark button in controls ---------- */
-.controls__chapter-stop-btn {
+.controls__secondary-pill {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 4px 12px;
+  padding: 6px 12px;
   border: 1px solid var(--surface-border);
   border-radius: 999px;
   background: var(--surface-hover);
@@ -2612,15 +2612,63 @@ html[data-playing] .reader-header {
   transition: background 0.15s ease, border-color 0.15s ease;
 }
 
-.controls__chapter-stop-btn:hover {
+.controls__secondary-pill:hover {
   background: var(--surface-subtle);
   border-color: var(--accent);
 }
 
-.controls__chapter-stop-btn--active {
+.controls__secondary-pill--active {
   border-color: var(--accent);
   background: rgba(var(--accent-rgb, 99, 102, 241), 0.15);
   color: var(--accent);
+}
+
+.controls__flow-card {
+  width: 100%;
+  display: grid;
+  gap: 0.15rem;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid var(--surface-border);
+  border-radius: 16px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--surface-hover) 88%, transparent), color-mix(in srgb, var(--bg-surface) 94%, transparent));
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease;
+}
+
+.controls__flow-card:hover {
+  border-color: color-mix(in srgb, var(--accent) 38%, var(--surface-border));
+  background: linear-gradient(180deg, color-mix(in srgb, var(--surface-subtle) 92%, transparent), color-mix(in srgb, var(--bg-surface) 96%, transparent));
+}
+
+.controls__flow-card:active {
+  transform: translateY(1px);
+}
+
+.controls__flow-card--active {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--surface-border));
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 14%, var(--surface-hover)), color-mix(in srgb, var(--bg-surface) 96%, transparent));
+}
+
+.controls__flow-eyebrow {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.controls__flow-title {
+  font-size: 0.88rem;
+  font-weight: 650;
+  line-height: 1.25;
+}
+
+.controls__flow-description {
+  font-size: 0.76rem;
+  line-height: 1.35;
+  color: var(--text-muted);
 }
 
 .controls__bookmark-btn {
@@ -2644,7 +2692,7 @@ html[data-playing] .reader-header {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 4px 12px;
+  padding: 6px 12px;
   border: 1px solid var(--surface-border);
   border-radius: 999px;
   background: var(--surface-hover);
@@ -2782,7 +2830,7 @@ html[data-playing] .reader-header {
   gap: 12px;
   flex-wrap: wrap;
   transition: transform 0.4s ease, opacity 0.4s ease, max-height 0.4s ease;
-  max-height: 60px;
+  max-height: 88px;
 }
 
 .controls--playing .controls__track-row {

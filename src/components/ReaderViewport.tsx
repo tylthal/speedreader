@@ -758,10 +758,6 @@ function ActiveReader({
         onTogglePlay={userTogglePlayPause}
         onSetWpm={controller.setWpm}
         onAdjustWpm={controller.adjustWpm}
-        onPrevChapter={handlePrevChapter}
-        onNextChapter={handleNextChapter}
-        hasPrevChapter={chapterIdx > 0}
-        hasNextChapter={chapterIdx < chapters.length - 1}
         mode={readingMode}
         onToggleMode={handleToggleMode}
         onSetMode={handleSetMode}
