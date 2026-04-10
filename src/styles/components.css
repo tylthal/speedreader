@@ -311,10 +311,25 @@ html[data-playing] .reader-header {
   padding: 0.5rem 0 1rem;
 }
 
+.toc-sidebar__loading {
+  padding: 1rem;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+
 .toc-sidebar__list {
   list-style: none;
   margin: 0;
   padding: 0;
+}
+
+.toc-sidebar__virtual-list {
+  overflow-x: hidden !important;
+}
+
+.toc-sidebar__virtual-row {
+  display: flex;
+  align-items: center;
 }
 
 .toc-sidebar__row {
@@ -355,6 +370,7 @@ html[data-playing] .reader-header {
   -webkit-tap-highlight-color: transparent;
   display: block;
   width: 100%;
+  min-height: 42px;
 }
 
 .toc-sidebar__item:active {

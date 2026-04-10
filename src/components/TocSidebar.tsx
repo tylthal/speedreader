@@ -1,4 +1,6 @@
-import { memo, useState } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
+import { FixedSizeList as List } from 'react-window'
+import type { ListChildComponentProps } from 'react-window'
 import type { Chapter, TocNode } from '../api/client'
 
 interface TocSidebarProps {
@@ -35,6 +37,55 @@ function TocSidebar({
   if (!open) return null
 
   const useTree = Array.isArray(tocTree) && tocTree.length > 0
+  const navRef = useRef<HTMLElement | null>(null)
+  const listRef = useRef<List>(null)
+  const [contentReady, setContentReady] = useState(false)
+  const [navHeight, setNavHeight] = useState(0)
+
+  useEffect(() => {
+    setContentReady(false)
+    const raf = requestAnimationFrame(() => setContentReady(true))
+    return () => cancelAnimationFrame(raf)
+  }, [])
+
+  useEffect(() => {
+    const navEl = navRef.current
+    if (!navEl) return
+
+    const updateHeight = () => {
+      const nextHeight = Math.max(160, Math.floor(navEl.getBoundingClientRect().height))
+      setNavHeight((prev) => (prev === nextHeight ? prev : nextHeight))
+    }
+
+    updateHeight()
+    const observer = new ResizeObserver(updateHeight)
+    observer.observe(navEl)
+    return () => observer.disconnect()
+  }, [])
+
+  const activeFlatIndex = useMemo(() => {
+    return chapters.findIndex((ch, idx) => (
+      `${idx}` === activeLocationKey ||
+      (
+        activeLocationTitle === (ch.title || 'Untitled') &&
+        activeLocationSectionIndex === idx &&
+        (activeLocationAnchor ?? null) == null
+      )
+    ))
+  }, [
+    chapters,
+    activeLocationKey,
+    activeLocationTitle,
+    activeLocationSectionIndex,
+    activeLocationAnchor,
+  ])
+
+  useEffect(() => {
+    if (!contentReady) return
+    if (useTree) return
+    if (activeFlatIndex < 0) return
+    listRef.current?.scrollToItem(activeFlatIndex, 'center')
+  }, [contentReady, useTree, activeFlatIndex])
 
   return (
     <div
@@ -56,8 +107,12 @@ function TocSidebar({
           </button>
         </header>
 
-        <nav className="toc-sidebar__nav">
-          {useTree ? (
+        <nav className="toc-sidebar__nav" ref={navRef}>
+          {!contentReady ? (
+            <div className="toc-sidebar__loading" role="status" aria-live="polite">
+              Loading contents...
+            </div>
+          ) : useTree ? (
             <TocTree
               nodes={tocTree!}
               activeLocationKey={activeLocationKey ?? null}
@@ -70,39 +125,74 @@ function TocSidebar({
               }}
             />
           ) : (
-            <ul className="toc-sidebar__list" role="list">
-              {chapters.map((ch, idx) => {
-                const tocKey = `${idx}`
-                const isActive =
-                  tocKey === activeLocationKey ||
-                  (
-                    activeLocationTitle === (ch.title || 'Untitled') &&
-                    activeLocationSectionIndex === idx &&
-                    (activeLocationAnchor ?? null) == null
-                  )
-                return (
-                  <li key={ch.id}>
-                    <button
-                      className={`toc-sidebar__item${isActive ? ' toc-sidebar__item--active' : ''}`}
-                      data-toc-key={tocKey}
-                      data-section-index={idx}
-                      data-html-anchor=""
-                      onClick={() => {
-                        onJump(idx, null, tocKey)
-                        onClose()
-                      }}
-                    >
-                      <span className="toc-sidebar__item-title">
-                        {ch.title || 'Untitled'}
-                      </span>
-                    </button>
-                  </li>
-                )
-              })}
-            </ul>
+            <List
+              ref={listRef}
+              className="toc-sidebar__virtual-list"
+              height={Math.max(160, navHeight)}
+              width="100%"
+              itemCount={chapters.length}
+              itemSize={46}
+              overscanCount={10}
+              itemData={{
+                chapters,
+                activeLocationKey: activeLocationKey ?? null,
+                activeLocationTitle: activeLocationTitle ?? null,
+                activeLocationSectionIndex: activeLocationSectionIndex ?? null,
+                activeLocationAnchor: activeLocationAnchor ?? null,
+                onJump,
+                onClose,
+              }}
+            >
+              {FlatTocRow}
+            </List>
           )}
         </nav>
       </aside>
+    </div>
+  )
+}
+
+interface FlatTocRowData {
+  chapters: Chapter[]
+  activeLocationKey: string | null
+  activeLocationTitle: string | null
+  activeLocationSectionIndex: number | null
+  activeLocationAnchor: string | null
+  onJump: (sectionIndex: number, htmlAnchor: string | null, tocKey: string) => void
+  onClose: () => void
+}
+
+function FlatTocRow({
+  index,
+  style,
+  data,
+}: ListChildComponentProps<FlatTocRowData>) {
+  const chapter = data.chapters[index]
+  const tocKey = `${index}`
+  const isActive =
+    tocKey === data.activeLocationKey ||
+    (
+      data.activeLocationTitle === (chapter.title || 'Untitled') &&
+      data.activeLocationSectionIndex === index &&
+      (data.activeLocationAnchor ?? null) == null
+    )
+
+  return (
+    <div style={style} className="toc-sidebar__virtual-row">
+      <button
+        className={`toc-sidebar__item${isActive ? ' toc-sidebar__item--active' : ''}`}
+        data-toc-key={tocKey}
+        data-section-index={index}
+        data-html-anchor=""
+        onClick={() => {
+          data.onJump(index, null, tocKey)
+          data.onClose()
+        }}
+      >
+        <span className="toc-sidebar__item-title">
+          {chapter.title || 'Untitled'}
+        </span>
+      </button>
     </div>
   )
 }
