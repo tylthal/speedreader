@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useAnnounce } from '../hooks/useAnnounce';
 import { useSegmentLoader } from '../hooks/useSegmentLoader';
 import { usePlaybackController } from '../hooks/usePlaybackController';
@@ -364,28 +364,49 @@ function ActiveReader({
   const activeArrayIdx =
     translators.absoluteToArrayIndex(absoluteSegmentIndex) ?? 0;
   const currentSegment = loaderState.segments[activeArrayIdx] ?? null;
-  const flatTocLocations = tocTree ? flattenTocLocations(tocTree) : [];
-  const activeTocLocationKey =
-    (
-      preferredTocLocation.key ||
+  const flatTocLocations = useMemo(
+    () => (tocTree ? flattenTocLocations(tocTree) : []),
+    [tocTree],
+  );
+  const tocTitleByKey = useMemo(
+    () => new Map(flatTocLocations.map((entry) => [entry.key, entry.title])),
+    [flatTocLocations],
+  );
+  const activeTocLocationKey = useMemo(() => {
+    if (preferredTocLocation.key) return preferredTocLocation.key;
+    if (flatTocLocations.length === 0) return `${chapterIdx}`;
+
+    const canResolveAnchors =
+      tocOpen &&
+      loaderState.segments.length > 0 &&
+      formattedViewRef.current?.isSectionReady(chapterIdx);
+
+    return (
       selectActiveTocLocationKey({
         entries: flatTocLocations,
         currentSectionIndex: chapterIdx,
         currentArrayIndex: translators.absoluteToArrayIndex(absoluteSegmentIndex),
         preferredKey: null,
-        resolveArrayIndex:
-          loaderState.segments.length > 0 &&
-          formattedViewRef.current?.isSectionReady(chapterIdx)
-            ? (entry) => (
-                formattedViewRef.current?.resolveTocTarget(
-                  entry.sectionIndex,
-                  entry.htmlAnchor,
-                  loaderState.segments,
-                )?.arrIdx ?? null
-              )
-            : null,
-      })
-    ) ?? `${chapterIdx}`;
+        resolveArrayIndex: canResolveAnchors
+          ? (entry) => (
+              formattedViewRef.current?.resolveTocTarget(
+                entry.sectionIndex,
+                entry.htmlAnchor,
+                loaderState.segments,
+              )?.arrIdx ?? null
+            )
+          : null,
+      }) ?? `${chapterIdx}`
+    );
+  }, [
+    preferredTocLocation.key,
+    flatTocLocations,
+    chapterIdx,
+    tocOpen,
+    loaderState.segments,
+    translators,
+    absoluteSegmentIndex,
+  ]);
 
   /* ---- Mode switching: just dispatch ---- */
   // pause + setMode. The controller's tick reads mode from the store
@@ -567,7 +588,7 @@ function ActiveReader({
         activeLocationAnchor={preferredTocLocation.htmlAnchor}
         onJump={(idx, htmlAnchor, tocKey) => {
           const title =
-            flatTocLocations.find((entry) => entry.key === tocKey)?.title ??
+            tocTitleByKey.get(tocKey) ??
             chapters[idx]?.title ??
             'Untitled';
           setPreferredTocLocation({

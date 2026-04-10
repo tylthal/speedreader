@@ -1,4 +1,5 @@
 import {
+  memo,
   forwardRef,
   useEffect,
   useImperativeHandle,
@@ -306,7 +307,7 @@ function readUploadDiag(publicationId: number): UploadDiag | null {
  * the fragile post-render DOM-mutation pattern that broke under StrictMode
  * and on subsequent re-renders triggered by scrolling.
  */
-const FormattedView = forwardRef<FormattedViewHandle, FormattedViewProps>(function FormattedView(
+const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(function FormattedView(
   {
     publicationId,
     chapters,
@@ -358,6 +359,11 @@ const FormattedView = forwardRef<FormattedViewHandle, FormattedViewProps>(functi
   // Resolved name → blob URL. Pulled from a module-level cache so the URLs
   // persist across mounts/unmounts (StrictMode, HMR, conditional rendering).
   const [imageMap, setImageMap] = useState<Map<string, string>>(new Map())
+  const opfsNames = useMemo(() => collectOpfsNames(chapters), [chapters])
+  const chapterTitleSuppression = useMemo(
+    () => chapters.map((chapter) => bodyHasLeadingHeading(chapter.html)),
+    [chapters],
+  )
 
   const getReadySectionContext = (sectionIdx: number) => {
     const container = containerRef.current
@@ -419,12 +425,12 @@ const FormattedView = forwardRef<FormattedViewHandle, FormattedViewProps>(functi
   // render their text. Either way, the unresolved opfs: markers never reach
   // the DOM, so the browser never fires ERR_UNKNOWN_URL_SCHEME.
   const imagesReady =
-    imageLoadResolved || collectOpfsNames(chapters).length === 0
+    imageLoadResolved || opfsNames.length === 0
   const rewrittenSections = useMemo(() => {
     if (!imagesReady) return null
-    return chapters.map((ch) => {
+    return chapters.map((ch, idx) => {
       const html = ch.html ?? ''
-      if (!html) return { ch, html }
+      if (!html) return { idx, html }
       // Pass 1 — substitute resolved markers.
       let out = html
       if (imageMap.size > 0) {
@@ -443,7 +449,7 @@ const FormattedView = forwardRef<FormattedViewHandle, FormattedViewProps>(functi
         /<img\s[^>]*?\bsrc=["']opfs:[^"']+["'][^>]*>/gi,
         '',
       )
-      return { ch, html: out }
+      return { idx, html: out }
     })
   }, [chapters, imageMap, imagesReady])
 
@@ -457,8 +463,7 @@ const FormattedView = forwardRef<FormattedViewHandle, FormattedViewProps>(functi
   useEffect(() => {
     if (!rewrittenSections) return
     let didWrite = false
-    for (const { ch, html } of rewrittenSections) {
-      const idx = chapters.indexOf(ch)
+    for (const { idx, html } of rewrittenSections) {
       const el = bodyRefs.current.get(idx)
       if (!el) continue
       if (el.dataset.lastHtml === html) continue
@@ -481,7 +486,7 @@ const FormattedView = forwardRef<FormattedViewHandle, FormattedViewProps>(functi
         rebuildProfileNow()
       })
     }
-  }, [rewrittenSections, chapters])
+  }, [rewrittenSections])
 
   // ---- Velocity profile build ---------------------------------------------
   //
@@ -911,7 +916,7 @@ const FormattedView = forwardRef<FormattedViewHandle, FormattedViewProps>(functi
             }}
             className="formatted-view__section"
           >
-            {!bodyHasLeadingHeading(ch.html) && (
+            {!chapterTitleSuppression[idx] && (
               <h1 className="formatted-view__title">{ch.title || 'Untitled'}</h1>
             )}
             {ch.html ? (
@@ -931,6 +936,11 @@ const FormattedView = forwardRef<FormattedViewHandle, FormattedViewProps>(functi
     </div>
   )
 })
+
+FormattedViewInner.displayName = 'FormattedView'
+
+const FormattedView = memo(FormattedViewInner)
+FormattedView.displayName = 'FormattedView'
 
 export default FormattedView
 

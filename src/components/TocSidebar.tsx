@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { memo, useState } from 'react'
 import type { Chapter, TocNode } from '../api/client'
 
 interface TocSidebarProps {
@@ -21,7 +21,7 @@ interface TocSidebarProps {
  * `tocTree`) when the source has hierarchical NCX/outline data. Tapping a
  * leaf jumps the reader to the first segment of that section.
  */
-export default function TocSidebar({
+function TocSidebar({
   open,
   chapters,
   tocTree,
@@ -229,3 +229,8 @@ function TocTreeItem({
     </li>
   )
 }
+
+const MemoizedTocSidebar = memo(TocSidebar)
+MemoizedTocSidebar.displayName = 'TocSidebar'
+
+export default MemoizedTocSidebar
