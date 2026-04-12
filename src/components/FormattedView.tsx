@@ -719,23 +719,38 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
         // find the exact text line, then position pip at that line.
         const doc = container.ownerDocument
         let lineViewportY = centerViewportY // fallback to viewport center
-        let lineRect: DOMRect | null = null
         if ('caretRangeFromPoint' in doc) {
           const cr = (doc as unknown as { caretRangeFromPoint(x: number, y: number): Range | null })
             .caretRangeFromPoint(centerX, centerViewportY)
-          if (cr) lineRect = cr.getClientRects()[0] ?? cr.getBoundingClientRect()
+          if (cr) {
+            // caretRangeFromPoint returns a collapsed range. Expand it
+            // by one character so getClientRects returns the line box.
+            // getBoundingClientRect on a collapsed range also works but
+            // getClientRects on an expanded range is more reliable.
+            const node = cr.startContainer
+            const off = cr.startOffset
+            if (node.nodeType === Node.TEXT_NODE && off < (node as Text).length) {
+              cr.setEnd(node, off + 1)
+            }
+            const lineRect = cr.getClientRects()[0] ?? cr.getBoundingClientRect()
+            if (lineRect && lineRect.height > 0) {
+              lineViewportY = lineRect.top + lineRect.height / 2
+            }
+          }
         } else if ('caretPositionFromPoint' in doc) {
           const cp = (doc as unknown as { caretPositionFromPoint(x: number, y: number): { offsetNode: Node; offset: number } | null })
             .caretPositionFromPoint(centerX, centerViewportY)
           if (cp) {
             const r = doc.createRange()
             r.setStart(cp.offsetNode, cp.offset)
-            r.setEnd(cp.offsetNode, Math.min(cp.offset + 1, (cp.offsetNode as Text).length ?? cp.offset))
-            lineRect = r.getClientRects()[0] ?? r.getBoundingClientRect()
+            const maxOff = cp.offsetNode.nodeType === Node.TEXT_NODE
+              ? (cp.offsetNode as Text).length : 0
+            r.setEnd(cp.offsetNode, Math.min(cp.offset + 1, maxOff))
+            const lineRect = r.getClientRects()[0] ?? r.getBoundingClientRect()
+            if (lineRect && lineRect.height > 0) {
+              lineViewportY = lineRect.top + lineRect.height / 2
+            }
           }
-        }
-        if (lineRect && lineRect.height > 0) {
-          lineViewportY = lineRect.top + lineRect.height / 2
         }
         const pipScrollY = lineViewportY - containerRect.top + container.scrollTop
         setPipTop(pipScrollY - 10)
@@ -864,13 +879,13 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
       },
       isProgrammaticScrollActive: () => isProgrammaticScrollRef.current,
       detectAtViewportCenter: (currentSectionIdx, segments) => {
-        // Read the block + line the pip scroll listener found on the
-        // last scroll frame. pipViewportY is the exact text line the
-        // pip is drawn next to — line-level, not block-level.
+        // Read the line the pip scroll listener found on the last
+        // scroll frame. pipViewportY is the exact text line the pip
+        // is drawn next to (viewport coordinates, line-level).
         const pip = pipBlockRef.current
         if (!pip) return null
 
-        const { block, sectionIdx, pipViewportY } = pip
+        const { sectionIdx, pipViewportY } = pip
         if (sectionIdx < 0) return null
         if (sectionIdx !== currentSectionIdx) {
           return { sectionIdx, arrIdx: null }
@@ -891,25 +906,24 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
           segmentIndexRef.current.set(currentSectionIdx, index)
         }
 
-        // Find the FIRST segment on the pip's line. Materialize rects
-        // for each segment in the block and check if any rect's vertical
-        // span overlaps the pip's Y coordinate. Return the lowest-index
-        // segment that has text on this line.
-        const containerRect = container.getBoundingClientRect()
-        const tempRange = container.ownerDocument.createRange()
+        // Find the FIRST segment on the pip's line. Search ALL segments
+        // in the section (not just those starting in the current block)
+        // because a segment can start in one block and wrap onto the
+        // pip's line in the next block. getClientRects() returns one
+        // rect per visual line, all in viewport coordinates.
+        const doc = container.ownerDocument
+        const tempRange = doc.createRange()
         let firstOnLine: number | null = null
 
         for (let i = 0; i < index.length; i++) {
           const sr = index[i]
           if (!sr) continue
-          if (!block.contains(sr.startNode)) continue
           try {
             tempRange.setStart(sr.startNode, sr.startOffset)
             tempRange.setEnd(sr.endNode, sr.endOffset)
             const rects = tempRange.getClientRects()
             for (let r = 0; r < rects.length; r++) {
               const rect = rects[r]
-              // Check if this line rect overlaps the pip's Y coordinate.
               if (rect.height > 0 && pipViewportY >= rect.top && pipViewportY <= rect.bottom) {
                 firstOnLine = i
                 break
@@ -925,10 +939,10 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
           return { sectionIdx, arrIdx: firstOnLine }
         }
 
-        // No segment rects overlap the pip line. Fall back to searching
-        // all segments in the section for the closest one above the pip.
-        let closestAbove: number | null = null
-        let closestAboveDist = Infinity
+        // No segment rects overlap the pip line. Find the nearest
+        // segment — check both above and below the pip.
+        let closestIdx: number | null = null
+        let closestDist = Infinity
         for (let i = 0; i < index.length; i++) {
           const sr = index[i]
           if (!sr) continue
@@ -937,14 +951,19 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
             tempRange.setEnd(sr.endNode, sr.endOffset)
             const rect = tempRange.getBoundingClientRect()
             if (rect.height === 0) continue
-            const dist = pipViewportY - rect.bottom
-            if (dist >= 0 && dist < closestAboveDist) {
-              closestAboveDist = dist
-              closestAbove = i
+            // Distance from pip to the nearest edge of the segment rect
+            const dist = pipViewportY < rect.top
+              ? rect.top - pipViewportY
+              : pipViewportY > rect.bottom
+                ? pipViewportY - rect.bottom
+                : 0
+            if (dist < closestDist) {
+              closestDist = dist
+              closestIdx = i
             }
           } catch { continue }
         }
-        if (closestAbove != null) return { sectionIdx, arrIdx: closestAbove }
+        if (closestIdx != null) return { sectionIdx, arrIdx: closestIdx }
 
         return { sectionIdx, arrIdx: null }
       },
