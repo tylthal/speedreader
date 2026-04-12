@@ -819,44 +819,58 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
         const centerX = containerRect.left + containerRect.width / 2
         const centerY = containerRect.top + container.clientHeight / 2
 
-        // --- Step 1: elementFromPoint → block walk (same as pip) ---
+        // --- Step 1: block walk — identical to the pip scroll listener ---
+        // Walk from the element at viewport center up to the nearest
+        // block whose parent is formatted-view__body. Never break early
+        // at section boundaries (the pip doesn't). Extract section index
+        // from ancestor as a side-effect.
         const el = container.ownerDocument.elementFromPoint(centerX, centerY)
         if (!el) return null
 
-        // Walk up to find both the section and the block element.
         let block: HTMLElement | null = el as HTMLElement
-        let sectionIdx: number | null = null
-        let foundBody = false
+        let bodyEl: HTMLElement | null = null
         while (block && block !== container) {
-          if (block.classList.contains('formatted-view__section')) {
-            const idxStr = block.dataset.sectionIndex
-            sectionIdx = idxStr != null ? parseInt(idxStr, 10) : null
-            break
-          }
           const parent: HTMLElement | null = block.parentElement
           if (parent?.classList.contains('formatted-view__body')) {
-            foundBody = true
-            // Also extract section index from the section ancestor
-            let sec = parent.parentElement
-            while (sec && sec !== container) {
-              if (sec.classList.contains('formatted-view__section')) {
-                const idxStr = sec.dataset.sectionIndex
-                sectionIdx = idxStr != null ? parseInt(idxStr, 10) : null
-                break
-              }
-              sec = sec.parentElement
-            }
+            bodyEl = parent
             break
           }
           block = parent
+        }
+
+        // Extract section index from the body's section ancestor.
+        let sectionIdx: number | null = null
+        if (bodyEl) {
+          let sec: HTMLElement | null = bodyEl.parentElement
+          while (sec && sec !== container) {
+            if (sec.classList.contains('formatted-view__section')) {
+              const idxStr = sec.dataset.sectionIndex
+              sectionIdx = idxStr != null ? parseInt(idxStr, 10) : null
+              break
+            }
+            sec = sec.parentElement
+          }
+        } else {
+          // elementFromPoint landed outside a body (title, gap between
+          // sections, etc). Walk from el to find the section.
+          let node: HTMLElement | null = el as HTMLElement
+          while (node && node !== container) {
+            if (node.classList.contains('formatted-view__section')) {
+              const idxStr = node.dataset.sectionIndex
+              sectionIdx = idxStr != null ? parseInt(idxStr, 10) : null
+              break
+            }
+            node = node.parentElement
+          }
         }
 
         if (sectionIdx == null) return null
         if (sectionIdx !== currentSectionIdx) {
           return { sectionIdx, arrIdx: null }
         }
-
-        // --- Step 2: find first segment whose range starts in this block ---
+        if (!bodyEl || !block || block === container) {
+          return { sectionIdx, arrIdx: null }
+        }
         if (segments.length === 0) {
           return { sectionIdx, arrIdx: null }
         }
@@ -871,44 +885,87 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
           segmentIndexRef.current.set(currentSectionIdx, index)
         }
 
-        // If we found a block inside the body, find the first segment
-        // whose startNode lives inside that block. This matches exactly
-        // what the pip is pointing at — the block element at viewport
-        // center — so pip and playback position always agree.
-        if (foundBody && block && block !== container) {
-          for (let i = 0; i < index.length; i++) {
-            const sr = index[i]
-            if (!sr) continue
-            if (block.contains(sr.startNode)) {
-              return { sectionIdx, arrIdx: i }
-            }
-          }
-          // Block has no matched segments (image-only, etc). Find the
-          // nearest segment after this block in DOM order.
-          const blockRange = container.ownerDocument.createRange()
-          blockRange.selectNode(block)
-          for (let i = 0; i < index.length; i++) {
-            const sr = index[i]
-            if (!sr) continue
-            try {
-              const cmp = blockRange.compareBoundaryPoints(
-                Range.START_TO_START,
-                (() => {
-                  const r = container.ownerDocument.createRange()
-                  r.setStart(sr.startNode, sr.startOffset)
-                  r.setEnd(sr.startNode, sr.startOffset)
-                  return r
-                })(),
-              )
-              // cmp <= 0 means block starts at or before segment start
-              if (cmp <= 0) return { sectionIdx, arrIdx: i }
-            } catch {
-              continue
-            }
-          }
+        // --- Step 2: sub-block precision via caretRangeFromPoint ---
+        // The block may contain multiple segments. Use the caret at
+        // viewport center to find the exact segment the user is looking
+        // at, not just the first segment in the block.
+        const doc = container.ownerDocument
+        let caretNode: Node | null = null
+        let caretOffset = 0
+        if ('caretRangeFromPoint' in doc) {
+          const cr = (doc as unknown as { caretRangeFromPoint(x: number, y: number): Range | null })
+            .caretRangeFromPoint(centerX, centerY)
+          if (cr) { caretNode = cr.startContainer; caretOffset = cr.startOffset }
+        } else if ('caretPositionFromPoint' in doc) {
+          const cp = (doc as unknown as { caretPositionFromPoint(x: number, y: number): { offsetNode: Node; offset: number } | null })
+            .caretPositionFromPoint(centerX, centerY)
+          if (cp) { caretNode = cp.offsetNode; caretOffset = cp.offset }
         }
 
-        // Fallback: no block found (pip is between sections, etc).
+        // Collect all segments that live inside this block.
+        const blockSegments: number[] = []
+        for (let i = 0; i < index.length; i++) {
+          const sr = index[i]
+          if (!sr) continue
+          if (block.contains(sr.startNode)) blockSegments.push(i)
+        }
+
+        if (blockSegments.length > 0) {
+          // If we have a caret position, find the exact segment containing it.
+          if (caretNode && block.contains(caretNode)) {
+            const tempRange = doc.createRange()
+            for (const i of blockSegments) {
+              const sr = index[i]!
+              try {
+                tempRange.setStart(sr.startNode, sr.startOffset)
+                tempRange.setEnd(sr.endNode, sr.endOffset)
+                if (tempRange.isPointInRange(caretNode, caretOffset)) {
+                  return { sectionIdx, arrIdx: i }
+                }
+              } catch {
+                continue
+              }
+            }
+            // Caret is in the block but between segments (whitespace, etc).
+            // Find the nearest segment: last one whose end ≤ caret, or
+            // first one whose start > caret.
+            const tempPt = doc.createRange()
+            let bestBefore: number | null = null
+            let bestAfter: number | null = null
+            for (const i of blockSegments) {
+              const sr = index[i]!
+              try {
+                tempPt.setStart(sr.endNode, sr.endOffset)
+                tempPt.setEnd(sr.endNode, sr.endOffset)
+                const cmp = tempPt.comparePoint(caretNode, caretOffset)
+                if (cmp >= 0) bestBefore = i
+                else if (bestAfter == null) bestAfter = i
+              } catch { continue }
+            }
+            if (bestBefore != null) return { sectionIdx, arrIdx: bestBefore }
+            if (bestAfter != null) return { sectionIdx, arrIdx: bestAfter }
+          }
+          // No caret or caret outside block — use first segment in block.
+          return { sectionIdx, arrIdx: blockSegments[0] }
+        }
+
+        // Block has no matched segments (image-only, etc). Find the
+        // nearest segment after this block in DOM order.
+        const blockRange = doc.createRange()
+        try { blockRange.selectNode(block) } catch { return { sectionIdx, arrIdx: null } }
+        const segRange = doc.createRange()
+        for (let i = 0; i < index.length; i++) {
+          const sr = index[i]
+          if (!sr) continue
+          try {
+            segRange.setStart(sr.startNode, sr.startOffset)
+            segRange.setEnd(sr.startNode, sr.startOffset)
+            if (blockRange.compareBoundaryPoints(Range.START_TO_START, segRange) <= 0) {
+              return { sectionIdx, arrIdx: i }
+            }
+          } catch { continue }
+        }
+
         return { sectionIdx, arrIdx: null }
       },
       settleImages: async (sectionIdx) => {
