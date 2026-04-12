@@ -395,26 +395,15 @@ export function usePlaybackController(
         return closestIdx
       }
 
-      // Formatted mode: proportional mapping inside the current section.
+      // Formatted mode: use the same block-walk + segment-range algorithm
+      // as the pip and pause-mode scroll detection. This ensures playback
+      // position always matches what the user sees.
       const handle = formattedViewRef.current
       if (!handle) return null
       const chapterIdx = positionStore.getSnapshot().chapterIdx
-      const sectionEl = handle.getSectionEl(chapterIdx)
-      if (!sectionEl) return null
-      const containerRect = container.getBoundingClientRect()
-      const sectionRect = sectionEl.getBoundingClientRect()
-      const sectionTop =
-        sectionRect.top - containerRect.top + container.scrollTop
-      const sectionBottom = sectionTop + sectionRect.height
-      const centerY = container.scrollTop + container.clientHeight / 2
-      if (centerY < sectionTop || centerY >= sectionBottom) return null
       const segs = segmentsRef.current
-      if (segs.length === 0) return null
-      const progress = (centerY - sectionTop) / sectionRect.height
-      return Math.min(
-        segs.length - 1,
-        Math.max(0, Math.floor(progress * segs.length)),
-      )
+      const result = handle.detectAtViewportCenter(chapterIdx, segs)
+      return result?.arrIdx ?? null
     },
     [focusItemOffsetsRef, formattedViewRef],
   )
@@ -605,6 +594,29 @@ export function usePlaybackController(
       segCheckCounterRef.current = 0
       playStartTimeRef.current = Date.now()
       pxPerSecPerWpmRef.current = 0 // re-cache on next tick
+    }
+
+    // Snap the position store to the segment at the pip's current
+    // location. During pause-mode scrolling, Effect 3 updates the store
+    // via a rAF callback — but that callback may still be pending when
+    // the user taps play. This synchronous detection guarantees the
+    // store matches the pip before the first playback tick runs.
+    if (displayMode === 'formatted') {
+      const handle = formattedViewRef.current
+      if (handle) {
+        const chapterIdx = positionStore.getSnapshot().chapterIdx
+        const segs = segmentsRef.current
+        const detected = handle.detectAtViewportCenter(chapterIdx, segs)
+        if (detected?.arrIdx != null) {
+          const abs = translatorsRef.current.arrayToAbsolute(detected.arrIdx)
+          if (abs != null && abs !== positionStore.getSnapshot().absoluteSegmentIndex) {
+            positionStore.setPosition(
+              { absoluteSegmentIndex: abs, wordIndex: 0 },
+              'user-scroll',
+            )
+          }
+        }
+      }
     }
 
     // Formatted-mode play: settle images, rebuild profile. The cursor
