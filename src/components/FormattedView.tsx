@@ -129,19 +129,16 @@ export interface FormattedViewHandle {
     htmlAnchor: string | null | undefined,
     segments: ReadonlyArray<HighlightSegment>,
   ) => TocTargetInfo | null
-  /** Find the segment array index whose rendered position is closest to
-   *  the given scroll-Y coordinate (in container scroll-space). Uses the
-   *  cached segmentRangeIndex for DOM-accurate lookup, falling back to
-   *  proportional estimation only when no index is available. */
-  findSegmentAtScrollY: (
-    sectionIdx: number,
-    scrollY: number,
+  /** Unified position detection at viewport center. Uses
+   *  caretRangeFromPoint to find the exact text node, then matches
+   *  against the segment range index via Range.isPointInRange — no
+   *  layout queries beyond the initial caret probe. Returns the
+   *  section index (always) and the segment array index (only when
+   *  the viewport center is inside `currentSectionIdx`). */
+  detectAtViewportCenter: (
+    currentSectionIdx: number,
     segments: ReadonlyArray<HighlightSegment>,
-  ) => number | null
-  /** Directly update the pip position using DOM elementFromPoint at
-   *  viewport center. Bypasses the segment lookup for immediate visual
-   *  feedback during scroll. */
-  updatePipForScrollY: () => void
+  ) => { sectionIdx: number; arrIdx: number | null } | null
   /** Mark a window of programmatic scrolling so the IntersectionObserver
    *  inside FormattedView and the pause-mode scroll listener in
    *  ReaderViewport both know to suppress their callbacks. The auto-
@@ -396,10 +393,6 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
   // shifts (font size, image decode, theme toggles); only the derived
   // rects are recomputed via Range.getClientRects() per cursor change.
   const segmentIndexRef = useRef<Map<number, SegmentRangeIndex>>(new Map())
-  const segmentYLookupRef = useRef<Map<number, {
-    entries: Array<{ topPx: number; bottomPx: number; idx: number }>
-    segmentCount: number
-  }>>(new Map())
   // Suppression flag for the IntersectionObserver below — flipped on
   // by scrollSectionIntoView() while a programmatic scroll is in flight,
   // cleared on scrollend (with a 400ms timer fallback). Without this,
@@ -545,7 +538,6 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
       el.innerHTML = html
       el.dataset.lastHtml = html
       segmentIndexRef.current.delete(idx)
-      segmentYLookupRef.current.delete(idx)
       return true
     }
 
@@ -833,82 +825,123 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
         isProgrammaticScrollRef.current = false
       },
       isProgrammaticScrollActive: () => isProgrammaticScrollRef.current,
-      findSegmentAtScrollY: (sectionIdx, scrollY, segments) => {
-        const context = getReadySectionContext(sectionIdx)
-        if (!context || segments.length === 0) return null
-        const { container, sectionEl } = context
+      detectAtViewportCenter: (currentSectionIdx, segments) => {
+        const container = containerRef.current
+        if (!container) return null
+
+        const containerRect = container.getBoundingClientRect()
+        const centerX = containerRect.left + containerRect.width / 2
+        const centerY = containerRect.top + container.clientHeight / 2
+
+        // --- Determine which section is at viewport center ---
+        const el = container.ownerDocument.elementFromPoint(centerX, centerY)
+        if (!el) return null
+
+        let sectionIdx: number | null = null
+        let node: HTMLElement | null = el as HTMLElement
+        while (node && node !== container) {
+          if (node.classList.contains('formatted-view__section')) {
+            const idxStr = node.dataset.sectionIndex
+            sectionIdx = idxStr != null ? parseInt(idxStr, 10) : null
+            break
+          }
+          node = node.parentElement
+        }
+
+        // If we can't determine section or it's a different chapter,
+        // return section info only — let the IO handle the chapter switch.
+        if (sectionIdx == null) return null
+        if (sectionIdx !== currentSectionIdx) {
+          return { sectionIdx, arrIdx: null }
+        }
+
+        // --- Determine which segment is at viewport center ---
+        if (segments.length === 0) {
+          return { sectionIdx, arrIdx: null }
+        }
+
+        const context = getReadySectionContext(currentSectionIdx)
+        if (!context) return { sectionIdx, arrIdx: null }
+        const { sectionEl } = context
 
         // Build or retrieve the cached segment-to-DOM-range index.
-        let index = segmentIndexRef.current.get(sectionIdx)
+        let index = segmentIndexRef.current.get(currentSectionIdx)
         if (!index) {
           index = buildSegmentRangeIndex(sectionEl, segments)
-          segmentIndexRef.current.set(sectionIdx, index)
+          segmentIndexRef.current.set(currentSectionIdx, index)
         }
 
-        // Build (or reuse) a Y-sorted lookup table for this section.
-        // Each entry maps a segment's top Y to its array index, sorted
-        // by Y so we can binary search for any scroll position.
-        let yLookup = segmentYLookupRef.current.get(sectionIdx)
-        if (!yLookup || yLookup.segmentCount !== segments.length) {
-          const entries: Array<{ topPx: number; bottomPx: number; idx: number }> = []
+        // Use caretRangeFromPoint / caretPositionFromPoint to get the
+        // exact text node at viewport center, then match it against
+        // segment ranges using Range.isPointInRange — pure DOM tree
+        // comparison, no layout queries.
+        const doc = container.ownerDocument
+        let caretNode: Node | null = null
+        let caretOffset = 0
+        if ('caretRangeFromPoint' in doc) {
+          const cr = (doc as unknown as { caretRangeFromPoint(x: number, y: number): Range | null })
+            .caretRangeFromPoint(centerX, centerY)
+          if (cr) {
+            caretNode = cr.startContainer
+            caretOffset = cr.startOffset
+          }
+        } else if ('caretPositionFromPoint' in doc) {
+          const cp = (doc as unknown as { caretPositionFromPoint(x: number, y: number): { offsetNode: Node; offset: number } | null })
+            .caretPositionFromPoint(centerX, centerY)
+          if (cp) {
+            caretNode = cp.offsetNode
+            caretOffset = cp.offset
+          }
+        }
+
+        if (caretNode) {
+          // Fast path: isPointInRange is a DOM-tree comparison (no layout).
+          const tempRange = doc.createRange()
           for (let i = 0; i < index.length; i++) {
-            const range = index[i]
-            if (!range) continue
-            const rects = materializeRangeRects(range, container)
-            if (rects.length === 0) continue
-            let topMin = Infinity
-            let bottomMax = -Infinity
-            for (const r of rects) {
-              if (r.topPx < topMin) topMin = r.topPx
-              if (r.topPx + r.heightPx > bottomMax)
-                bottomMax = r.topPx + r.heightPx
+            const sr = index[i]
+            if (!sr) continue
+            try {
+              tempRange.setStart(sr.startNode, sr.startOffset)
+              tempRange.setEnd(sr.endNode, sr.endOffset)
+              if (tempRange.isPointInRange(caretNode, caretOffset)) {
+                return { sectionIdx, arrIdx: i }
+              }
+            } catch {
+              // Node not in range's tree — skip.
             }
-            entries.push({ topPx: topMin, bottomPx: bottomMax, idx: i })
           }
-          entries.sort((a, b) => a.topPx - b.topPx)
-          yLookup = { entries, segmentCount: segments.length }
-          segmentYLookupRef.current.set(sectionIdx, yLookup)
-        }
 
-        const { entries } = yLookup
-        if (entries.length === 0) return 0
-
-        // Binary search for the entry whose range contains scrollY,
-        // or the nearest entry if scrollY falls between segments.
-        let lo = 0
-        let hi = entries.length - 1
-
-        // Quick check: scrollY is before first or after last segment
-        if (scrollY <= entries[0].topPx) return entries[0].idx
-        if (scrollY >= entries[hi].bottomPx) return entries[hi].idx
-
-        // Find the last entry whose topPx <= scrollY
-        while (lo < hi) {
-          const mid = (lo + hi + 1) >>> 1
-          if (entries[mid].topPx <= scrollY) {
-            lo = mid
-          } else {
-            hi = mid - 1
+          // Caret was in the section but between segments (e.g. image,
+          // paragraph break). Find nearest segment by comparing DOM
+          // positions — pick the last segment whose end is before the
+          // caret, or the first segment whose start is after.
+          let bestBefore: number | null = null
+          let bestAfter: number | null = null
+          for (let i = 0; i < index.length; i++) {
+            const sr = index[i]
+            if (!sr) continue
+            try {
+              tempRange.setStart(sr.endNode, sr.endOffset)
+              tempRange.setEnd(sr.endNode, sr.endOffset)
+              const cmp = tempRange.comparePoint(caretNode, caretOffset)
+              if (cmp >= 0) {
+                // caret is at or after this segment's end
+                bestBefore = i
+              } else if (bestAfter == null) {
+                // caret is before this segment's start
+                bestAfter = i
+              }
+            } catch {
+              continue
+            }
           }
+          // Prefer the segment just before the caret (reading direction)
+          if (bestBefore != null) return { sectionIdx, arrIdx: bestBefore }
+          if (bestAfter != null) return { sectionIdx, arrIdx: bestAfter }
         }
 
-        // Check if scrollY is inside this entry
-        if (scrollY <= entries[lo].bottomPx) return entries[lo].idx
-
-        // scrollY is in a gap between entries[lo] and entries[lo+1].
-        // Return whichever is closer.
-        if (lo + 1 < entries.length) {
-          const distToCurrent = scrollY - entries[lo].bottomPx
-          const distToNext = entries[lo + 1].topPx - scrollY
-          return distToNext < distToCurrent
-            ? entries[lo + 1].idx
-            : entries[lo].idx
-        }
-        return entries[lo].idx
-      },
-      updatePipForScrollY: () => {
-        // Pip is now managed by an internal scroll listener in FormattedView.
-        // This method is kept for interface compatibility.
+        // Last resort: no caret info available. Return null arrIdx.
+        return { sectionIdx, arrIdx: null }
       },
       settleImages: async (sectionIdx) => {
         // Force every <img> in this section to fully decode before resolving.
