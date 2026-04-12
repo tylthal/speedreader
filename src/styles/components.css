@@ -2195,6 +2195,15 @@ html[data-playing] .reader-header {
   margin-bottom: 0.25rem;
 }
 
+.settings-section__subtitle {
+  font-family: var(--font-display);
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text);
+  margin-top: 1.25rem;
+  margin-bottom: 0.25rem;
+}
+
 .settings-section__description {
   font-size: 0.8rem;
   color: var(--text-muted);
@@ -2705,53 +2714,6 @@ html[data-playing] .reader-header {
   color: var(--accent);
 }
 
-.controls__flow-card {
-  width: 100%;
-  display: grid;
-  gap: 0.15rem;
-  padding: 0.75rem 0.9rem;
-  border: 1px solid var(--surface-border);
-  border-radius: 16px;
-  background: linear-gradient(180deg, color-mix(in srgb, var(--surface-hover) 88%, transparent), color-mix(in srgb, var(--bg-surface) 94%, transparent));
-  color: var(--text);
-  text-align: left;
-  cursor: pointer;
-  transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease;
-}
-
-.controls__flow-card:hover {
-  border-color: color-mix(in srgb, var(--accent) 38%, var(--surface-border));
-  background: linear-gradient(180deg, color-mix(in srgb, var(--surface-subtle) 92%, transparent), color-mix(in srgb, var(--bg-surface) 96%, transparent));
-}
-
-.controls__flow-card:active {
-  transform: translateY(1px);
-}
-
-.controls__flow-card--active {
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--surface-border));
-  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 14%, var(--surface-hover)), color-mix(in srgb, var(--bg-surface) 96%, transparent));
-}
-
-.controls__flow-eyebrow {
-  font-size: 0.68rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--text-muted);
-}
-
-.controls__flow-title {
-  font-size: 0.88rem;
-  font-weight: 650;
-  line-height: 1.25;
-}
-
-.controls__flow-description {
-  font-size: 0.76rem;
-  line-height: 1.35;
-  color: var(--text-muted);
-}
 
 .controls__bookmark-btn {
   background: none;

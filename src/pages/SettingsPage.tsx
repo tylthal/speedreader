@@ -1,5 +1,6 @@
 import { useTheme, type Theme } from '../hooks/useTheme';
 import { useDefaultDisplayMode } from '../hooks/useDefaultDisplayMode';
+import { useChapterFlow, type ChapterFlow } from '../hooks/useChapterFlow';
 import type { DisplayMode } from '../api/types';
 import StorageStatus from '../components/StorageStatus';
 
@@ -32,9 +33,21 @@ const displayModeOptions: DisplayModeOption[] = [
   { value: 'formatted', label: 'Formatted', description: 'Original layout' },
 ];
 
+interface ChapterFlowOption {
+  value: ChapterFlow;
+  label: string;
+  description: string;
+}
+
+const chapterFlowOptions: ChapterFlowOption[] = [
+  { value: 'continuous', label: 'Auto-continue', description: 'Keeps reading into the next chapter' },
+  { value: 'pause', label: 'Pause', description: 'Stops at each chapter break' },
+];
+
 export default function SettingsPage() {
   const { theme, setTheme } = useTheme();
   const { defaultDisplayMode, setDefaultDisplayMode } = useDefaultDisplayMode();
+  const { chapterFlow, setChapterFlow } = useChapterFlow();
 
   return (
     <div className="app-page app-page--settings" role="main" aria-label="Settings" id="main-content">
@@ -95,6 +108,26 @@ export default function SettingsPage() {
               onClick={() => setDefaultDisplayMode(opt.value)}
               role="radio"
               aria-checked={defaultDisplayMode === opt.value}
+              aria-label={`${opt.label}: ${opt.description}`}
+            >
+              <span className="theme-option__label">{opt.label}</span>
+              <span className="theme-option__desc">{opt.description}</span>
+            </button>
+          ))}
+        </div>
+
+        <h3 className="settings-section__subtitle">Chapter flow</h3>
+        <p className="settings-section__description">
+          Controls whether playback continues automatically into the next chapter or pauses at each break.
+        </p>
+        <div className="theme-grid theme-grid--compact" role="radiogroup" aria-label="Chapter flow">
+          {chapterFlowOptions.map((opt) => (
+            <button
+              key={opt.value}
+              className={`theme-option${chapterFlow === opt.value ? ' theme-option--active' : ''}`}
+              onClick={() => setChapterFlow(opt.value)}
+              role="radio"
+              aria-checked={chapterFlow === opt.value}
               aria-label={`${opt.label}: ${opt.description}`}
             >
               <span className="theme-option__label">{opt.label}</span>

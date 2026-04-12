@@ -13,8 +13,6 @@ interface ControlsBottomSheetProps {
   mode?: ReadingMode;
   onToggleMode?: () => void;
   onSetMode?: (mode: ReadingMode) => void;
-  stopAtChapterEnd?: boolean;
-  onToggleStopAtChapter?: () => void;
   gazeSensitivity?: number;
   onGazeSensitivityChange?: (value: number) => void;
   onRecalibrate?: () => void;
@@ -34,8 +32,6 @@ export default function ControlsBottomSheet({
   mode = 'phrase',
   onToggleMode,
   onSetMode,
-  stopAtChapterEnd = false,
-  onToggleStopAtChapter,
   gazeSensitivity = 1.0,
   onGazeSensitivityChange,
   onRecalibrate,
@@ -58,19 +54,6 @@ export default function ControlsBottomSheet({
   const allModes: ReadingMode[] = ['phrase', 'rsvp', 'scroll', 'track'];
   const activeMode = modeMeta[mode];
   const canShowTrackOptions = mode === 'track' && Boolean(onGazeSensitivityChange || onRecalibrate);
-  const sectionFlow = stopAtChapterEnd
-    ? {
-        title: 'Pause at section breaks',
-        description: 'Stops when a new section starts.',
-        announceLabel: 'Pause at section breaks on',
-        ariaLabel: 'Pause at section breaks is on. Stops when a new section starts.',
-      }
-    : {
-        title: 'Auto-continue sections',
-        description: 'Keeps reading into the next section.',
-        announceLabel: 'Auto-continue sections on',
-        ariaLabel: 'Auto-continue sections is on. Keeps reading into the next section.',
-      };
 
   const handleTogglePlay = () => {
     onTogglePlay();
@@ -155,26 +138,6 @@ export default function ControlsBottomSheet({
           </div>
         )}
       </div>
-
-      {onToggleStopAtChapter && (
-        <div className="controls__secondary-row">
-          <button
-            className={`controls__flow-card${stopAtChapterEnd ? ' controls__flow-card--active' : ''}`}
-            type="button"
-            onClick={() => {
-              onToggleStopAtChapter();
-              haptics.tap();
-              announce(stopAtChapterEnd ? 'Auto-continue sections on' : 'Pause at section breaks on');
-            }}
-            aria-label={sectionFlow.ariaLabel}
-            aria-pressed={stopAtChapterEnd}
-          >
-            <span className="controls__flow-eyebrow">Section flow</span>
-            <span className="controls__flow-title">{sectionFlow.title}</span>
-            <span className="controls__flow-description">{sectionFlow.description}</span>
-          </button>
-        </div>
-      )}
 
       {(onJumpLastOpened || onJumpFarthestRead) && (
         <div className="controls__bookmark-row">

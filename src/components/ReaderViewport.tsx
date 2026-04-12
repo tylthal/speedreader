@@ -8,6 +8,7 @@ import { useProgressSaver } from '../hooks/useProgressSaver';
 import { useOrientationResilience } from '../hooks/useOrientationResilience';
 import { useKeyboardHandling } from '../hooks/useKeyboardHandling';
 import { useWakeLock } from '../hooks/useWakeLock';
+import { useChapterFlow } from '../hooks/useChapterFlow';
 import {
   useTocNavigation,
 } from '../hooks/useTocNavigation';
@@ -212,21 +213,9 @@ function ActiveReader({
     setDisplayModePref(publicationId, next).catch(() => { /* ignore */ });
   }, [displayMode, publicationId]);
 
-  const [stopAtChapterEnd, setStopAtChapterEnd] = useState(() => {
-    try {
-      return localStorage.getItem(`speedreader_stop_at_chapter_${publicationId}`) === '1';
-    } catch { return false; }
-  });
+  const { stopAtChapterEnd } = useChapterFlow();
   const stopAtChapterEndRef = useRef(stopAtChapterEnd);
   stopAtChapterEndRef.current = stopAtChapterEnd;
-
-  const handleToggleStopAtChapter = useCallback(() => {
-    setStopAtChapterEnd((prev) => {
-      const next = !prev;
-      try { localStorage.setItem(`speedreader_stop_at_chapter_${publicationId}`, next ? '1' : '0'); } catch {}
-      return next;
-    });
-  }, [publicationId]);
 
   const navigate = useNavigate();
   const { announce } = useAnnounce();
@@ -999,8 +988,6 @@ function ActiveReader({
         mode={readingMode}
         onToggleMode={handleToggleMode}
         onSetMode={handleSetMode}
-        stopAtChapterEnd={stopAtChapterEnd}
-        onToggleStopAtChapter={handleToggleStopAtChapter}
         gazeSensitivity={gazeSensitivity}
         onGazeSensitivityChange={(val) => { setGazeSensitivity(val); gazeActions.setSensitivity(val); }}
         onRecalibrate={() => {
