@@ -124,10 +124,10 @@ export interface FormattedViewHandle {
     htmlAnchor: string | null | undefined,
     segments: ReadonlyArray<HighlightSegment>,
   ) => TocTargetInfo | null
-  /** Unified position detection at viewport center. Uses the same
-   *  elementFromPoint → block-walk algorithm as the pip, then finds
-   *  the first segment whose range starts inside that block. This
-   *  guarantees pip and segment detection always agree. */
+  /** Unified position detection at viewport center. Reads the block
+   *  found by the pip scroll listener (shared via ref), then finds
+   *  the segment at the pip's line via caretRangeFromPoint. Because
+   *  both systems use the same block, they cannot disagree. */
   detectAtViewportCenter: (
     currentSectionIdx: number,
     segments: ReadonlyArray<HighlightSegment>,
@@ -379,6 +379,17 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
   // shifts (font size, image decode, theme toggles); only the derived
   // rects are recomputed via Range.getClientRects() per cursor change.
   const segmentIndexRef = useRef<Map<number, SegmentRangeIndex>>(new Map())
+  // Shared pip→detection bridge. The pip scroll listener writes the
+  // block it found on every scroll frame; detectAtViewportCenter reads
+  // it instead of doing its own elementFromPoint + block walk. This
+  // guarantees both systems always reference the exact same block.
+  const pipBlockRef = useRef<{
+    block: HTMLElement
+    bodyEl: HTMLElement
+    sectionIdx: number
+    centerX: number
+    pipViewportY: number
+  } | null>(null)
   // Suppression flag for the IntersectionObserver below — flipped on
   // by scrollSectionIntoView() while a programmatic scroll is in flight,
   // cleared on scrollend (with a 400ms timer fallback). Without this,
@@ -675,8 +686,9 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
   const lastIOSeenScrollTopRef = useRef(0)
 
   // Keep pip at viewport center during scroll. This is the authoritative
-  // pip positioning — runs on every scroll frame inside the component,
-  // bypassing all external effects and the segment lookup machinery.
+  // pip positioning — runs on every scroll frame inside the component.
+  // Also writes the found block to pipBlockRef so detectAtViewportCenter
+  // can reuse it, guaranteeing both systems reference the same block.
   useEffect(() => {
     const container = containerRef.current
     if (!container) return
@@ -686,21 +698,39 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
       const centerX = containerRect.left + containerRect.width / 2
       const el = container.ownerDocument.elementFromPoint(centerX, centerViewportY)
       if (!el) {
+        pipBlockRef.current = null
         setPipTop(container.scrollTop + container.clientHeight / 2 - 10)
         return
       }
       // Walk up to the nearest block element inside a section body
       let block: HTMLElement | null = el as HTMLElement
+      let bodyEl: HTMLElement | null = null
       while (block && block !== container) {
         const parent: HTMLElement | null = block.parentElement
-        if (parent?.classList.contains('formatted-view__body')) break
+        if (parent?.classList.contains('formatted-view__body')) {
+          bodyEl = parent
+          break
+        }
         block = parent
       }
-      if (block && block !== container) {
+      if (block && block !== container && bodyEl) {
         const blockRect = block.getBoundingClientRect()
         const blockMid = blockRect.top - containerRect.top + container.scrollTop + blockRect.height / 2
+        const pipViewportY = blockRect.top + blockRect.height / 2
         setPipTop(blockMid - 10)
+        // Extract section index from the body's section ancestor.
+        let sectionIdx = -1
+        let sec: HTMLElement | null = bodyEl.parentElement
+        while (sec && sec !== container) {
+          if (sec.classList.contains('formatted-view__section')) {
+            sectionIdx = parseInt(sec.dataset.sectionIndex ?? '-1', 10)
+            break
+          }
+          sec = sec.parentElement
+        }
+        pipBlockRef.current = { block, bodyEl, sectionIdx, centerX, pipViewportY }
       } else {
+        pipBlockRef.current = null
         setPipTop(container.scrollTop + container.clientHeight / 2 - 10)
       }
     }
@@ -812,63 +842,15 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
       },
       isProgrammaticScrollActive: () => isProgrammaticScrollRef.current,
       detectAtViewportCenter: (currentSectionIdx, segments) => {
-        const container = containerRef.current
-        if (!container) return null
+        // Read the block the pip scroll listener found on the last
+        // scroll frame. This is the SAME block the pip is drawn next
+        // to, so pip and detection are guaranteed to agree.
+        const pip = pipBlockRef.current
+        if (!pip) return null
 
-        const containerRect = container.getBoundingClientRect()
-        const centerX = containerRect.left + containerRect.width / 2
-        const centerY = containerRect.top + container.clientHeight / 2
-
-        // --- Step 1: block walk — identical to the pip scroll listener ---
-        // Walk from the element at viewport center up to the nearest
-        // block whose parent is formatted-view__body. Never break early
-        // at section boundaries (the pip doesn't). Extract section index
-        // from ancestor as a side-effect.
-        const el = container.ownerDocument.elementFromPoint(centerX, centerY)
-        if (!el) return null
-
-        let block: HTMLElement | null = el as HTMLElement
-        let bodyEl: HTMLElement | null = null
-        while (block && block !== container) {
-          const parent: HTMLElement | null = block.parentElement
-          if (parent?.classList.contains('formatted-view__body')) {
-            bodyEl = parent
-            break
-          }
-          block = parent
-        }
-
-        // Extract section index from the body's section ancestor.
-        let sectionIdx: number | null = null
-        if (bodyEl) {
-          let sec: HTMLElement | null = bodyEl.parentElement
-          while (sec && sec !== container) {
-            if (sec.classList.contains('formatted-view__section')) {
-              const idxStr = sec.dataset.sectionIndex
-              sectionIdx = idxStr != null ? parseInt(idxStr, 10) : null
-              break
-            }
-            sec = sec.parentElement
-          }
-        } else {
-          // elementFromPoint landed outside a body (title, gap between
-          // sections, etc). Walk from el to find the section.
-          let node: HTMLElement | null = el as HTMLElement
-          while (node && node !== container) {
-            if (node.classList.contains('formatted-view__section')) {
-              const idxStr = node.dataset.sectionIndex
-              sectionIdx = idxStr != null ? parseInt(idxStr, 10) : null
-              break
-            }
-            node = node.parentElement
-          }
-        }
-
-        if (sectionIdx == null) return null
+        const { block, sectionIdx, centerX, pipViewportY } = pip
+        if (sectionIdx < 0) return null
         if (sectionIdx !== currentSectionIdx) {
-          return { sectionIdx, arrIdx: null }
-        }
-        if (!bodyEl || !block || block === container) {
           return { sectionIdx, arrIdx: null }
         }
         if (segments.length === 0) {
@@ -885,23 +867,18 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
           segmentIndexRef.current.set(currentSectionIdx, index)
         }
 
-        // --- Step 2: sub-block precision via caretRangeFromPoint ---
-        // The block may contain multiple segments. Probe the caret at
-        // the block's MIDPOINT — the same Y-coordinate where the pip is
-        // drawn — so we find the exact segment the pip is next to, not
-        // whatever segment happens to be at viewport center.
-        const doc = container.ownerDocument
-        const blockRect = block.getBoundingClientRect()
-        const pipY = blockRect.top + blockRect.height / 2
+        // Probe the caret at the pip's exact viewport Y — the same
+        // line the user sees the pip next to.
+        const doc = (containerRef.current ?? block).ownerDocument
         let caretNode: Node | null = null
         let caretOffset = 0
         if ('caretRangeFromPoint' in doc) {
           const cr = (doc as unknown as { caretRangeFromPoint(x: number, y: number): Range | null })
-            .caretRangeFromPoint(centerX, pipY)
+            .caretRangeFromPoint(centerX, pipViewportY)
           if (cr) { caretNode = cr.startContainer; caretOffset = cr.startOffset }
         } else if ('caretPositionFromPoint' in doc) {
           const cp = (doc as unknown as { caretPositionFromPoint(x: number, y: number): { offsetNode: Node; offset: number } | null })
-            .caretPositionFromPoint(centerX, pipY)
+            .caretPositionFromPoint(centerX, pipViewportY)
           if (cp) { caretNode = cp.offsetNode; caretOffset = cp.offset }
         }
 
@@ -930,8 +907,6 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
               }
             }
             // Caret is in the block but between segments (whitespace, etc).
-            // Find the nearest segment: last one whose end ≤ caret, or
-            // first one whose start > caret.
             const tempPt = doc.createRange()
             let bestBefore: number | null = null
             let bestAfter: number | null = null
