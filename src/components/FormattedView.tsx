@@ -685,10 +685,11 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
   // chance to move to the new chapter.
   const lastIOSeenScrollTopRef = useRef(0)
 
-  // Keep pip at viewport center during scroll. This is the authoritative
-  // pip positioning — runs on every scroll frame inside the component.
-  // Also writes the found block to pipBlockRef so detectAtViewportCenter
-  // can reuse it, guaranteeing both systems reference the same block.
+  // Keep pip at the specific TEXT LINE at viewport center — not the
+  // block's midpoint. Uses caretRangeFromPoint to find the exact line,
+  // positions pip at that line's vertical midpoint. Also writes the
+  // found block + line Y to pipBlockRef so detectAtViewportCenter can
+  // reuse it, guaranteeing both systems reference the same line.
   useEffect(() => {
     const container = containerRef.current
     if (!container) return
@@ -714,10 +715,31 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
         block = parent
       }
       if (block && block !== container && bodyEl) {
-        const blockRect = block.getBoundingClientRect()
-        const blockMid = blockRect.top - containerRect.top + container.scrollTop + blockRect.height / 2
-        const pipViewportY = blockRect.top + blockRect.height / 2
-        setPipTop(blockMid - 10)
+        // Line-level precision: probe the caret at viewport center to
+        // find the exact text line, then position pip at that line.
+        const doc = container.ownerDocument
+        let lineViewportY = centerViewportY // fallback to viewport center
+        let lineRect: DOMRect | null = null
+        if ('caretRangeFromPoint' in doc) {
+          const cr = (doc as unknown as { caretRangeFromPoint(x: number, y: number): Range | null })
+            .caretRangeFromPoint(centerX, centerViewportY)
+          if (cr) lineRect = cr.getClientRects()[0] ?? cr.getBoundingClientRect()
+        } else if ('caretPositionFromPoint' in doc) {
+          const cp = (doc as unknown as { caretPositionFromPoint(x: number, y: number): { offsetNode: Node; offset: number } | null })
+            .caretPositionFromPoint(centerX, centerViewportY)
+          if (cp) {
+            const r = doc.createRange()
+            r.setStart(cp.offsetNode, cp.offset)
+            r.setEnd(cp.offsetNode, Math.min(cp.offset + 1, (cp.offsetNode as Text).length ?? cp.offset))
+            lineRect = r.getClientRects()[0] ?? r.getBoundingClientRect()
+          }
+        }
+        if (lineRect && lineRect.height > 0) {
+          lineViewportY = lineRect.top + lineRect.height / 2
+        }
+        const pipScrollY = lineViewportY - containerRect.top + container.scrollTop
+        setPipTop(pipScrollY - 10)
+
         // Extract section index from the body's section ancestor.
         let sectionIdx = -1
         let sec: HTMLElement | null = bodyEl.parentElement
@@ -728,7 +750,7 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
           }
           sec = sec.parentElement
         }
-        pipBlockRef.current = { block, bodyEl, sectionIdx, centerX, pipViewportY }
+        pipBlockRef.current = { block, bodyEl, sectionIdx, centerX, pipViewportY: lineViewportY }
       } else {
         pipBlockRef.current = null
         setPipTop(container.scrollTop + container.clientHeight / 2 - 10)
@@ -842,13 +864,13 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
       },
       isProgrammaticScrollActive: () => isProgrammaticScrollRef.current,
       detectAtViewportCenter: (currentSectionIdx, segments) => {
-        // Read the block the pip scroll listener found on the last
-        // scroll frame. This is the SAME block the pip is drawn next
-        // to, so pip and detection are guaranteed to agree.
+        // Read the block + line the pip scroll listener found on the
+        // last scroll frame. pipViewportY is the exact text line the
+        // pip is drawn next to — line-level, not block-level.
         const pip = pipBlockRef.current
         if (!pip) return null
 
-        const { block, sectionIdx, centerX, pipViewportY } = pip
+        const { block, sectionIdx, pipViewportY } = pip
         if (sectionIdx < 0) return null
         if (sectionIdx !== currentSectionIdx) {
           return { sectionIdx, arrIdx: null }
@@ -857,6 +879,8 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
           return { sectionIdx, arrIdx: null }
         }
 
+        const container = containerRef.current
+        if (!container) return { sectionIdx, arrIdx: null }
         const context = getReadySectionContext(currentSectionIdx)
         if (!context) return { sectionIdx, arrIdx: null }
         const { sectionEl } = context
@@ -867,82 +891,60 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
           segmentIndexRef.current.set(currentSectionIdx, index)
         }
 
-        // Probe the caret at the pip's exact viewport Y — the same
-        // line the user sees the pip next to.
-        const doc = (containerRef.current ?? block).ownerDocument
-        let caretNode: Node | null = null
-        let caretOffset = 0
-        if ('caretRangeFromPoint' in doc) {
-          const cr = (doc as unknown as { caretRangeFromPoint(x: number, y: number): Range | null })
-            .caretRangeFromPoint(centerX, pipViewportY)
-          if (cr) { caretNode = cr.startContainer; caretOffset = cr.startOffset }
-        } else if ('caretPositionFromPoint' in doc) {
-          const cp = (doc as unknown as { caretPositionFromPoint(x: number, y: number): { offsetNode: Node; offset: number } | null })
-            .caretPositionFromPoint(centerX, pipViewportY)
-          if (cp) { caretNode = cp.offsetNode; caretOffset = cp.offset }
-        }
+        // Find the FIRST segment on the pip's line. Materialize rects
+        // for each segment in the block and check if any rect's vertical
+        // span overlaps the pip's Y coordinate. Return the lowest-index
+        // segment that has text on this line.
+        const containerRect = container.getBoundingClientRect()
+        const tempRange = container.ownerDocument.createRange()
+        let firstOnLine: number | null = null
 
-        // Collect all segments that live inside this block.
-        const blockSegments: number[] = []
         for (let i = 0; i < index.length; i++) {
           const sr = index[i]
           if (!sr) continue
-          if (block.contains(sr.startNode)) blockSegments.push(i)
-        }
-
-        if (blockSegments.length > 0) {
-          // If we have a caret position, find the exact segment containing it.
-          if (caretNode && block.contains(caretNode)) {
-            const tempRange = doc.createRange()
-            for (const i of blockSegments) {
-              const sr = index[i]!
-              try {
-                tempRange.setStart(sr.startNode, sr.startOffset)
-                tempRange.setEnd(sr.endNode, sr.endOffset)
-                if (tempRange.isPointInRange(caretNode, caretOffset)) {
-                  return { sectionIdx, arrIdx: i }
-                }
-              } catch {
-                continue
+          if (!block.contains(sr.startNode)) continue
+          try {
+            tempRange.setStart(sr.startNode, sr.startOffset)
+            tempRange.setEnd(sr.endNode, sr.endOffset)
+            const rects = tempRange.getClientRects()
+            for (let r = 0; r < rects.length; r++) {
+              const rect = rects[r]
+              // Check if this line rect overlaps the pip's Y coordinate.
+              if (rect.height > 0 && pipViewportY >= rect.top && pipViewportY <= rect.bottom) {
+                firstOnLine = i
+                break
               }
             }
-            // Caret is in the block but between segments (whitespace, etc).
-            const tempPt = doc.createRange()
-            let bestBefore: number | null = null
-            let bestAfter: number | null = null
-            for (const i of blockSegments) {
-              const sr = index[i]!
-              try {
-                tempPt.setStart(sr.endNode, sr.endOffset)
-                tempPt.setEnd(sr.endNode, sr.endOffset)
-                const cmp = tempPt.comparePoint(caretNode, caretOffset)
-                if (cmp >= 0) bestBefore = i
-                else if (bestAfter == null) bestAfter = i
-              } catch { continue }
-            }
-            if (bestBefore != null) return { sectionIdx, arrIdx: bestBefore }
-            if (bestAfter != null) return { sectionIdx, arrIdx: bestAfter }
+            if (firstOnLine != null) break
+          } catch {
+            continue
           }
-          // No caret or caret outside block — use first segment in block.
-          return { sectionIdx, arrIdx: blockSegments[0] }
         }
 
-        // Block has no matched segments (image-only, etc). Find the
-        // nearest segment after this block in DOM order.
-        const blockRange = doc.createRange()
-        try { blockRange.selectNode(block) } catch { return { sectionIdx, arrIdx: null } }
-        const segRange = doc.createRange()
+        if (firstOnLine != null) {
+          return { sectionIdx, arrIdx: firstOnLine }
+        }
+
+        // No segment rects overlap the pip line. Fall back to searching
+        // all segments in the section for the closest one above the pip.
+        let closestAbove: number | null = null
+        let closestAboveDist = Infinity
         for (let i = 0; i < index.length; i++) {
           const sr = index[i]
           if (!sr) continue
           try {
-            segRange.setStart(sr.startNode, sr.startOffset)
-            segRange.setEnd(sr.startNode, sr.startOffset)
-            if (blockRange.compareBoundaryPoints(Range.START_TO_START, segRange) <= 0) {
-              return { sectionIdx, arrIdx: i }
+            tempRange.setStart(sr.startNode, sr.startOffset)
+            tempRange.setEnd(sr.endNode, sr.endOffset)
+            const rect = tempRange.getBoundingClientRect()
+            if (rect.height === 0) continue
+            const dist = pipViewportY - rect.bottom
+            if (dist >= 0 && dist < closestAboveDist) {
+              closestAboveDist = dist
+              closestAbove = i
             }
           } catch { continue }
         }
+        if (closestAbove != null) return { sectionIdx, arrIdx: closestAbove }
 
         return { sectionIdx, arrIdx: null }
       },
