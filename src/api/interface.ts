@@ -3,9 +3,11 @@ import type {
   PublicationDetail,
   SegmentBatch,
   ImagePageBatch,
-  ReadingProgress,
-  ProgressInput,
   DisplayMode,
+  Bookmark,
+  BookmarkType,
+  CreateBookmarkInput,
+  AutoBookmarkLocation,
 } from './types'
 
 export interface SpeedReaderClient {
@@ -18,7 +20,12 @@ export interface SpeedReaderClient {
   getPublication(id: number): Promise<PublicationDetail>
   getSegments(pubId: number, chapterId: number, start: number, end: number): Promise<SegmentBatch>
   getImagePages(pubId: number, chapterId: number, start: number, end: number): Promise<ImagePageBatch>
-  getProgress(pubId: number): Promise<ReadingProgress | null>
-  saveProgress(pubId: number, data: ProgressInput): Promise<ReadingProgress>
   setDisplayModePref(pubId: number, mode: DisplayMode | null): Promise<void>
+  getBookmarks(pubId: number): Promise<Bookmark[]>
+  getAutoBookmark(pubId: number, type: 'last_opened' | 'farthest_read'): Promise<Bookmark | null>
+  getAutoBookmarksForPubs(pubIds: number[], type: 'last_opened' | 'farthest_read'): Promise<Map<number, Bookmark>>
+  createBookmark(pubId: number, data: CreateBookmarkInput): Promise<Bookmark>
+  updateBookmark(bookmarkId: number, name: string): Promise<Bookmark>
+  deleteBookmark(bookmarkId: number): Promise<void>
+  upsertAutoBookmark(pubId: number, type: 'last_opened' | 'farthest_read', location: AutoBookmarkLocation): Promise<Bookmark>
 }

@@ -1,67 +1,91 @@
-import type { ReadingProgress } from '../api/client'
 import type { ReadingMode } from '../types'
+import type { AutoBookmarkLocation } from '../api/types'
 
-interface StoredProgressSnapshot {
-  chapterId: number
-  absoluteSegmentIndex: number
-  wordIndex: number
+// ---------------------------------------------------------------------------
+// Reader preferences — wpm + reading_mode stored per-publication in localStorage
+// ---------------------------------------------------------------------------
+
+interface StoredReaderPrefs {
   wpm: number
   readingMode: ReadingMode
 }
 
-export function progressStorageKey(publicationId: number): string {
-  return `speedreader_progress_${publicationId}`
+function prefsKey(publicationId: number): string {
+  return `speedreader_prefs_${publicationId}`
 }
 
-export function buildStoredProgress(
-  publicationId: number,
-  snapshot: StoredProgressSnapshot,
-): ReadingProgress {
-  return {
-    publication_id: publicationId,
-    chapter_id: snapshot.chapterId,
-    absolute_segment_index: snapshot.absoluteSegmentIndex,
-    word_index: snapshot.wordIndex,
-    wpm: snapshot.wpm,
-    reading_mode: snapshot.readingMode,
-    updated_at: new Date().toISOString(),
-    // Recomputed from IndexedDB on the next persisted save.
-    segments_read: 0,
-  }
-}
-
-export function readStoredProgress(publicationId: number): ReadingProgress | null {
+export function readStoredPrefs(publicationId: number): StoredReaderPrefs | null {
   try {
-    const raw = localStorage.getItem(progressStorageKey(publicationId))
+    const raw = localStorage.getItem(prefsKey(publicationId))
     if (!raw) return null
-    return JSON.parse(raw) as ReadingProgress
+    return JSON.parse(raw) as StoredReaderPrefs
   } catch {
     return null
   }
 }
 
-export function writeStoredProgress(
+export function writeStoredPrefs(
   publicationId: number,
-  snapshot: StoredProgressSnapshot,
+  prefs: StoredReaderPrefs,
+): void {
+  try {
+    localStorage.setItem(prefsKey(publicationId), JSON.stringify(prefs))
+  } catch {
+    /* storage full or unavailable */
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Position snapshot — localStorage fallback for instant restore
+// ---------------------------------------------------------------------------
+
+interface StoredPositionSnapshot extends AutoBookmarkLocation {
+  updated_at: string
+}
+
+function positionKey(publicationId: number): string {
+  return `speedreader_position_${publicationId}`
+}
+
+export function readStoredPosition(publicationId: number): StoredPositionSnapshot | null {
+  try {
+    const raw = localStorage.getItem(positionKey(publicationId))
+    if (!raw) return null
+    return JSON.parse(raw) as StoredPositionSnapshot
+  } catch {
+    return null
+  }
+}
+
+export function writeStoredPosition(
+  publicationId: number,
+  location: AutoBookmarkLocation,
 ): void {
   try {
     localStorage.setItem(
-      progressStorageKey(publicationId),
-      JSON.stringify(buildStoredProgress(publicationId, snapshot)),
+      positionKey(publicationId),
+      JSON.stringify({ ...location, updated_at: new Date().toISOString() }),
     )
   } catch {
     /* storage full or unavailable */
   }
 }
 
-export function pickFreshestProgress(
-  ...candidates: Array<ReadingProgress | null>
-): ReadingProgress | null {
-  return candidates.reduce<ReadingProgress | null>((freshest, candidate) => {
-    if (!candidate) return freshest
-    if (!freshest) return candidate
-    return new Date(candidate.updated_at) > new Date(freshest.updated_at)
-      ? candidate
-      : freshest
-  }, null)
+/**
+ * Pick the freshest position source: the IndexedDB auto-bookmark vs the
+ * localStorage snapshot. Returns null if neither exists.
+ */
+export function pickFreshestPosition(
+  bookmark: { chapter_id: number; chapter_idx: number; absolute_segment_index: number; word_index: number; updated_at: string } | null,
+  localSnapshot: StoredPositionSnapshot | null,
+): AutoBookmarkLocation | null {
+  if (!bookmark && !localSnapshot) return null
+  if (!bookmark) return localSnapshot
+  if (!localSnapshot) return bookmark
+
+  const bmTime = new Date(bookmark.updated_at).getTime()
+  const lsTime = new Date(localSnapshot.updated_at).getTime()
+
+  if (lsTime > bmTime) return localSnapshot
+  return bookmark
 }

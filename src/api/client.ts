@@ -16,9 +16,11 @@ export type {
   SegmentKind,
   ImagePage,
   ImagePageBatch,
-  ReadingProgress,
-  ProgressInput,
   TocNode,
+  Bookmark,
+  BookmarkType,
+  CreateBookmarkInput,
+  AutoBookmarkLocation,
 } from './types'
 
 export type { SpeedReaderClient } from './interface'
@@ -90,23 +92,42 @@ export function getImageUrl(pubId: number, imagePath: string) {
   return resolveImageUrl(pubId, imagePath)
 }
 
-export function getProgress(pubId: number) {
-  return getClient().getProgress(pubId)
-}
-
-export function saveProgress(
-  pubId: number,
-  data: {
-    chapter_id: number
-    absolute_segment_index: number
-    word_index: number
-    wpm: number
-    reading_mode: string
-  },
-) {
-  return getClient().saveProgress(pubId, data)
-}
-
 export function setDisplayModePref(pubId: number, mode: 'plain' | 'formatted' | null) {
   return getClient().setDisplayModePref(pubId, mode)
+}
+
+// --- Bookmarks ---
+
+import type { CreateBookmarkInput, AutoBookmarkLocation } from './types'
+
+export function getBookmarks(pubId: number) {
+  return getClient().getBookmarks(pubId)
+}
+
+export function getAutoBookmark(pubId: number, type: 'last_opened' | 'farthest_read') {
+  return getClient().getAutoBookmark(pubId, type)
+}
+
+export function getAutoBookmarksForPubs(pubIds: number[], type: 'last_opened' | 'farthest_read') {
+  return getClient().getAutoBookmarksForPubs(pubIds, type)
+}
+
+export function createBookmark(pubId: number, data: CreateBookmarkInput) {
+  return getClient().createBookmark(pubId, data)
+}
+
+export function updateBookmark(bookmarkId: number, name: string) {
+  return getClient().updateBookmark(bookmarkId, name)
+}
+
+export function deleteBookmark(bookmarkId: number) {
+  return getClient().deleteBookmark(bookmarkId)
+}
+
+export function upsertAutoBookmark(
+  pubId: number,
+  type: 'last_opened' | 'farthest_read',
+  location: AutoBookmarkLocation,
+) {
+  return getClient().upsertAutoBookmark(pubId, type, location)
 }

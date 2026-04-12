@@ -1,5 +1,5 @@
 import {
-  getProgress,
+  getAutoBookmark,
   getPublication,
   type Chapter,
   type ContentType,
@@ -9,7 +9,7 @@ import {
 import { readDefaultDisplayMode } from '../hooks/useDefaultDisplayMode'
 import type { DisplayMode } from '../state/position/types'
 import type { ReadingMode } from '../types'
-import { pickFreshestProgress, readStoredProgress } from './readerProgress'
+import { readStoredPrefs, readStoredPosition, pickFreshestPosition } from './readerProgress'
 
 export interface ReaderBootstrapSeed {
   chapterId: number
@@ -41,9 +41,9 @@ function coerceMode(raw: string): ReadingMode {
 export async function loadReaderBootstrap(
   publicationId: number,
 ): Promise<ReaderBootstrapResult> {
-  const [pub, apiProgress] = await Promise.all([
+  const [pub, lastOpenedBookmark] = await Promise.all([
     getPublication(publicationId),
-    getProgress(publicationId).catch(() => null),
+    getAutoBookmark(publicationId, 'last_opened').catch(() => null),
   ])
 
   const chapters = [...pub.chapters].sort(
@@ -54,10 +54,12 @@ export async function loadReaderBootstrap(
     throw new Error('No chapters found in this publication.')
   }
 
-  const progress = pickFreshestProgress(
-    apiProgress,
-    readStoredProgress(publicationId),
-  )
+  // Pick the freshest position: IndexedDB bookmark vs localStorage snapshot
+  const localSnapshot = readStoredPosition(publicationId)
+  const position = pickFreshestPosition(lastOpenedBookmark, localSnapshot)
+
+  // Restore preferences from localStorage
+  const prefs = readStoredPrefs(publicationId)
 
   let chapterIdx = 0
   let absoluteSegmentIndex = 0
@@ -65,17 +67,20 @@ export async function loadReaderBootstrap(
   let wpm = 250
   let readingMode: ReadingMode = 'phrase'
 
-  if (progress) {
+  if (position) {
     const restoredChapterIdx = chapters.findIndex(
-      (chapter) => chapter.id === progress.chapter_id,
+      (chapter) => chapter.id === position.chapter_id,
     )
     if (restoredChapterIdx !== -1) {
       chapterIdx = restoredChapterIdx
-      absoluteSegmentIndex = progress.absolute_segment_index
-      wordIndex = progress.word_index ?? 0
-      wpm = progress.wpm
-      readingMode = coerceMode(progress.reading_mode)
+      absoluteSegmentIndex = position.absolute_segment_index
+      wordIndex = position.word_index ?? 0
     }
+  }
+
+  if (prefs) {
+    wpm = prefs.wpm
+    readingMode = coerceMode(prefs.readingMode)
   }
 
   const initialDisplayMode: ApiDisplayMode =

@@ -72,22 +72,6 @@ export interface DBImagePage {
   mime_type: string
 }
 
-export interface DBReadingProgress {
-  id?: number
-  publication_id: number
-  chapter_id: number
-  /**
-   * Canonical segment_index (matches segments.segment_index). Renamed
-   * from `segment_index` in schema v4 — the PR2 cursor refactor moved
-   * everyone onto absolute coordinates so callers no longer have to
-   * track an array index alongside it.
-   */
-  absolute_segment_index: number
-  word_index: number
-  wpm: number
-  reading_mode: string
-  updated_at: string
-}
 
 /**
  * Generic blob fallback. Used when the primary storage backend (OPFS) refuses
@@ -116,6 +100,26 @@ export interface DBBlobStorage {
 }
 
 // ---------------------------------------------------------------------------
+// Bookmark table
+// ---------------------------------------------------------------------------
+
+export type BookmarkType = 'user' | 'last_opened' | 'farthest_read'
+
+export interface DBBookmark {
+  id?: number
+  publication_id: number
+  type: BookmarkType
+  chapter_id: number
+  chapter_idx: number
+  absolute_segment_index: number
+  word_index: number
+  snippet: string
+  name: string | null
+  created_at: string
+  updated_at: string
+}
+
+// ---------------------------------------------------------------------------
 // Database
 // ---------------------------------------------------------------------------
 
@@ -124,8 +128,8 @@ class SpeedReaderDB extends Dexie {
   chapters!: Table<DBChapter, number>
   segments!: Table<DBSegment, number>
   image_pages!: Table<DBImagePage, number>
-  reading_progress!: Table<DBReadingProgress, number>
   blob_storage!: Table<DBBlobStorage, string>
+  bookmarks!: Table<DBBookmark, number>
 
   constructor() {
     super('speedreader')
@@ -182,33 +186,37 @@ class SpeedReaderDB extends Dexie {
       blob_storage: '&key',
     })
 
-    // -----------------------------------------------------------------------
-    // Post-launch migration template
-    // -----------------------------------------------------------------------
-    // After launch, schema changes MUST use Dexie upgrade callbacks instead
-    // of the one-time wipe above. Example for the next version:
-    //
-    //   this.version(5).stores({
-    //     ...same stores, or add new indexes...
-    //   }).upgrade(async (tx) => {
-    //     // Transform existing rows in a transaction:
-    //     await tx.table('publications').toCollection().modify((pub) => {
-    //       pub.new_field = pub.old_field ?? defaultValue
-    //     })
-    //   })
-    //
-    // Rules:
-    //  1. Never delete the one-time wipe — it still handles pre-v4 → v4.
-    //  2. The upgrade callback runs once per client, inside an IDB transaction.
-    //  3. Test migrations with real data before shipping.
-    //  4. Bump CURRENT_SCHEMA_VERSION below when adding a new version.
+    // v5: bookmarks table — user bookmarks + auto bookmarks (last_opened,
+    // farthest_read). Re-adds the table that was dropped in v2 with a new
+    // schema. No upgrade callback needed — the table is new.
+    this.version(5).stores({
+      publications: '++id, status, content_type, created_at',
+      chapters: '++id, publication_id, [publication_id+chapter_index]',
+      segments: '++id, chapter_id, [chapter_id+segment_index]',
+      image_pages: '++id, chapter_id, [chapter_id+page_index]',
+      reading_progress: '++id, &publication_id',
+      blob_storage: '&key',
+      bookmarks: '++id, publication_id, [publication_id+type], [publication_id+created_at]',
+    })
+
+    // v6: drop reading_progress table — position is now tracked via the
+    // last_opened auto-bookmark; wpm/mode live in localStorage.
+    this.version(6).stores({
+      publications: '++id, status, content_type, created_at',
+      chapters: '++id, publication_id, [publication_id+chapter_index]',
+      segments: '++id, chapter_id, [chapter_id+segment_index]',
+      image_pages: '++id, chapter_id, [chapter_id+page_index]',
+      reading_progress: null,
+      blob_storage: '&key',
+      bookmarks: '++id, publication_id, [publication_id+type], [publication_id+created_at]',
+    })
   }
 }
 
 export const db = new SpeedReaderDB()
 
 /** Current Dexie schema version. Bump when adding a new version() call. */
-export const CURRENT_SCHEMA_VERSION = 4
+export const CURRENT_SCHEMA_VERSION = 6
 
 // ---------------------------------------------------------------------------
 // One-time wipe (PRD §11)

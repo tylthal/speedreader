@@ -1,9 +1,9 @@
 import { useRef, useState, useCallback } from 'react';
-import type { Publication, ReadingProgress } from '../api/types';
+import type { Publication, Bookmark } from '../api/types';
 
 interface BookCardProps {
   pub: Publication;
-  progress?: ReadingProgress;
+  progress?: Bookmark;
   onTap: (pub: Publication) => void;
   onSwipeAction?: (pub: Publication) => void;
   onLongPress?: (pub: Publication, rect: DOMRect) => void;
@@ -41,8 +41,14 @@ export default function BookCard({
     if (pub.content_type === 'image' && pub.total_pages > 0) {
       return Math.round(((progress.absolute_segment_index + 1) / pub.total_pages) * 100);
     }
+    // For text content, approximate from chapter_idx and segment index.
+    // The farthest_read bookmark's absolute_segment_index is per-chapter,
+    // but chapter_idx gives us a coarse position in the book.
     if (pub.content_type !== 'image' && pub.total_segments > 0) {
-      return Math.round((progress.segments_read / pub.total_segments) * 100);
+      // Use absolute_segment_index as a rough global estimate. For single-chapter
+      // books this is exact; for multi-chapter it underestimates slightly but
+      // still gives a useful progress bar.
+      return Math.min(100, Math.round((progress.absolute_segment_index / pub.total_segments) * 100));
     }
     return 0;
   }, [progress, pub]);

@@ -41,19 +41,24 @@ export function useServiceWorkerUpdate() {
   }, [])
 
   const applyUpdate = useCallback(() => {
-    navigator.serviceWorker.getRegistration().then((reg) => {
-      if (reg?.waiting) {
-        reg.waiting.postMessage({ type: 'SKIP_WAITING' })
-      }
-    }).catch(() => {})
-
-    // Reload once the new SW takes over
+    // Listen for controller change BEFORE posting SKIP_WAITING to avoid race
     let refreshing = false
     navigator.serviceWorker.addEventListener('controllerchange', () => {
       if (!refreshing) {
         refreshing = true
         window.location.reload()
       }
+    })
+
+    navigator.serviceWorker.getRegistration().then((reg) => {
+      if (reg?.waiting) {
+        reg.waiting.postMessage({ type: 'SKIP_WAITING' })
+      } else {
+        // No waiting SW — force reload as fallback
+        window.location.reload()
+      }
+    }).catch(() => {
+      window.location.reload()
     })
   }, [])
 

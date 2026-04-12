@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useAnnounce } from '../hooks/useAnnounce';
+import { useHaptics } from '../hooks/useHaptics';
 import { useSegmentLoader } from '../hooks/useSegmentLoader';
 import { usePlaybackController } from '../hooks/usePlaybackController';
 import { useGazeTracker } from '../hooks/useGazeTracker';
@@ -12,10 +13,13 @@ import {
 } from '../hooks/useTocNavigation';
 import { useFormattedViewCursorSync } from '../hooks/useFormattedViewCursorSync';
 import { useReaderInitialization } from '../hooks/useReaderInitialization';
+import { useLongPress } from '../hooks/useLongPress';
 import { Link, useNavigate } from 'react-router-dom';
-import { setDisplayModePref } from '../api/client';
+import { setDisplayModePref, upsertAutoBookmark } from '../api/client';
 import { markFirstChunkRendered } from '../lib/ttfcMetric';
+import { extractSnippet } from '../lib/bookmarkSnippet';
 import type { Chapter, TocNode } from '../api/client';
+import type { Bookmark } from '../api/types';
 import type { ReadingMode } from '../types';
 import GestureLayer from './GestureLayer';
 import FocusChunkOverlay from './FocusChunkOverlay';
@@ -24,6 +28,8 @@ import GazeIndicator from './GazeIndicator';
 import TrackCalibration from './TrackCalibration';
 import ReaderHeader from './ReaderHeader';
 import TocSidebar from './TocSidebar';
+import BookmarksPanel from './BookmarksPanel';
+import BookmarkNameDialog from './BookmarkNameDialog';
 import FormattedView from './FormattedView';
 import type { FormattedViewHandle } from './FormattedView';
 import VelocityProfileDebugOverlay from './VelocityProfileDebugOverlay';
@@ -39,6 +45,7 @@ import {
   positionStore,
   usePositionSelector,
 } from '../state/position/positionStore';
+import { bookmarkStore, useBookmarkSelector } from '../state/bookmarkStore';
 import type { DisplayMode } from '../state/position/types';
 
 /* ------------------------------------------------------------------ */
@@ -172,6 +179,14 @@ function ActiveReader({
   const cursorRevision = usePositionSelector((s) => s.revision);
 
   const [tocOpen, setTocOpen] = useState(false);
+  const [bookmarksOpen, setBookmarksOpen] = useState(false);
+  const [bookmarkNaming, setBookmarkNaming] = useState<{
+    chapterId: number
+    chapterIdx: number
+    absoluteSegmentIndex: number
+    wordIndex: number
+    snippet: string
+  } | null>(null);
   const [visualActiveTocLocationKey, setVisualActiveTocLocationKey] = useState<string | null>(null);
   const [preferredTocLocation, setPreferredTocLocationState] = useState<PreferredTocLocation>(
     () =>
@@ -525,6 +540,123 @@ function ActiveReader({
   // never overwrites the restored value before the user has interacted.
   useProgressSaver({ publicationId });
 
+  /* ---- Bookmark store init + auto bookmarks ---- */
+  const haptics = useHaptics();
+
+  useEffect(() => {
+    bookmarkStore.init(publicationId);
+    return () => { bookmarkStore.reset(); };
+  }, [publicationId]);
+
+  // Note: "last_opened" auto-bookmark is now continuously updated by
+  // useProgressSaver, so no mount effect is needed here.
+
+  // Update "farthest read" as user progresses
+  const farthestGlobalRef = useRef(-1);
+  useEffect(() => {
+    if (cursorRevision === 0) return;
+    if (cursorOrigin === 'restore') return;
+    const snap = positionStore.getSnapshot();
+    if (snap.chapterId === 0) return;
+
+    // Compute a rough global index: chapterIdx * large_number + absoluteSegmentIndex
+    // This is monotonically increasing as the user progresses through chapters.
+    const globalIndex = snap.chapterIdx * 100000 + snap.absoluteSegmentIndex;
+    if (globalIndex <= farthestGlobalRef.current) return;
+    farthestGlobalRef.current = globalIndex;
+
+    upsertAutoBookmark(publicationId, 'farthest_read', {
+      chapter_id: snap.chapterId,
+      chapter_idx: snap.chapterIdx,
+      absolute_segment_index: snap.absoluteSegmentIndex,
+      word_index: snap.wordIndex,
+    }).catch(() => {});
+  }, [publicationId, cursorRevision, cursorOrigin]);
+
+  // Bookmark selectors for quick-jump buttons
+  const hasLastOpened = useBookmarkSelector((s) => s.lastOpened !== null);
+  const hasFarthestRead = useBookmarkSelector((s) => s.farthestRead !== null);
+
+  const handleJumpLastOpened = useCallback(() => {
+    const b = bookmarkStore.getSnapshot().lastOpened;
+    if (!b) return;
+    controller.pause();
+    positionStore.setPosition({
+      chapterId: b.chapter_id,
+      chapterIdx: b.chapter_idx,
+      absoluteSegmentIndex: b.absolute_segment_index,
+      wordIndex: b.word_index,
+    }, 'bookmark');
+  }, [controller]);
+
+  const handleJumpFarthestRead = useCallback(() => {
+    const b = bookmarkStore.getSnapshot().farthestRead;
+    if (!b) return;
+    controller.pause();
+    positionStore.setPosition({
+      chapterId: b.chapter_id,
+      chapterIdx: b.chapter_idx,
+      absoluteSegmentIndex: b.absolute_segment_index,
+      wordIndex: b.word_index,
+    }, 'bookmark');
+  }, [controller]);
+
+  /* ---- Long-press to create bookmark ---- */
+  const handleLongPress = useCallback(() => {
+    const snap = positionStore.getSnapshot();
+    if (snap.isPlaying) return;
+    if (snap.chapterId === 0) return;
+
+    const snippet = extractSnippet(
+      loaderState.segments,
+      snap.absoluteSegmentIndex,
+      snap.wordIndex,
+    );
+
+    setBookmarkNaming({
+      chapterId: snap.chapterId,
+      chapterIdx: snap.chapterIdx,
+      absoluteSegmentIndex: snap.absoluteSegmentIndex,
+      wordIndex: snap.wordIndex,
+      snippet,
+    });
+    haptics.success();
+  }, [loaderState.segments, haptics]);
+
+  const longPressHandlers = useLongPress({
+    onLongPress: handleLongPress,
+    enabled: !isPlaying,
+  });
+
+  const handleBookmarkConfirm = useCallback((name: string) => {
+    if (!bookmarkNaming) return;
+    bookmarkStore.addBookmark({
+      chapter_id: bookmarkNaming.chapterId,
+      chapter_idx: bookmarkNaming.chapterIdx,
+      absolute_segment_index: bookmarkNaming.absoluteSegmentIndex,
+      word_index: bookmarkNaming.wordIndex,
+      snippet: bookmarkNaming.snippet,
+      name,
+    });
+    setBookmarkNaming(null);
+    announce(`Bookmark created: ${name}`);
+  }, [bookmarkNaming, announce]);
+
+  const handleBookmarkJump = useCallback((position: {
+    chapterId: number
+    chapterIdx: number
+    absoluteSegmentIndex: number
+    wordIndex: number
+  }) => {
+    controller.pause();
+    positionStore.setPosition({
+      chapterId: position.chapterId,
+      chapterIdx: position.chapterIdx,
+      absoluteSegmentIndex: position.absoluteSegmentIndex,
+      wordIndex: position.wordIndex,
+    }, 'bookmark');
+  }, [controller]);
+
   /* ---- Chapter announcements ---- */
   useEffect(() => {
     if (currentChapter && cursorRevision > 0) {
@@ -669,6 +801,7 @@ function ActiveReader({
         hideDisplayToggle={isImageBook}
         formattedSuppressed={phraseLikeMode && displayMode === 'formatted'}
         onOpenToc={() => setTocOpen(true)}
+        onOpenBookmarks={() => setBookmarksOpen(true)}
         onExit={() => navigate('/')}
       />
       <TocSidebar
@@ -694,6 +827,19 @@ function ActiveReader({
         }}
         onClose={() => setTocOpen(false)}
       />
+      <BookmarksPanel
+        open={bookmarksOpen}
+        chapters={chapters}
+        onJump={handleBookmarkJump}
+        onClose={() => setBookmarksOpen(false)}
+      />
+      {bookmarkNaming && (
+        <BookmarkNameDialog
+          defaultName={`Bookmark ${bookmarkStore.getUserBookmarkCount() + 1}`}
+          onConfirm={handleBookmarkConfirm}
+          onCancel={() => setBookmarkNaming(null)}
+        />
+      )}
 
       {/* CBZ and PDF views are conditionally rendered (they're cheap and
           rarely used). The HTML FormattedView is ALWAYS mounted to avoid
@@ -732,7 +878,7 @@ function ActiveReader({
         />
       )}
       {!isImageBook && !isPdfBook && (
-        <>
+        <div className="long-press-wrapper" {...longPressHandlers}>
           <FormattedView
             ref={formattedViewRef}
             publicationId={publicationId}
@@ -751,33 +897,33 @@ function ActiveReader({
               wpm={wpm}
             />
           )}
-        </>
-      )}
 
-      {!showFormattedView && (
-      <GestureLayer
-        onTap={isPlaying ? userPause : undefined}
-        onSwipeLeft={isPlaying ? handleNextChapter : undefined}
-        onSwipeRight={isPlaying ? handlePrevChapter : undefined}
-        onSwipeUp={isPlaying ? () => controller.adjustWpm(25) : undefined}
-        onSwipeDown={isPlaying ? () => controller.adjustWpm(-25) : undefined}
-        enabled={isPlaying}
-      >
-        <FocusChunkOverlay
-          segment={currentSegment}
-          isPlaying={isPlaying}
-          progress={progress}
-          mode={readingMode}
-          rsvpWord={rsvpWord}
-          rsvpOrpIndex={rsvpOrpIndex}
-          rsvpWpm={wpm}
-          segments={loaderState.segments}
-          currentIndex={activeArrayIdx}
-          onSeek={seekToArr}
-          scrollContainerRef={focusContainerRef}
-          scrollItemRefs={focusItemRefsMap}
-        />
-      </GestureLayer>
+          {!showFormattedView && (
+          <GestureLayer
+            onTap={isPlaying ? userPause : undefined}
+            onSwipeLeft={isPlaying ? handleNextChapter : undefined}
+            onSwipeRight={isPlaying ? handlePrevChapter : undefined}
+            onSwipeUp={isPlaying ? () => controller.adjustWpm(25) : undefined}
+            onSwipeDown={isPlaying ? () => controller.adjustWpm(-25) : undefined}
+            enabled={isPlaying}
+          >
+            <FocusChunkOverlay
+              segment={currentSegment}
+              isPlaying={isPlaying}
+              progress={progress}
+              mode={readingMode}
+              rsvpWord={rsvpWord}
+              rsvpOrpIndex={rsvpOrpIndex}
+              rsvpWpm={wpm}
+              segments={loaderState.segments}
+              currentIndex={activeArrayIdx}
+              onSeek={seekToArr}
+              scrollContainerRef={focusContainerRef}
+              scrollItemRefs={focusItemRefsMap}
+            />
+          </GestureLayer>
+          )}
+        </div>
       )}
 
       {readingMode === 'track' && gazeState.status !== 'idle' && isPlaying && (
@@ -863,6 +1009,10 @@ function ActiveReader({
           try { localStorage.removeItem('speedreader_gaze_calibration'); } catch {}
           setShowCalibration(true);
         }}
+        onJumpLastOpened={handleJumpLastOpened}
+        onJumpFarthestRead={handleJumpFarthestRead}
+        hasLastOpened={hasLastOpened}
+        hasFarthestRead={hasFarthestRead}
       />
     </div>
   );

@@ -94,25 +94,38 @@ export interface SegmentBatch {
   total_segments: number
 }
 
-export interface ReadingProgress {
+// ---------------------------------------------------------------------------
+// Bookmarks
+// ---------------------------------------------------------------------------
+
+export type BookmarkType = 'user' | 'last_opened' | 'farthest_read'
+
+export interface Bookmark {
+  id: number
   publication_id: number
+  type: BookmarkType
   chapter_id: number
-  /** Canonical segment_index. Renamed from segment_index in the cursor refactor. */
+  chapter_idx: number
   absolute_segment_index: number
   word_index: number
-  wpm: number
-  reading_mode: string
+  snippet: string
+  name: string | null
+  created_at: string
   updated_at: string
-  /** Cumulative segments read across all chapters preceding this one,
-   *  plus this chapter's absolute_segment_index. Used by BookCard for the
-   *  home-screen progress bar. Computed at read time, not persisted. */
-  segments_read: number
 }
 
-export interface ProgressInput {
+export interface CreateBookmarkInput {
   chapter_id: number
+  chapter_idx: number
   absolute_segment_index: number
   word_index: number
-  wpm: number
-  reading_mode: string
+  snippet: string
+  name: string
+}
+
+export interface AutoBookmarkLocation {
+  chapter_id: number
+  chapter_idx: number
+  absolute_segment_index: number
+  word_index: number
 }

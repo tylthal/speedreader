@@ -129,6 +129,19 @@ export interface FormattedViewHandle {
     htmlAnchor: string | null | undefined,
     segments: ReadonlyArray<HighlightSegment>,
   ) => TocTargetInfo | null
+  /** Find the segment array index whose rendered position is closest to
+   *  the given scroll-Y coordinate (in container scroll-space). Uses the
+   *  cached segmentRangeIndex for DOM-accurate lookup, falling back to
+   *  proportional estimation only when no index is available. */
+  findSegmentAtScrollY: (
+    sectionIdx: number,
+    scrollY: number,
+    segments: ReadonlyArray<HighlightSegment>,
+  ) => number | null
+  /** Directly update the pip position using DOM elementFromPoint at
+   *  viewport center. Bypasses the segment lookup for immediate visual
+   *  feedback during scroll. */
+  updatePipForScrollY: () => void
   /** Mark a window of programmatic scrolling so the IntersectionObserver
    *  inside FormattedView and the pause-mode scroll listener in
    *  ReaderViewport both know to suppress their callbacks. The auto-
@@ -369,6 +382,13 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
   // div so the highlight hugs the actual text instead of spanning the
   // full container width.
   const [highlightRects, setHighlightRects] = useState<RectInContainer[] | null>(null)
+  const [highlightStale, setHighlightStale] = useState(false)
+  const [pipTop, setPipTop] = useState<number | null>(null)
+  const accurateHighlightCacheRef = useRef<{
+    sectionIdx: number
+    arrIdx: number
+    rects: RectInContainer[]
+  } | null>(null)
   // Per-section text→DOM-range cache. Built lazily on the first
   // setHighlightForSegment call for a section, invalidated inline in
   // the innerHTML-write effect when the body content changes. Stores
@@ -376,6 +396,10 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
   // shifts (font size, image decode, theme toggles); only the derived
   // rects are recomputed via Range.getClientRects() per cursor change.
   const segmentIndexRef = useRef<Map<number, SegmentRangeIndex>>(new Map())
+  const segmentYLookupRef = useRef<Map<number, {
+    entries: Array<{ topPx: number; bottomPx: number; idx: number }>
+    segmentCount: number
+  }>>(new Map())
   // Suppression flag for the IntersectionObserver below — flipped on
   // by scrollSectionIntoView() while a programmatic scroll is in flight,
   // cleared on scrollend (with a 400ms timer fallback). Without this,
@@ -521,6 +545,7 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
       el.innerHTML = html
       el.dataset.lastHtml = html
       segmentIndexRef.current.delete(idx)
+      segmentYLookupRef.current.delete(idx)
       return true
     }
 
@@ -671,6 +696,42 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
   // chance to move to the new chapter.
   const lastIOSeenScrollTopRef = useRef(0)
 
+  // Keep pip at viewport center during scroll. This is the authoritative
+  // pip positioning — runs on every scroll frame inside the component,
+  // bypassing all external effects and the segment lookup machinery.
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container) return
+    const onScroll = () => {
+      const containerRect = container.getBoundingClientRect()
+      const centerViewportY = containerRect.top + container.clientHeight / 2
+      const centerX = containerRect.left + containerRect.width / 2
+      const el = container.ownerDocument.elementFromPoint(centerX, centerViewportY)
+      if (!el) {
+        setPipTop(container.scrollTop + container.clientHeight / 2 - 10)
+        return
+      }
+      // Walk up to the nearest block element inside a section body
+      let block: HTMLElement | null = el as HTMLElement
+      while (block && block !== container) {
+        const parent: HTMLElement | null = block.parentElement
+        if (parent?.classList.contains('formatted-view__body')) break
+        block = parent
+      }
+      if (block && block !== container) {
+        const blockRect = block.getBoundingClientRect()
+        const blockMid = blockRect.top - containerRect.top + container.scrollTop + blockRect.height / 2
+        setPipTop(blockMid - 10)
+      } else {
+        setPipTop(container.scrollTop + container.clientHeight / 2 - 10)
+      }
+    }
+    container.addEventListener('scroll', onScroll, { passive: true })
+    // Set initial position
+    onScroll()
+    return () => container.removeEventListener('scroll', onScroll)
+  }, [])
+
   // Watch which section is at the top of the viewport and report it.
   // Deps include only `chapters` so the observer is rebuilt when sections
   // change, not on every parent re-render.
@@ -708,6 +769,11 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
 
         let bestIdx = -1
         let bestTop = -Infinity
+        // Also track the closest intersecting section if none has top<=0
+        // (happens when the user scrolls to the very start of a new section
+        // that hasn't fully crossed the viewport top edge yet).
+        let closestPositiveIdx = -1
+        let closestPositiveTop = Infinity
         for (const entry of entries) {
           if (!entry.isIntersecting) continue
           const idx = parseInt(
@@ -719,7 +785,17 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
           if (top <= 0 && top > bestTop) {
             bestTop = top
             bestIdx = idx
+          } else if (top > 0 && top < closestPositiveTop) {
+            closestPositiveTop = top
+            closestPositiveIdx = idx
           }
+        }
+        // If no section has scrolled past the top edge but there's a
+        // visible section near the top, use it. This handles the case
+        // where the previous section is fully off-screen but the new
+        // section's top hasn't quite reached pixel 0.
+        if (bestIdx < 0 && closestPositiveIdx >= 0) {
+          bestIdx = closestPositiveIdx
         }
         if (bestIdx >= 0 && bestIdx !== lastReportedIdxRef.current) {
           lastReportedIdxRef.current = bestIdx
@@ -757,6 +833,83 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
         isProgrammaticScrollRef.current = false
       },
       isProgrammaticScrollActive: () => isProgrammaticScrollRef.current,
+      findSegmentAtScrollY: (sectionIdx, scrollY, segments) => {
+        const context = getReadySectionContext(sectionIdx)
+        if (!context || segments.length === 0) return null
+        const { container, sectionEl } = context
+
+        // Build or retrieve the cached segment-to-DOM-range index.
+        let index = segmentIndexRef.current.get(sectionIdx)
+        if (!index) {
+          index = buildSegmentRangeIndex(sectionEl, segments)
+          segmentIndexRef.current.set(sectionIdx, index)
+        }
+
+        // Build (or reuse) a Y-sorted lookup table for this section.
+        // Each entry maps a segment's top Y to its array index, sorted
+        // by Y so we can binary search for any scroll position.
+        let yLookup = segmentYLookupRef.current.get(sectionIdx)
+        if (!yLookup || yLookup.segmentCount !== segments.length) {
+          const entries: Array<{ topPx: number; bottomPx: number; idx: number }> = []
+          for (let i = 0; i < index.length; i++) {
+            const range = index[i]
+            if (!range) continue
+            const rects = materializeRangeRects(range, container)
+            if (rects.length === 0) continue
+            let topMin = Infinity
+            let bottomMax = -Infinity
+            for (const r of rects) {
+              if (r.topPx < topMin) topMin = r.topPx
+              if (r.topPx + r.heightPx > bottomMax)
+                bottomMax = r.topPx + r.heightPx
+            }
+            entries.push({ topPx: topMin, bottomPx: bottomMax, idx: i })
+          }
+          entries.sort((a, b) => a.topPx - b.topPx)
+          yLookup = { entries, segmentCount: segments.length }
+          segmentYLookupRef.current.set(sectionIdx, yLookup)
+        }
+
+        const { entries } = yLookup
+        if (entries.length === 0) return 0
+
+        // Binary search for the entry whose range contains scrollY,
+        // or the nearest entry if scrollY falls between segments.
+        let lo = 0
+        let hi = entries.length - 1
+
+        // Quick check: scrollY is before first or after last segment
+        if (scrollY <= entries[0].topPx) return entries[0].idx
+        if (scrollY >= entries[hi].bottomPx) return entries[hi].idx
+
+        // Find the last entry whose topPx <= scrollY
+        while (lo < hi) {
+          const mid = (lo + hi + 1) >>> 1
+          if (entries[mid].topPx <= scrollY) {
+            lo = mid
+          } else {
+            hi = mid - 1
+          }
+        }
+
+        // Check if scrollY is inside this entry
+        if (scrollY <= entries[lo].bottomPx) return entries[lo].idx
+
+        // scrollY is in a gap between entries[lo] and entries[lo+1].
+        // Return whichever is closer.
+        if (lo + 1 < entries.length) {
+          const distToCurrent = scrollY - entries[lo].bottomPx
+          const distToNext = entries[lo + 1].topPx - scrollY
+          return distToNext < distToCurrent
+            ? entries[lo + 1].idx
+            : entries[lo].idx
+        }
+        return entries[lo].idx
+      },
+      updatePipForScrollY: () => {
+        // Pip is now managed by an internal scroll listener in FormattedView.
+        // This method is kept for interface compatibility.
+      },
       settleImages: async (sectionIdx) => {
         // Force every <img> in this section to fully decode before resolving.
         // HTMLImageElement.decode() resolves once the image is parsed AND
@@ -817,18 +970,51 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
           // reflect the current layout (font size, image decode).
           const rects = materializeRangeRects(range, container)
           if (rects.length > 0) {
+            // Cache the DOM-accurate result so we can reuse it if a
+            // subsequent call for the same segment falls through to
+            // the proportional fallback (avoids flicker).
+            accurateHighlightCacheRef.current = { sectionIdx, arrIdx, rects }
             setHighlightRects(suppressVisual ? null : rects)
+            setHighlightStale(false)
             let topMin = Infinity
             let bottomMax = -Infinity
             for (const r of rects) {
               if (r.topPx < topMin) topMin = r.topPx
               if (r.topPx + r.heightPx > bottomMax) bottomMax = r.topPx + r.heightPx
             }
+            const bandHeight = Math.max(2, bottomMax - topMin)
             return {
               topPx: topMin,
-              heightPx: Math.max(2, bottomMax - topMin),
+              heightPx: bandHeight,
               accurate: true,
             }
+          }
+        }
+
+        // Before resorting to the proportional estimate, check whether
+        // we have a cached DOM-accurate result for this exact segment.
+        // Reusing the cache prevents the highlight from jumping to an
+        // inaccurate proportional position when DOM match transiently fails.
+        const cached = accurateHighlightCacheRef.current
+        if (
+          cached &&
+          cached.sectionIdx === sectionIdx &&
+          cached.arrIdx === arrIdx
+        ) {
+          setHighlightRects(suppressVisual ? null : cached.rects)
+          setHighlightStale(false)
+          let topMin = Infinity
+          let bottomMax = -Infinity
+          for (const r of cached.rects) {
+            if (r.topPx < topMin) topMin = r.topPx
+            if (r.topPx + r.heightPx > bottomMax)
+              bottomMax = r.topPx + r.heightPx
+          }
+          const bandHeight = Math.max(2, bottomMax - topMin)
+          return {
+            topPx: topMin,
+            heightPx: bandHeight,
+            accurate: true,
           }
         }
 
@@ -891,6 +1077,7 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
           heightPx: fallback.heightPx,
         }
         setHighlightRects(suppressVisual ? null : [fallbackRect])
+        setHighlightStale(true)
         return { ...fallback, accurate: false }
       },
       resolveTocTarget: (sectionIdx, htmlAnchor, segments) => {
@@ -961,11 +1148,19 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
       aria-hidden={!visible}
       {...tapHandlers}
     >
+      {pipTop != null && (
+        <div
+          className="formatted-view__pip"
+          aria-hidden="true"
+          style={{ top: `${pipTop}px` }}
+        />
+      )}
       {highlightRects?.map((r, i) => (
         <div
           key={i}
-          className="formatted-view__highlight"
+          className={highlightStale ? 'formatted-view__highlight formatted-view__highlight--stale' : 'formatted-view__highlight'}
           aria-hidden="true"
+          data-stale={highlightStale || undefined}
           style={{
             top: `${r.topPx}px`,
             left: `${r.leftPx}px`,

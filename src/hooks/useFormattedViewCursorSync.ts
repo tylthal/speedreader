@@ -50,6 +50,8 @@ export function useFormattedViewCursorSync({
   const pendingScrollRef = useRef(false)
   const wasFormattedRef = useRef(false)
   const lastAutoScrolledChapterRef = useRef(-1)
+  const isActivelyScrollingRef = useRef(false)
+  const scrollSettleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const suppressVisualHighlight =
     isPlaying && (readingMode === 'scroll' || readingMode === 'track')
 
@@ -59,6 +61,15 @@ export function useFormattedViewCursorSync({
 
     if (!showFormattedView) {
       handle.setHighlightForSegment(chapterIdx, -1, [])
+      return
+    }
+
+    // During active user scrolling, skip entirely — the scroll handler
+    // in Effect 3 directly updates the pip via updatePipForScrollY.
+    // Calling setHighlightForSegment here would overwrite the pip with
+    // a stale/wrong position. The full highlight reappears once scrolling
+    // settles (see Effect 3's settle timer).
+    if (isActivelyScrollingRef.current && cursorOrigin === 'user-scroll') {
       return
     }
 
@@ -280,53 +291,87 @@ export function useFormattedViewCursorSync({
     if (!container) return
 
     let rafScheduled = false
+
+    const detectSegmentAtCenter = () => {
+      if (handle.isProgrammaticScrollActive()) return
+
+      const sectionEl = handle.getSectionEl(chapterIdx)
+      if (!sectionEl) return
+
+      const centerY = container.scrollTop + container.clientHeight / 2
+
+      // Use DOM-accurate segment lookup instead of proportional estimate.
+      // The proportional approach assumes equal segment heights, which
+      // causes the highlight to drift far from the visible text when
+      // segments have varying heights (headings, short paragraphs, etc.).
+      const arrIdx = handle.findSegmentAtScrollY(
+        chapterIdx,
+        centerY,
+        segments,
+      )
+      if (arrIdx == null) return
+      const abs = translators.arrayToAbsolute(arrIdx)
+      if (
+        abs == null ||
+        abs === positionStore.getSnapshot().absoluteSegmentIndex
+      ) {
+        return
+      }
+
+      positionStore.setPosition(
+        { absoluteSegmentIndex: abs, wordIndex: 0 },
+        'user-scroll',
+      )
+    }
+
     const onScroll = () => {
       if (handle.isProgrammaticScrollActive() || rafScheduled) return
+
+      // Track active scrolling so Effect 1 can skip highlight updates
+      isActivelyScrollingRef.current = true
+      if (scrollSettleTimerRef.current != null) {
+        clearTimeout(scrollSettleTimerRef.current)
+      }
+      scrollSettleTimerRef.current = setTimeout(() => {
+        isActivelyScrollingRef.current = false
+        scrollSettleTimerRef.current = null
+        // Trigger one final highlight update for the settled position
+        const arrIdx = translators.absoluteToArrayIndex(
+          positionStore.getSnapshot().absoluteSegmentIndex,
+        )
+        if (arrIdx != null && segments.length > 0) {
+          handle.setHighlightForSegment(chapterIdx, arrIdx, segments, {
+            suppressVisual: suppressVisualHighlight,
+          })
+        }
+      }, 180)
+
+      // Immediately update pip position using DOM elementFromPoint
+      // (bypasses segment lookup so pip tracks scroll frame-by-frame).
+      handle.updatePipForScrollY()
 
       rafScheduled = true
       requestAnimationFrame(() => {
         rafScheduled = false
-        if (handle.isProgrammaticScrollActive()) return
-
-        const sectionEl = handle.getSectionEl(chapterIdx)
-        if (!sectionEl) return
-
-        const containerRect = container.getBoundingClientRect()
-        const sectionRect = sectionEl.getBoundingClientRect()
-        const sectionTop =
-          sectionRect.top - containerRect.top + container.scrollTop
-        const centerY = container.scrollTop + container.clientHeight / 2
-        if (
-          centerY < sectionTop ||
-          centerY >= sectionTop + sectionRect.height ||
-          segments.length === 0
-        ) {
-          return
-        }
-
-        const progress = (centerY - sectionTop) / sectionRect.height
-        const arrIdx = Math.min(
-          segments.length - 1,
-          Math.max(0, Math.floor(progress * segments.length)),
-        )
-        const abs = translators.arrayToAbsolute(arrIdx)
-        if (
-          abs == null ||
-          abs === positionStore.getSnapshot().absoluteSegmentIndex
-        ) {
-          return
-        }
-
-        positionStore.setPosition(
-          { absoluteSegmentIndex: abs, wordIndex: 0 },
-          'user-scroll',
-        )
+        detectSegmentAtCenter()
       })
     }
 
     container.addEventListener('scroll', onScroll, { passive: true })
+
+    // Run detection immediately on mount. This handles the case where
+    // the IntersectionObserver updated chapterIdx after a cross-section
+    // scroll — by the time this effect re-runs with the new chapterIdx,
+    // no further scroll events will fire, so we must detect once now.
+    requestAnimationFrame(detectSegmentAtCenter)
+
     return () => {
       container.removeEventListener('scroll', onScroll)
+      if (scrollSettleTimerRef.current != null) {
+        clearTimeout(scrollSettleTimerRef.current)
+        scrollSettleTimerRef.current = null
+      }
+      isActivelyScrollingRef.current = false
     }
   }, [
     showFormattedView,
@@ -334,6 +379,7 @@ export function useFormattedViewCursorSync({
     chapterIdx,
     segments,
     translators,
+    suppressVisualHighlight,
     formattedViewRef,
   ])
 }

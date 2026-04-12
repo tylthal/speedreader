@@ -3,11 +3,11 @@ import { useNavigate } from 'react-router-dom';
 import {
   getPublications,
   uploadBook,
-  getProgress,
+  getAutoBookmarksForPubs,
   archivePublication,
   unarchivePublication,
 } from '../api/client';
-import type { Publication, ReadingProgress } from '../api/client';
+import type { Publication, Bookmark } from '../api/client';
 import BookCard from '../components/BookCard';
 import EmptyState from '../components/EmptyState';
 import UploadFAB, { type UploadFABHandle } from '../components/UploadFAB';
@@ -16,7 +16,7 @@ import ProcessingDialog from '../components/ProcessingDialog';
 
 function sortPublications(
   pubs: Publication[],
-  progressByPublication: Record<number, ReadingProgress>,
+  progressByPublication: Record<number, Bookmark>,
 ): Publication[] {
   return [...pubs].sort((a, b) => {
     const pa = progressByPublication[a.id];
@@ -30,7 +30,7 @@ function sortPublications(
 
 export default function LibraryPage() {
   const [publications, setPublications] = useState<Publication[]>([]);
-  const [progressMap, setProgressMap] = useState<Record<number, ReadingProgress>>({});
+  const [progressMap, setProgressMap] = useState<Record<number, Bookmark>>({});
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [uploadPhase, setUploadPhase] = useState('');
@@ -42,7 +42,7 @@ export default function LibraryPage() {
   } | null>(null);
   const [archiveUndo, setArchiveUndo] = useState<{
     pub: Publication;
-    progress?: ReadingProgress;
+    progress?: Bookmark;
   } | null>(null);
   const [dragActive, setDragActive] = useState(false);
   const uploadFabRef = useRef<UploadFABHandle>(null);
@@ -57,15 +57,12 @@ export default function LibraryPage() {
       setLoading(true);
       const pubs = await getPublications();
 
-      const progressResults = await Promise.allSettled(
-        pubs.map((p) => getProgress(p.id))
-      );
-      const map: Record<number, ReadingProgress> = {};
-      progressResults.forEach((result, i) => {
-        if (result.status === 'fulfilled' && result.value) {
-          map[pubs[i].id] = result.value;
-        }
-      });
+      const pubIds = pubs.map((p) => p.id);
+      const bookmarkMap = await getAutoBookmarksForPubs(pubIds, 'farthest_read');
+      const map: Record<number, Bookmark> = {};
+      for (const [pubId, bookmark] of bookmarkMap) {
+        map[pubId] = bookmark;
+      }
       setProgressMap(map);
       setPublications(sortPublications(pubs, map));
     } catch (err) {
@@ -90,7 +87,7 @@ export default function LibraryPage() {
     return () => clearArchiveUndoTimer();
   }, [clearArchiveUndoTimer]);
 
-  const showArchiveUndo = useCallback((pub: Publication, progress?: ReadingProgress) => {
+  const showArchiveUndo = useCallback((pub: Publication, progress?: Bookmark) => {
     clearArchiveUndoTimer();
     setArchiveUndo({ pub, progress });
     archiveUndoTimerRef.current = setTimeout(() => {

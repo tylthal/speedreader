@@ -1,6 +1,11 @@
 import { db } from './database'
-import type { DBPublication, DBReadingProgress } from './database'
+import type { DBPublication, DBBookmark } from './database'
 import type { SpeedReaderClient } from '../api/interface'
+import type {
+  Bookmark,
+  CreateBookmarkInput,
+  AutoBookmarkLocation,
+} from '../api/types'
 import {
   storeBookFile,
   deleteBookFiles,
@@ -18,8 +23,6 @@ import type {
   PublicationDetail,
   SegmentBatch,
   ImagePageBatch,
-  ReadingProgress,
-  ProgressInput,
   SegmentInlineImage,
   TocNode as ApiTocNode,
 } from '../api/types'
@@ -61,36 +64,22 @@ async function pubRowToPublication(r: DBPublication): Promise<Publication> {
   }
 }
 
-async function computeSegmentsRead(
-  pubId: number,
-  chapterId: number,
-  absoluteSegmentIndex: number,
-): Promise<number> {
-  const chapters = await db.chapters
-    .where('[publication_id+chapter_index]')
-    .between([pubId, -Infinity], [pubId, Infinity])
-    .sortBy('chapter_index')
-
-  let segmentsBefore = 0
-  for (const ch of chapters) {
-    if (ch.id === chapterId) break
-    segmentsBefore += ch.segment_count
-  }
-  return segmentsBefore + absoluteSegmentIndex
-}
-
-function toProgress(row: DBReadingProgress, segmentsRead: number): ReadingProgress {
+function toBookmark(row: DBBookmark): Bookmark {
   return {
+    id: row.id!,
     publication_id: row.publication_id,
+    type: row.type,
     chapter_id: row.chapter_id,
+    chapter_idx: row.chapter_idx,
     absolute_segment_index: row.absolute_segment_index,
     word_index: row.word_index,
-    wpm: row.wpm,
-    reading_mode: row.reading_mode,
+    snippet: row.snippet,
+    name: row.name,
+    created_at: row.created_at,
     updated_at: row.updated_at,
-    segments_read: segmentsRead,
   }
 }
+
 
 interface UploadDiag {
   parsedCount: number
@@ -401,7 +390,7 @@ export class LocalClient implements SpeedReaderClient {
       db.chapters,
       db.segments,
       db.image_pages,
-      db.reading_progress,
+      db.bookmarks,
     ], async () => {
       const chapters = await db.chapters
         .where('publication_id')
@@ -415,7 +404,7 @@ export class LocalClient implements SpeedReaderClient {
       }
 
       await db.chapters.where('publication_id').equals(id).delete()
-      await db.reading_progress.where('publication_id').equals(id).delete()
+      await db.bookmarks.where('publication_id').equals(id).delete()
       await db.publications.delete(id)
     })
 
@@ -546,44 +535,123 @@ export class LocalClient implements SpeedReaderClient {
     }
   }
 
-  async getProgress(pubId: number): Promise<ReadingProgress | null> {
-    const row = await db.reading_progress
+  // -------------------------------------------------------------------------
+  // Bookmarks
+  // -------------------------------------------------------------------------
+
+  async getBookmarks(pubId: number): Promise<Bookmark[]> {
+    const rows = await db.bookmarks
       .where('publication_id')
       .equals(pubId)
-      .first()
-    if (!row) return null
-    const segmentsRead = await computeSegmentsRead(
-      pubId,
-      row.chapter_id,
-      row.absolute_segment_index,
-    )
-    return toProgress(row, segmentsRead)
+      .toArray()
+    // Sort: auto bookmarks first, then user bookmarks by created_at desc
+    rows.sort((a, b) => {
+      const aAuto = a.type !== 'user' ? 0 : 1
+      const bAuto = b.type !== 'user' ? 0 : 1
+      if (aAuto !== bAuto) return aAuto - bAuto
+      return b.created_at.localeCompare(a.created_at)
+    })
+    return rows.map(toBookmark)
   }
 
-  async saveProgress(pubId: number, data: ProgressInput): Promise<ReadingProgress> {
-    const existing = await db.reading_progress
-      .where('publication_id')
-      .equals(pubId)
-      .first()
-
-    const record: DBReadingProgress = {
-      ...(existing ? { id: existing.id } : {}),
+  async createBookmark(pubId: number, data: CreateBookmarkInput): Promise<Bookmark> {
+    const now = nowIso()
+    const record: DBBookmark = {
       publication_id: pubId,
+      type: 'user',
       chapter_id: data.chapter_id,
+      chapter_idx: data.chapter_idx,
       absolute_segment_index: data.absolute_segment_index,
       word_index: data.word_index,
-      wpm: data.wpm,
-      reading_mode: data.reading_mode,
-      updated_at: nowIso(),
+      snippet: data.snippet,
+      name: data.name,
+      created_at: now,
+      updated_at: now,
+    }
+    const id = await db.bookmarks.add(record) as number
+    return toBookmark({ ...record, id })
+  }
+
+  async updateBookmark(bookmarkId: number, name: string): Promise<Bookmark> {
+    const row = await db.bookmarks.get(bookmarkId)
+    if (!row) throw new Error(`Bookmark ${bookmarkId} not found`)
+    if (row.type !== 'user') throw new Error('Cannot rename auto bookmarks')
+    await db.bookmarks.update(bookmarkId, { name, updated_at: nowIso() })
+    const updated = await db.bookmarks.get(bookmarkId)
+    return toBookmark(updated!)
+  }
+
+  async deleteBookmark(bookmarkId: number): Promise<void> {
+    const row = await db.bookmarks.get(bookmarkId)
+    if (!row) return
+    if (row.type !== 'user') throw new Error('Cannot delete auto bookmarks')
+    await db.bookmarks.delete(bookmarkId)
+  }
+
+  async upsertAutoBookmark(
+    pubId: number,
+    type: 'last_opened' | 'farthest_read',
+    location: AutoBookmarkLocation,
+  ): Promise<Bookmark> {
+    const existing = await db.bookmarks
+      .where('[publication_id+type]')
+      .equals([pubId, type])
+      .first()
+
+    const now = nowIso()
+    if (existing) {
+      await db.bookmarks.update(existing.id!, {
+        chapter_id: location.chapter_id,
+        chapter_idx: location.chapter_idx,
+        absolute_segment_index: location.absolute_segment_index,
+        word_index: location.word_index,
+        updated_at: now,
+      })
+      const updated = await db.bookmarks.get(existing.id!)
+      return toBookmark(updated!)
     }
 
-    await db.reading_progress.put(record)
-    const segmentsRead = await computeSegmentsRead(
-      pubId,
-      data.chapter_id,
-      data.absolute_segment_index,
-    )
-    return toProgress(record, segmentsRead)
+    const record: DBBookmark = {
+      publication_id: pubId,
+      type,
+      chapter_id: location.chapter_id,
+      chapter_idx: location.chapter_idx,
+      absolute_segment_index: location.absolute_segment_index,
+      word_index: location.word_index,
+      snippet: '',
+      name: null,
+      created_at: now,
+      updated_at: now,
+    }
+    const id = await db.bookmarks.add(record) as number
+    return toBookmark({ ...record, id })
+  }
+
+  async getAutoBookmark(
+    pubId: number,
+    type: 'last_opened' | 'farthest_read',
+  ): Promise<Bookmark | null> {
+    const row = await db.bookmarks
+      .where('[publication_id+type]')
+      .equals([pubId, type])
+      .first()
+    return row ? toBookmark(row) : null
+  }
+
+  async getAutoBookmarksForPubs(
+    pubIds: number[],
+    type: 'last_opened' | 'farthest_read',
+  ): Promise<Map<number, Bookmark>> {
+    const result = new Map<number, Bookmark>()
+    // Batch fetch all bookmarks of the given type for requested publications
+    const rows = await db.bookmarks
+      .where('[publication_id+type]')
+      .anyOf(pubIds.map((id) => [id, type]))
+      .toArray()
+    for (const row of rows) {
+      result.set(row.publication_id, toBookmark(row))
+    }
+    return result
   }
 
 }

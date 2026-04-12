@@ -6,6 +6,7 @@ interface ReaderHeaderProps {
   displayMode: DisplayMode
   onToggleDisplayMode?: () => void
   onOpenToc: () => void
+  onOpenBookmarks: () => void
   onExit: () => void
   /** Hide the display-mode toggle entirely (e.g. for CBZ — PRD §4.5). */
   hideDisplayToggle?: boolean
@@ -25,6 +26,7 @@ export default function ReaderHeader({
   displayMode,
   onToggleDisplayMode,
   onOpenToc,
+  onOpenBookmarks,
   onExit,
   hideDisplayToggle,
   formattedSuppressed = false,
@@ -76,6 +78,14 @@ export default function ReaderHeader({
           {displayMode === 'formatted' ? 'Page' : 'Text'}
         </button>
       )}
+
+      <button
+        className="reader-header__btn reader-header__bookmarks"
+        onClick={onOpenBookmarks}
+        aria-label="Open bookmarks"
+      >
+        &#x2691;
+      </button>
 
       <button
         className="reader-header__btn reader-header__toc"

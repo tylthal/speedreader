@@ -1,13 +1,15 @@
 import { useEffect, useRef, useCallback } from 'react';
-import { saveProgress } from '../api/client';
+import { upsertAutoBookmark } from '../api/client';
 import { positionStore, usePositionSelector } from '../state/position/positionStore';
-import { writeStoredProgress } from '../lib/readerProgress';
+import { writeStoredPosition, writeStoredPrefs } from '../lib/readerProgress';
 
 interface UseProgressSaverOptions {
   publicationId: number;
 }
 
 /**
+ * Persists reading position via the last_opened auto-bookmark.
+ *
  * Reads its position from positionStore and writes whenever the live
  * position commits. Gate: `revision > 0` — the seed init() leaves
  * revision at 0, so the saver never overwrites the restored position
@@ -18,9 +20,8 @@ interface UseProgressSaverOptions {
  * trigger an immediate flush.
  */
 export function useProgressSaver({ publicationId }: UseProgressSaverOptions): void {
-  // Subscribe to the slices we care about. The store's selector
-  // dedupe makes per-tick word changes free unless we ask for word.
   const chapterId = usePositionSelector((s) => s.chapterId);
+  const chapterIdx = usePositionSelector((s) => s.chapterIdx);
   const absoluteSegmentIndex = usePositionSelector((s) => s.absoluteSegmentIndex);
   const wordIndex = usePositionSelector((s) => s.wordIndex);
   const wpm = usePositionSelector((s) => s.wpm);
@@ -34,24 +35,21 @@ export function useProgressSaver({ publicationId }: UseProgressSaverOptions): vo
     if (snap.revision === 0) return; // pre-interaction, don't write
     if (snap.chapterId === 0) return;
 
-    const data = {
+    const location = {
       chapter_id: snap.chapterId,
+      chapter_idx: snap.chapterIdx,
       absolute_segment_index: snap.absoluteSegmentIndex,
       word_index: snap.wordIndex,
-      wpm: snap.wpm,
-      reading_mode: snap.mode,
     };
 
-    writeStoredProgress(publicationId, {
-      chapterId: snap.chapterId,
-      absoluteSegmentIndex: snap.absoluteSegmentIndex,
-      wordIndex: snap.wordIndex,
+    writeStoredPosition(publicationId, location);
+    writeStoredPrefs(publicationId, {
       wpm: snap.wpm,
       readingMode: snap.mode,
     });
 
-    saveProgress(publicationId, data).catch((err) => {
-      if (import.meta.env.DEV) console.warn('[ProgressSaver] API save failed:', err);
+    upsertAutoBookmark(publicationId, 'last_opened', location).catch((err) => {
+      if (import.meta.env.DEV) console.warn('[ProgressSaver] auto-bookmark save failed:', err);
     });
   }, [publicationId]);
 
@@ -61,16 +59,16 @@ export function useProgressSaver({ publicationId }: UseProgressSaverOptions): vo
     if (revision === 0) return;
     if (chapterId === 0) return;
 
-    const key = `${publicationId}:${chapterId}:${absoluteSegmentIndex}:${wordIndex}:${wpm}:${readingMode}`;
+    const key = `${publicationId}:${chapterId}:${chapterIdx}:${absoluteSegmentIndex}:${wordIndex}:${wpm}:${readingMode}`;
     if (key !== lastSavedKeyRef.current) {
       lastSavedKeyRef.current = key;
-      writeStoredProgress(publicationId, {
-        chapterId,
-        absoluteSegmentIndex,
-        wordIndex,
-        wpm,
-        readingMode,
+      writeStoredPosition(publicationId, {
+        chapter_id: chapterId,
+        chapter_idx: chapterIdx,
+        absolute_segment_index: absoluteSegmentIndex,
+        word_index: wordIndex,
       });
+      writeStoredPrefs(publicationId, { wpm, readingMode });
     }
 
     if (apiTimerRef.current) clearTimeout(apiTimerRef.current);
@@ -83,6 +81,7 @@ export function useProgressSaver({ publicationId }: UseProgressSaverOptions): vo
     revision,
     publicationId,
     chapterId,
+    chapterIdx,
     absoluteSegmentIndex,
     wordIndex,
     wpm,

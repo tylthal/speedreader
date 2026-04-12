@@ -18,6 +18,10 @@ interface ControlsBottomSheetProps {
   gazeSensitivity?: number;
   onGazeSensitivityChange?: (value: number) => void;
   onRecalibrate?: () => void;
+  onJumpLastOpened?: () => void;
+  onJumpFarthestRead?: () => void;
+  hasLastOpened?: boolean;
+  hasFarthestRead?: boolean;
 }
 
 export default function ControlsBottomSheet({
@@ -35,6 +39,10 @@ export default function ControlsBottomSheet({
   gazeSensitivity = 1.0,
   onGazeSensitivityChange,
   onRecalibrate,
+  onJumpLastOpened,
+  onJumpFarthestRead,
+  hasLastOpened = false,
+  hasFarthestRead = false,
 }: ControlsBottomSheetProps) {
   const { announce } = useAnnounce();
   const haptics = useHaptics();
@@ -165,6 +173,31 @@ export default function ControlsBottomSheet({
             <span className="controls__flow-title">{sectionFlow.title}</span>
             <span className="controls__flow-description">{sectionFlow.description}</span>
           </button>
+        </div>
+      )}
+
+      {(onJumpLastOpened || onJumpFarthestRead) && (
+        <div className="controls__bookmark-row">
+          {onJumpLastOpened && (
+            <button
+              className="controls__bookmark-pill"
+              onClick={() => { onJumpLastOpened(); haptics.tap(); announce('Jumped to last opened position'); }}
+              disabled={!hasLastOpened}
+              aria-label="Jump to last opened position"
+            >
+              Last Opened
+            </button>
+          )}
+          {onJumpFarthestRead && (
+            <button
+              className="controls__bookmark-pill"
+              onClick={() => { onJumpFarthestRead(); haptics.tap(); announce('Jumped to farthest read position'); }}
+              disabled={!hasFarthestRead}
+              aria-label="Jump to farthest read position"
+            >
+              Farthest Read
+            </button>
+          )}
         </div>
       )}
 

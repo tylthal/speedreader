@@ -28,6 +28,8 @@ export type PositionOrigin =
   | 'display-mode'
   /** TOC click. */
   | 'toc'
+  /** Bookmark navigation. */
+  | 'bookmark'
   /** Prev/next chapter button or auto-advance at chapter end. */
   | 'chapter-nav'
 
