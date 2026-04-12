@@ -886,19 +886,22 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
         }
 
         // --- Step 2: sub-block precision via caretRangeFromPoint ---
-        // The block may contain multiple segments. Use the caret at
-        // viewport center to find the exact segment the user is looking
-        // at, not just the first segment in the block.
+        // The block may contain multiple segments. Probe the caret at
+        // the block's MIDPOINT — the same Y-coordinate where the pip is
+        // drawn — so we find the exact segment the pip is next to, not
+        // whatever segment happens to be at viewport center.
         const doc = container.ownerDocument
+        const blockRect = block.getBoundingClientRect()
+        const pipY = blockRect.top + blockRect.height / 2
         let caretNode: Node | null = null
         let caretOffset = 0
         if ('caretRangeFromPoint' in doc) {
           const cr = (doc as unknown as { caretRangeFromPoint(x: number, y: number): Range | null })
-            .caretRangeFromPoint(centerX, centerY)
+            .caretRangeFromPoint(centerX, pipY)
           if (cr) { caretNode = cr.startContainer; caretOffset = cr.startOffset }
         } else if ('caretPositionFromPoint' in doc) {
           const cp = (doc as unknown as { caretPositionFromPoint(x: number, y: number): { offsetNode: Node; offset: number } | null })
-            .caretPositionFromPoint(centerX, centerY)
+            .caretPositionFromPoint(centerX, pipY)
           if (cp) { caretNode = cp.offsetNode; caretOffset = cp.offset }
         }
 
