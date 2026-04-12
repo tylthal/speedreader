@@ -93,10 +93,6 @@ export interface HighlightInfo {
   accurate: boolean
 }
 
-interface HighlightRenderOptions {
-  suppressVisual?: boolean
-}
-
 export interface TocTargetInfo {
   topPx: number
   /**
@@ -122,7 +118,6 @@ export interface FormattedViewHandle {
     sectionIdx: number,
     arrIdx: number,
     segments: ReadonlyArray<HighlightSegment>,
-    options?: HighlightRenderOptions,
   ) => HighlightInfo | null
   resolveTocTarget: (
     sectionIdx: number,
@@ -378,14 +373,7 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
   // coordinates. The renderer maps each rect to an absolute-positioned
   // div so the highlight hugs the actual text instead of spanning the
   // full container width.
-  const [highlightRects, setHighlightRects] = useState<RectInContainer[] | null>(null)
-  const [highlightStale, setHighlightStale] = useState(false)
   const [pipTop, setPipTop] = useState<number | null>(null)
-  const accurateHighlightCacheRef = useRef<{
-    sectionIdx: number
-    arrIdx: number
-    rects: RectInContainer[]
-  } | null>(null)
   // Per-section text→DOM-range cache. Built lazily on the first
   // setHighlightForSegment call for a section, invalidated inline in
   // the innerHTML-write effect when the body content changes. Stores
@@ -960,16 +948,13 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
           }),
         )
       },
-      setHighlightForSegment: (sectionIdx, arrIdx, segments, options) => {
-        const suppressVisual = options?.suppressVisual ?? false
+      setHighlightForSegment: (sectionIdx, arrIdx, segments) => {
         // Clear request: arrIdx === -1 OR segments empty.
         if (arrIdx < 0 || segments.length === 0) {
-          setHighlightRects(null)
           return null
         }
         const context = getReadySectionContext(sectionIdx)
         if (!context) {
-          setHighlightRects(null)
           return null
         }
         const { container, sectionEl } = context
@@ -986,7 +971,6 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
           segments[0]?.chapter_id != null &&
           segments[0].chapter_id !== targetChapterId
         ) {
-          setHighlightRects(null)
           return null
         }
         // Build (or hit cache) the per-section text→DOM-range index.
@@ -1003,12 +987,6 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
           // reflect the current layout (font size, image decode).
           const rects = materializeRangeRects(range, container)
           if (rects.length > 0) {
-            // Cache the DOM-accurate result so we can reuse it if a
-            // subsequent call for the same segment falls through to
-            // the proportional fallback (avoids flicker).
-            accurateHighlightCacheRef.current = { sectionIdx, arrIdx, rects }
-            setHighlightRects(suppressVisual ? null : rects)
-            setHighlightStale(false)
             let topMin = Infinity
             let bottomMax = -Infinity
             for (const r of rects) {
@@ -1024,46 +1002,10 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
           }
         }
 
-        // Before resorting to the proportional estimate, check whether
-        // we have a cached DOM-accurate result for this exact segment.
-        // Reusing the cache prevents the highlight from jumping to an
-        // inaccurate proportional position when DOM match transiently fails.
-        const cached = accurateHighlightCacheRef.current
-        if (
-          cached &&
-          cached.sectionIdx === sectionIdx &&
-          cached.arrIdx === arrIdx
-        ) {
-          setHighlightRects(suppressVisual ? null : cached.rects)
-          setHighlightStale(false)
-          let topMin = Infinity
-          let bottomMax = -Infinity
-          for (const r of cached.rects) {
-            if (r.topPx < topMin) topMin = r.topPx
-            if (r.topPx + r.heightPx > bottomMax)
-              bottomMax = r.topPx + r.heightPx
-          }
-          const bandHeight = Math.max(2, bottomMax - topMin)
-          return {
-            topPx: topMin,
-            heightPx: bandHeight,
-            accurate: true,
-          }
-        }
-
         // Fallback: text matcher couldn't find this segment (or the
         // Range produced no rects — image-only section, hidden via
         // CSS, etc). Use the proportional / velocity-profile estimate
-        // so we still show SOMETHING for that one segment — BUT only
-        // if the fallback would produce a band of reasonable size.
-        // For image-only sections (Cover, Map of Babel etc.) the
-        // chunker emits a single section_title segment whose
-        // proportional slot is the entire section height — rendering
-        // that as a full-width band paints a giant rectangle over the
-        // whole image. Hide the highlight in that case but still
-        // RETURN the section's position so the auto-scroll has a
-        // valid target — without this, TOC clicks on image-only
-        // chapters loop in the auto-scroll's polling and never scroll.
+        // so we still return a position for auto-scroll targeting.
         const fallback = computeProportionalBand(
           arrIdx,
           segments,
@@ -1072,7 +1014,6 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
           velocityProfileRef?.current ?? null,
         )
         if (!fallback) {
-          setHighlightRects(null)
           // Last-ditch scroll target: the section's own top. The auto-
           // scroll caller uses topPx + heightPx/2 as the centering
           // anchor; for an image-only chapter we want the section
@@ -1087,30 +1028,6 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
             accurate: false,
           }
         }
-        // Cap the fallback height at ~3 lines of body text. Anything
-        // larger is almost certainly the "single segment fills the
-        // whole section" case (image-only sections), which should
-        // hide the highlight band but still return a valid scroll
-        // target so navigation works.
-        const MAX_FALLBACK_HEIGHT = 96 // ~3 lines at default font size
-        if (fallback.heightPx > MAX_FALLBACK_HEIGHT) {
-          setHighlightRects(null)
-          return { topPx: fallback.topPx, heightPx: 0, accurate: false }
-        }
-        // Render the fallback as a single full-width rect inside the
-        // formatted column. Use the column's actual bounds, not the
-        // container's, so the band doesn't span gutters.
-        const containerRect = container.getBoundingClientRect()
-        const columnEl = container.querySelector('.formatted-view__column') as HTMLElement | null
-        const colRect = columnEl?.getBoundingClientRect()
-        const fallbackRect: RectInContainer = {
-          topPx: fallback.topPx,
-          leftPx: colRect ? colRect.left - containerRect.left + container.scrollLeft : 0,
-          widthPx: colRect ? colRect.width : containerRect.width,
-          heightPx: fallback.heightPx,
-        }
-        setHighlightRects(suppressVisual ? null : [fallbackRect])
-        setHighlightStale(true)
         return { ...fallback, accurate: false }
       },
       resolveTocTarget: (sectionIdx, htmlAnchor, segments) => {
@@ -1188,20 +1105,6 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
           style={{ top: `${pipTop}px` }}
         />
       )}
-      {highlightRects?.map((r, i) => (
-        <div
-          key={i}
-          className={highlightStale ? 'formatted-view__highlight formatted-view__highlight--stale' : 'formatted-view__highlight'}
-          aria-hidden="true"
-          data-stale={highlightStale || undefined}
-          style={{
-            top: `${r.topPx}px`,
-            left: `${r.leftPx}px`,
-            width: `${r.widthPx}px`,
-            height: `${r.heightPx}px`,
-          }}
-        />
-      ))}
       <FormattedViewDiagnostics
         enabled={diagEnabled}
         imageDiag={imageDiag}

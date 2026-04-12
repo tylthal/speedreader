@@ -434,7 +434,6 @@ html[data-playing] .reader-header {
   overflow-x: hidden;
   background: var(--bg);
   -webkit-overflow-scrolling: touch;
-  /* Anchor for the absolutely-positioned current-segment highlight band. */
   position: relative;
 }
 
@@ -454,28 +453,6 @@ html[data-playing] .reader-header {
    effect recovers immediately on the next pause. */
 .formatted-view--hidden {
   display: none;
-}
-
-/* Current-segment highlight overlay. ReaderViewport computes the band
-   from the cursor position + section layout and pushes it in via
-   FormattedViewHandle.setHighlightBand. Coordinates are in scroll-
-   container space (already include scrollTop) so the band scrolls with
-   the content. Mirrors the focus-scroll__item--current aesthetic. */
-.formatted-view__highlight {
-  position: absolute;
-  left: 0;
-  right: 0;
-  pointer-events: none;
-  border-radius: 6px;
-  background: color-mix(in srgb, currentColor 8%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 14%, transparent);
-  transition: top 180ms ease, height 180ms ease, opacity 140ms ease;
-  will-change: top, height;
-  z-index: 1;
-}
-
-.formatted-view__highlight--stale {
-  opacity: 0.5;
 }
 
 .formatted-view__pip {

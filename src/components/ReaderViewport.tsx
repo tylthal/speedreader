@@ -691,7 +691,6 @@ function ActiveReader({
   useFormattedViewCursorSync({
     showFormattedView,
     isPlaying,
-    readingMode,
     tocNavigationRevision: navigationRevision,
     chapterIdx,
     absoluteSegmentIndex,

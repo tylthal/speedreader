@@ -17,7 +17,6 @@ interface CursorTranslators {
 interface UseFormattedViewCursorSyncArgs {
   showFormattedView: boolean
   isPlaying: boolean
-  readingMode: 'phrase' | 'rsvp' | 'scroll' | 'track'
   tocNavigationRevision: number
   chapterIdx: number
   absoluteSegmentIndex: number
@@ -34,7 +33,6 @@ interface UseFormattedViewCursorSyncArgs {
 export function useFormattedViewCursorSync({
   showFormattedView,
   isPlaying,
-  readingMode,
   tocNavigationRevision,
   chapterIdx,
   absoluteSegmentIndex,
@@ -50,58 +48,6 @@ export function useFormattedViewCursorSync({
   const pendingScrollRef = useRef(false)
   const wasFormattedRef = useRef(false)
   const lastAutoScrolledChapterRef = useRef(-1)
-  const suppressVisualHighlight =
-    isPlaying && (readingMode === 'scroll' || readingMode === 'track')
-
-  // ---- Effect 1: Highlight update -------------------------------------------
-  //
-  // Renders the highlight band for the current segment position. Skips
-  // when origin is 'user-scroll' — during user scrolling the settle
-  // callback in Effect 3 owns the highlight to avoid fighting.
-  useEffect(() => {
-    const handle = formattedViewRef.current
-    if (!handle) return
-
-    if (!showFormattedView) {
-      handle.setHighlightForSegment(chapterIdx, -1, [])
-      return
-    }
-
-    // The scroll handler (Effect 3) owns the highlight during user
-    // scrolling and renders it on settle. Skip here to avoid overwriting
-    // with a stale/wrong position.
-    if (cursorOrigin === 'user-scroll') return
-
-    const arrIdx = translators.absoluteToArrayIndex(absoluteSegmentIndex)
-    if (segments.length === 0 || arrIdx == null) {
-      handle.setHighlightForSegment(chapterIdx, -1, [])
-      return
-    }
-
-    let cancelled = false
-    const raf = requestAnimationFrame(() => {
-      if (!cancelled) {
-        handle.setHighlightForSegment(chapterIdx, arrIdx, segments, {
-          suppressVisual: suppressVisualHighlight,
-        })
-      }
-    })
-
-    return () => {
-      cancelled = true
-      cancelAnimationFrame(raf)
-    }
-  }, [
-    showFormattedView,
-    chapterIdx,
-    absoluteSegmentIndex,
-    cursorRevision,
-    suppressVisualHighlight,
-    segments,
-    translators,
-    layoutVersion,
-    formattedViewRef,
-  ])
 
   // ---- Effect 2: Auto-scroll to segment ------------------------------------
   //
@@ -217,9 +163,7 @@ export function useFormattedViewCursorSync({
         }
       }
 
-      const info = handle.setHighlightForSegment(chapterIdx, arrIdx, segments, {
-        suppressVisual: suppressVisualHighlight,
-      })
+      const info = handle.setHighlightForSegment(chapterIdx, arrIdx, segments)
       if (!info) {
         if (attempts < maxAttempts) {
           rafHandle = requestAnimationFrame(tryScroll)
@@ -276,7 +220,6 @@ export function useFormattedViewCursorSync({
     cursorOrigin,
     cursorRevision,
     clearPendingTocTarget,
-    suppressVisualHighlight,
     segments,
     translators,
     layoutVersion,
@@ -286,13 +229,8 @@ export function useFormattedViewCursorSync({
 
   // ---- Effect 3: Scroll-position detection ----------------------------------
   //
-  // Paused-mode only. On user scroll, calls the unified
-  // detectAtViewportCenter to determine both the visible section and
-  // the segment at the center in one pass. After scrolling settles
-  // (180ms debounce), renders the highlight band directly.
-  //
-  // No isActivelyScrollingRef — Effect 1 simply skips user-scroll
-  // origins, so there's no ref-based coupling between effects.
+  // Paused-mode only. On user scroll, detects the segment at viewport
+  // center and updates the position store.
   useEffect(() => {
     if (!showFormattedView || isPlaying) return
 
@@ -303,7 +241,6 @@ export function useFormattedViewCursorSync({
     if (!container) return
 
     let rafScheduled = false
-    let settleTimer: ReturnType<typeof setTimeout> | null = null
 
     const detectAndUpdate = () => {
       if (handle.isProgrammaticScrollActive()) return
@@ -334,20 +271,6 @@ export function useFormattedViewCursorSync({
     const onScroll = () => {
       if (handle.isProgrammaticScrollActive() || rafScheduled) return
 
-      // Debounce: schedule highlight render after scrolling settles.
-      if (settleTimer != null) clearTimeout(settleTimer)
-      settleTimer = setTimeout(() => {
-        settleTimer = null
-        const arrIdx = translators.absoluteToArrayIndex(
-          positionStore.getSnapshot().absoluteSegmentIndex,
-        )
-        if (arrIdx != null && segments.length > 0) {
-          handle.setHighlightForSegment(chapterIdx, arrIdx, segments, {
-            suppressVisual: suppressVisualHighlight,
-          })
-        }
-      }, 180)
-
       rafScheduled = true
       requestAnimationFrame(() => {
         rafScheduled = false
@@ -365,7 +288,6 @@ export function useFormattedViewCursorSync({
 
     return () => {
       container.removeEventListener('scroll', onScroll)
-      if (settleTimer != null) clearTimeout(settleTimer)
     }
   }, [
     showFormattedView,
@@ -373,7 +295,6 @@ export function useFormattedViewCursorSync({
     chapterIdx,
     segments,
     translators,
-    suppressVisualHighlight,
     formattedViewRef,
   ])
 }
