@@ -33,7 +33,7 @@ import BookmarksPanel from './BookmarksPanel';
 import BookmarkNameDialog from './BookmarkNameDialog';
 import ActionSheet from './ActionSheet';
 import FormattedView from './FormattedView';
-import type { FormattedViewHandle } from './FormattedView';
+import { REFERENCE_LINE_RATIO, type FormattedViewHandle } from './FormattedView';
 import VelocityProfileDebugOverlay from './VelocityProfileDebugOverlay';
 import PdfFormattedView from './PdfFormattedView';
 import CbzFormattedView from './CbzFormattedView';
@@ -442,7 +442,7 @@ function ActiveReader({
       const containerRect = container.getBoundingClientRect();
       const sectionRect = sectionEl.getBoundingClientRect();
       const sectionTop = sectionRect.top - containerRect.top + container.scrollTop;
-      const focusTop = container.scrollTop + container.clientHeight * 0.4;
+      const focusTop = container.scrollTop + container.clientHeight * REFERENCE_LINE_RATIO;
 
       let activeKey: string | null = currentSectionTocLocations[0]?.key ?? null;
       let firstFutureKey: string | null = null;
@@ -729,6 +729,7 @@ function ActiveReader({
     formattedViewRef,
     pendingTocTargetRef,
     clearPendingTocTarget,
+    onPipSectionChange: handleVisibleSectionChange,
   });
 
   const handlePrevChapter = useCallback(() => {

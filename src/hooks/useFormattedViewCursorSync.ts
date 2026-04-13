@@ -28,6 +28,11 @@ interface UseFormattedViewCursorSyncArgs {
   formattedViewRef: RefObject<FormattedViewHandle | null>
   pendingTocTargetRef: RefObject<TocJumpTarget | null>
   clearPendingTocTarget: () => void
+  /** Called when the PIP detects it's in a different section than
+   *  chapterIdx. This makes the PIP the source of truth for which
+   *  chapter the user is reading, rather than the IntersectionObserver
+   *  (which uses the top of the viewport, not the reading position). */
+  onPipSectionChange: (sectionIdx: number) => void
 }
 
 export function useFormattedViewCursorSync({
@@ -43,10 +48,13 @@ export function useFormattedViewCursorSync({
   formattedViewRef,
   pendingTocTargetRef,
   clearPendingTocTarget,
+  onPipSectionChange,
 }: UseFormattedViewCursorSyncArgs): void {
   const pendingScrollRef = useRef(false)
   const wasFormattedRef = useRef(false)
   const lastAutoScrolledChapterRef = useRef(-1)
+  const onPipSectionChangeRef = useRef(onPipSectionChange)
+  onPipSectionChangeRef.current = onPipSectionChange
 
   // ---- Effect 2: Auto-scroll to segment ------------------------------------
   //
@@ -281,10 +289,15 @@ export function useFormattedViewCursorSync({
       const result = handle.detectAtViewportCenter(chapterIdx, segments)
       if (!result) return
 
-      // Cross-section scroll: skip segment update — the IO will
-      // handle the chapter change, segments will reload, and this
-      // effect will re-run with the new chapterIdx.
-      if (result.sectionIdx !== chapterIdx) return
+      // Cross-section scroll: the PIP is in a different section than
+      // chapterIdx. Drive the chapter change from here so the header
+      // and TOC update to match where the PIP is, rather than waiting
+      // for the IntersectionObserver (which uses the viewport top, not
+      // the reading position at the 40% reference line).
+      if (result.sectionIdx !== chapterIdx) {
+        onPipSectionChangeRef.current(result.sectionIdx)
+        return
+      }
 
       if (result.arrIdx == null) return
       const abs = translators.arrayToAbsolute(result.arrIdx)
