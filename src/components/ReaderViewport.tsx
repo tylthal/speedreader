@@ -749,11 +749,25 @@ function ActiveReader({
   /* ---- Wake lock ---- */
   useWakeLock(isPlaying || wasPlayingBeforeLost);
 
+  /* ---- Debounced playing state for UI chrome ---- */
+  // isPlaying→true takes effect immediately; isPlaying→false is delayed
+  // 250ms so brief pause/resume cycles (chapter auto-advance) don't
+  // flash the header, controls, theme toggle, or paused scroll view.
+  const [isPlayingUI, setIsPlayingUI] = useState(isPlaying);
+  useEffect(() => {
+    if (isPlaying) {
+      setIsPlayingUI(true);
+      return;
+    }
+    const timer = setTimeout(() => setIsPlayingUI(false), 250);
+    return () => clearTimeout(timer);
+  }, [isPlaying]);
+
   /* ---- Global playing attribute (for ThemeToggle fade) ---- */
   useEffect(() => {
-    document.documentElement.toggleAttribute('data-playing', isPlaying);
+    document.documentElement.toggleAttribute('data-playing', isPlayingUI);
     return () => document.documentElement.removeAttribute('data-playing');
-  }, [isPlaying]);
+  }, [isPlayingUI]);
 
   /* ---- Render ---- */
   const isPdfBook =
@@ -930,7 +944,7 @@ function ActiveReader({
           >
             <FocusChunkOverlay
               segment={currentSegment}
-              isPlaying={isPlaying}
+              isPlaying={isPlayingUI}
               progress={progress}
               mode={readingMode}
               rsvpWord={rsvpWord}
@@ -1012,7 +1026,7 @@ function ActiveReader({
       )}
 
       <ControlsBottomSheet
-        isPlaying={isPlaying || wasPlayingBeforeLost}
+        isPlaying={isPlayingUI || wasPlayingBeforeLost}
         wpm={wpm}
         progress={progress}
         onTogglePlay={userTogglePlayPause}

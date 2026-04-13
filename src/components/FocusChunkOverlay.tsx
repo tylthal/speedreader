@@ -296,19 +296,6 @@ export default function FocusChunkOverlay({
   scrollContainerRef,
   scrollItemRefs,
 }: FocusChunkOverlayProps) {
-  // Debounce isPlaying→false so brief pause/resume cycles (chapter
-  // auto-advance, segment loading) don't flash the paused UI.
-  // isPlaying=true takes effect immediately; false is delayed 200ms.
-  const [showAsPlaying, setShowAsPlaying] = useState(isPlaying);
-  useEffect(() => {
-    if (isPlaying) {
-      setShowAsPlaying(true);
-      return;
-    }
-    const timer = setTimeout(() => setShowAsPlaying(false), 200);
-    return () => clearTimeout(timer);
-  }, [isPlaying]);
-
   const [displayText, setDisplayText] = useState('');
   const [animClass, setAnimClass] = useState('focus-overlay__text--visible');
   const prevTextRef = useRef('');
@@ -317,7 +304,7 @@ export default function FocusChunkOverlay({
   useEffect(() => {
     const newText = segment?.text ?? '';
     if (newText !== prevTextRef.current) {
-      if (showAsPlaying) {
+      if (isPlaying) {
         // During playback, swap text instantly — no animation flash.
         setDisplayText(newText);
         prevTextRef.current = newText;
@@ -333,16 +320,16 @@ export default function FocusChunkOverlay({
         return () => clearTimeout(timer);
       }
     }
-  }, [segment, showAsPlaying]);
+  }, [segment, isPlaying]);
 
   useEffect(() => {
-    if (!showAsPlaying) {
+    if (!isPlaying) {
       const timer = setTimeout(() => setWingsVisible(true), 120);
       return () => clearTimeout(timer);
     } else {
       setWingsVisible(false);
     }
-  }, [showAsPlaying]);
+  }, [isPlaying]);
 
   const wings = useMemo(() => {
     if (!segments || currentIndex == null) return { before: [], after: [] };
@@ -357,10 +344,10 @@ export default function FocusChunkOverlay({
     return { before, after };
   }, [segments, currentIndex]);
 
-  const showPrompt = !showAsPlaying && !segment;
+  const showPrompt = !isPlaying && !segment;
 
   // --- Scroll / Track mode playing: auto-scrolling teleprompter ---
-  if ((mode === 'scroll' || mode === 'track') && showAsPlaying && segments && segments.length > 0 && currentIndex != null && scrollContainerRef && scrollItemRefs) {
+  if ((mode === 'scroll' || mode === 'track') && isPlaying && segments && segments.length > 0 && currentIndex != null && scrollContainerRef && scrollItemRefs) {
     return (
       <div className="focus-overlay" role="region" aria-label={mode === 'track' ? 'Track reading display' : 'Scroll reading display'}>
         <ScrollPlayingView
@@ -376,7 +363,7 @@ export default function FocusChunkOverlay({
   }
 
   // --- Paused: show scrollable list ---
-  if (!showAsPlaying && segments && segments.length > 0 && currentIndex != null && onSeek) {
+  if (!isPlaying && segments && segments.length > 0 && currentIndex != null && onSeek) {
     return (
       <div className="focus-overlay" role="region" aria-label="Reading position">
         <PausedScrollView
