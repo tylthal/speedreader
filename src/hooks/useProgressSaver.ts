@@ -4,10 +4,17 @@ import { positionStore } from '../state/position/positionStore';
 import { readStoredPrefs, writeStoredPosition, writeStoredPrefs } from '../lib/readerProgress';
 import type { ReadingMode } from '../types';
 
+interface FormattedViewLike {
+  getScrollContainer(): HTMLElement | null
+  getSectionEl(idx: number): HTMLElement | null
+}
+
 interface UseProgressSaverOptions {
   publicationId: number;
   /** Ref to the formatted view scroll container, used to read live scrollTop. */
   scrollContainerRef?: React.RefObject<HTMLElement | null>;
+  /** Ref to the formatted view handle, used to compute section-relative offset. */
+  formattedViewRef?: React.RefObject<FormattedViewLike | null>;
 }
 
 /**
@@ -19,7 +26,7 @@ interface UseProgressSaverOptions {
  * and to the API on a 2s debounce. visibility-hidden / beforeunload /
  * unmount each trigger an immediate flush.
  */
-export function useProgressSaver({ publicationId, scrollContainerRef }: UseProgressSaverOptions): void {
+export function useProgressSaver({ publicationId, scrollContainerRef, formattedViewRef }: UseProgressSaverOptions): void {
   const lastSavedKeyRef = useRef('');
   const lastSavedChapterIdRef = useRef(0);
   const wpmByModeRef = useRef<Partial<Record<ReadingMode, number>>>({});
@@ -46,9 +53,17 @@ export function useProgressSaver({ publicationId, scrollContainerRef }: UseProgr
       return;
     }
 
-    // Read scrollTop directly from the DOM — the position store may lag
-    // behind because Effect 3's rAF can miss the final scroll position.
-    const liveScrollTop = scrollContainerRef?.current?.scrollTop ?? snap.scrollTop;
+    // Compute section-relative scroll offset from live DOM. This is
+    // immune to layout changes in other sections (image decode, font
+    // load, or sections not yet rendered on restore).
+    const container = scrollContainerRef?.current;
+    const sectionEl = formattedViewRef?.current?.getSectionEl(snap.chapterIdx);
+    let sectionOffset = snap.scrollTop; // fallback to store value
+    if (container && sectionEl) {
+      sectionOffset = container.scrollTop - sectionEl.offsetTop;
+    } else if (container) {
+      sectionOffset = container.scrollTop;
+    }
 
     const location = {
       chapter_id: snap.chapterId,
@@ -59,7 +74,7 @@ export function useProgressSaver({ publicationId, scrollContainerRef }: UseProgr
 
     writeStoredPosition(publicationId, {
       ...location,
-      scroll_top: liveScrollTop,
+      scroll_top: sectionOffset,
     });
     wpmByModeRef.current = { ...wpmByModeRef.current, [snap.mode]: snap.wpm };
     writeStoredPrefs(publicationId, {
@@ -93,11 +108,19 @@ export function useProgressSaver({ publicationId, scrollContainerRef }: UseProgr
         return;
       }
 
-      const liveScrollTop = scrollContainerRef?.current?.scrollTop ?? snap.scrollTop;
-      // Include a coarse scrollTop in the key so intra-segment scroll
+      // Compute section-relative scroll offset from live DOM.
+      const container = scrollContainerRef?.current;
+      const sectionEl = formattedViewRef?.current?.getSectionEl(snap.chapterIdx);
+      let sectionOffset = snap.scrollTop;
+      if (container && sectionEl) {
+        sectionOffset = container.scrollTop - sectionEl.offsetTop;
+      } else if (container) {
+        sectionOffset = container.scrollTop;
+      }
+      // Include a coarse offset in the key so intra-segment scroll
       // changes trigger a save. Round to 10px to avoid writing on every
       // pixel of scroll while still capturing meaningful position changes.
-      const scrollBucket = Math.round(liveScrollTop / 10) * 10;
+      const scrollBucket = Math.round(sectionOffset / 10) * 10;
       const key = `${publicationId}:${snap.chapterId}:${snap.chapterIdx}:${snap.absoluteSegmentIndex}:${snap.wordIndex}:${snap.wpm}:${snap.mode}:${scrollBucket}`;
       if (key !== lastSavedKeyRef.current) {
         lastSavedKeyRef.current = key;
@@ -107,7 +130,7 @@ export function useProgressSaver({ publicationId, scrollContainerRef }: UseProgr
           chapter_idx: snap.chapterIdx,
           absolute_segment_index: snap.absoluteSegmentIndex,
           word_index: snap.wordIndex,
-          scroll_top: liveScrollTop,
+          scroll_top: sectionOffset,
         });
         wpmByModeRef.current = { ...wpmByModeRef.current, [snap.mode]: snap.wpm };
         writeStoredPrefs(publicationId, { wpm: snap.wpm, readingMode: snap.mode, wpmByMode: wpmByModeRef.current });

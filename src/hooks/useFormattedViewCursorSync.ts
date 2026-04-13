@@ -185,9 +185,14 @@ export function useFormattedViewCursorSync({
       let clamped: number
 
       if (cursorOrigin === 'restore' && snap.scrollTop > 0) {
-        // Direct scroll restore — same value that was saved
+        // scrollTop is saved as an offset relative to the section's top
+        // so it's immune to layout changes in other sections. Convert
+        // back to an absolute scrollTop by adding the section's current
+        // offsetTop.
+        const sectionTop = sectionEl.offsetTop
+        const absoluteTarget = sectionTop + snap.scrollTop
         const maxScroll = Math.max(0, container.scrollHeight - container.clientHeight)
-        clamped = Math.max(0, Math.min(snap.scrollTop, maxScroll))
+        clamped = Math.max(0, Math.min(absoluteTarget, maxScroll))
       } else {
         const info = arrIdx != null
           ? handle.setHighlightForSegment(chapterIdx, arrIdx, segments)

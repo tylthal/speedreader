@@ -583,7 +583,7 @@ function ActiveReader({
     const el = formattedViewRef.current?.getScrollContainer() ?? null;
     formattedScrollContainerRef.current = el;
   });
-  useProgressSaver({ publicationId, scrollContainerRef: formattedScrollContainerRef });
+  useProgressSaver({ publicationId, scrollContainerRef: formattedScrollContainerRef, formattedViewRef });
 
   /* ---- Bookmark store init + auto bookmarks ---- */
   const haptics = useHaptics();
