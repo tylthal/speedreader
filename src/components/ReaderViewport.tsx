@@ -888,6 +888,7 @@ function ActiveReader({
             onVisibleSectionChange={handleVisibleSectionChange}
             onTap={isPlaying ? userPause : undefined}
             onPipTap={handlePipTap}
+            showPip={!isPlaying}
             velocityProfileRef={velocityProfileRef}
             onLayoutChange={onFormattedLayoutChange}
             visible={showFormattedView}

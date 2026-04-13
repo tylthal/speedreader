@@ -460,11 +460,12 @@ html[data-playing] .reader-header {
 .formatted-view__pip {
   position: absolute;
   left: 2px;
-  width: 4px;
-  height: 20px;
-  border-radius: 2px;
-  background: var(--accent);
-  opacity: 0.7;
+  width: 10px;
+  height: 32px;
+  border-radius: 5px;
+  background: var(--accent-subtle);
+  border: 1px solid var(--accent);
+  opacity: 0.85;
   transition: top 180ms ease, opacity 140ms ease;
   pointer-events: auto;
   cursor: pointer;
@@ -472,11 +473,26 @@ html[data-playing] .reader-header {
   z-index: 2;
 }
 
+/* Three vertical dots via a single pseudo-element + box-shadow */
 .formatted-view__pip::before {
   content: '';
   position: absolute;
-  top: -12px;
-  left: -10px;
+  top: 50%;
+  left: 50%;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--accent);
+  transform: translate(-50%, -50%);
+  box-shadow: 0 -7px 0 var(--accent), 0 7px 0 var(--accent);
+}
+
+/* Expanded tap target */
+.formatted-view__pip::after {
+  content: '';
+  position: absolute;
+  top: -6px;
+  left: -8px;
   width: 44px;
   height: 44px;
 }

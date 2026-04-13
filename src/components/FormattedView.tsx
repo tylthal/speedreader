@@ -71,6 +71,8 @@ interface FormattedViewProps {
   visible?: boolean
   /** Called when the user taps the PIP indicator. */
   onPipTap?: () => void
+  /** When false the PIP indicator is hidden (e.g. during playback). Defaults to true. */
+  showPip?: boolean
 }
 
 /**
@@ -367,6 +369,7 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
     onLayoutChange,
     visible = true,
     onPipTap,
+    showPip = true,
   },
   ref,
 ) {
@@ -1162,7 +1165,7 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
       aria-hidden={!visible}
       {...tapHandlers}
     >
-      {pipTop != null && (
+      {pipTop != null && showPip && (
         <div
           className="formatted-view__pip"
           aria-hidden="true"
