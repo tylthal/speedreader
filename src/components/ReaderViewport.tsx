@@ -716,6 +716,53 @@ function ActiveReader({
   // (instant-jump-to-section-top). The auto-scroll effect alone is now
   // the single source of truth for ALL formatted-view scrolling. The
   // scrollSectionIntoView imperative method is gone from FormattedView.
+
+  // Formatted-view IntersectionObserver fires when scroll lands in a
+  // new section. Convert to a CHAPTER_NAV via setPosition — but mark
+  // origin as 'user-scroll' if the user is currently driving the
+  // scroll, so the auto-scroll effect doesn't snap them back to the
+  // start of the new chapter. The user is the source of truth when
+  // they're scrolling; we follow them, we don't override.
+  //
+  // Also used as onPipSectionChange: when the PIP (at the 40% reference
+  // line) detects it's in a different section than chapterIdx, Effect 3
+  // calls this to make the PIP authoritative for chapter display.
+  const handleVisibleSectionChange = useCallback(
+    (idx: number) => {
+      if (idx === chapterIdx) return;
+      if (idx < 0 || idx >= chapters.length) return;
+      // The IntersectionObserver inside FormattedView only fires
+      // dispatches when the user actually scrolled (its scrollTop guard
+      // bails on layout reflows, and the programmatic-scroll flag bails
+      // on auto-scrolls). Anything that reaches us here is therefore a
+      // user-driven scroll, so we always commit with 'user-scroll'
+      // origin — that prevents the auto-scroll effect from snapping the
+      // user back to the start of the new chapter.
+      //
+      // absoluteSegmentIndex is set to 0 as a placeholder. Effect 3
+      // detects the real position once segments load for the new chapter
+      // and commits with 'user-scroll'. The progress saver skips writing
+      // when absoluteSegmentIndex is 0 and the origin indicates a
+      // cross-chapter transition (see useProgressSaver).
+
+      // Clear sticky preferred TOC location — the user scrolled away
+      // from whatever they clicked. Without this the TOC highlight stays
+      // stuck on the old entry while the header moves to the new chapter.
+      setPreferredTocLocation({ key: null, title: null, sectionIndex: null, htmlAnchor: null });
+
+      positionStore.setPosition(
+        {
+          chapterId: chapters[idx].id,
+          chapterIdx: idx,
+          absoluteSegmentIndex: 0,
+          wordIndex: 0,
+        },
+        'user-scroll',
+      );
+    },
+    [chapterIdx, chapters, setPreferredTocLocation],
+  );
+
   useFormattedViewCursorSync({
     showFormattedView,
     isPlaying,
@@ -778,47 +825,6 @@ function ActiveReader({
     chapters.length > 0 &&
     chapters[0].meta != null &&
     typeof (chapters[0].meta as Record<string, unknown>).startPage === 'number';
-
-  // Formatted-view IntersectionObserver fires when scroll lands in a
-  // new section. Convert to a CHAPTER_NAV via setPosition — but mark
-  // origin as 'user-scroll' if the user is currently driving the
-  // scroll, so the auto-scroll effect doesn't snap them back to the
-  // start of the new chapter. The user is the source of truth when
-  // they're scrolling; we follow them, we don't override.
-  const handleVisibleSectionChange = useCallback(
-    (idx: number) => {
-      if (idx === chapterIdx) return;
-      // The IntersectionObserver inside FormattedView only fires
-      // dispatches when the user actually scrolled (its scrollTop guard
-      // bails on layout reflows, and the programmatic-scroll flag bails
-      // on auto-scrolls). Anything that reaches us here is therefore a
-      // user-driven scroll, so we always commit with 'user-scroll'
-      // origin — that prevents the auto-scroll effect from snapping the
-      // user back to the start of the new chapter.
-      //
-      // absoluteSegmentIndex is set to 0 as a placeholder. Effect 3
-      // detects the real position once segments load for the new chapter
-      // and commits with 'user-scroll'. The progress saver skips writing
-      // when absoluteSegmentIndex is 0 and the origin indicates a
-      // cross-chapter transition (see useProgressSaver).
-
-      // Clear sticky preferred TOC location — the user scrolled away
-      // from whatever they clicked. Without this the TOC highlight stays
-      // stuck on the old entry while the header moves to the new chapter.
-      setPreferredTocLocation({ key: null, title: null, sectionIndex: null, htmlAnchor: null });
-
-      positionStore.setPosition(
-        {
-          chapterId: chapters[idx].id,
-          chapterIdx: idx,
-          absoluteSegmentIndex: 0,
-          wordIndex: 0,
-        },
-        'user-scroll',
-      );
-    },
-    [chapterIdx, chapters, setPreferredTocLocation],
-  );
 
   // RSVP display values come from the controller (live word ticks at
   // 4-12 Hz, isolated re-render).
