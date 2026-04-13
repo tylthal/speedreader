@@ -38,6 +38,7 @@ interface FocusChunkOverlayProps {
   onSeek?: (index: number) => void;
   scrollContainerRef?: React.RefObject<HTMLDivElement | null>;
   scrollItemRefs?: React.RefObject<Map<number, HTMLDivElement>>;
+  suppressPausedView?: boolean;
 }
 
 const WING_COUNT = 3;
@@ -295,6 +296,7 @@ export default function FocusChunkOverlay({
   onSeek,
   scrollContainerRef,
   scrollItemRefs,
+  suppressPausedView,
 }: FocusChunkOverlayProps) {
   const [displayText, setDisplayText] = useState('');
   const [animClass, setAnimClass] = useState('focus-overlay__text--visible');
@@ -363,7 +365,7 @@ export default function FocusChunkOverlay({
   }
 
   // --- Paused: show scrollable list ---
-  if (!isPlaying && segments && segments.length > 0 && currentIndex != null && onSeek) {
+  if (!isPlaying && !suppressPausedView && segments && segments.length > 0 && currentIndex != null && onSeek) {
     return (
       <div className="focus-overlay" role="region" aria-label="Reading position">
         <PausedScrollView
