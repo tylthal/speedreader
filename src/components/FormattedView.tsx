@@ -936,6 +936,22 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
           return { sectionIdx, arrIdx: null }
         }
 
+        // Stale-chapter guard: when the loader hasn't finished switching
+        // chapters (chapterIdx updated but segments still from the
+        // previous chapter), refuse to match. Without this guard the
+        // sequential matcher would build a WRONG segment range index
+        // (chapter N's segment texts matched against section M's DOM)
+        // and cache it, poisoning all subsequent detections until the
+        // section's innerHTML is rewritten.
+        const targetChapterId = chapters[currentSectionIdx]?.id
+        if (
+          targetChapterId != null &&
+          segments[0]?.chapter_id != null &&
+          segments[0].chapter_id !== targetChapterId
+        ) {
+          return { sectionIdx, arrIdx: null }
+        }
+
         const container = containerRef.current
         if (!container) return { sectionIdx, arrIdx: null }
         const context = getReadySectionContext(currentSectionIdx)
@@ -943,6 +959,14 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
         const { sectionEl } = context
 
         let index = segmentIndexRef.current.get(currentSectionIdx)
+        // Invalidate cached index if segment count changed (chapter
+        // switch reloaded segments for this section). The index length
+        // must match the segments array length — a mismatch means the
+        // cache was built with stale data.
+        if (index && index.length !== segments.length) {
+          segmentIndexRef.current.delete(currentSectionIdx)
+          index = undefined
+        }
         if (!index) {
           index = buildSegmentRangeIndex(sectionEl, segments)
           segmentIndexRef.current.set(currentSectionIdx, index)
@@ -1058,6 +1082,10 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
         }
         // Build (or hit cache) the per-section text→DOM-range index.
         let index = segmentIndexRef.current.get(sectionIdx)
+        if (index && index.length !== segments.length) {
+          segmentIndexRef.current.delete(sectionIdx)
+          index = undefined
+        }
         if (!index) {
           index = buildSegmentRangeIndex(sectionEl, segments)
           segmentIndexRef.current.set(sectionIdx, index)
@@ -1133,6 +1161,10 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
         const anchorTop = anchorRect.top - containerRect.top + container.scrollTop
 
         let index = segmentIndexRef.current.get(sectionIdx)
+        if (index && index.length !== segments.length) {
+          segmentIndexRef.current.delete(sectionIdx)
+          index = undefined
+        }
         if (!index) {
           index = buildSegmentRangeIndex(sectionEl, segments)
           segmentIndexRef.current.set(sectionIdx, index)

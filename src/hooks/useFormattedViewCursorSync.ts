@@ -70,6 +70,15 @@ export function useFormattedViewCursorSync({
       pendingScrollRef.current = false
       return
     }
+    // Mode switch doesn't change the position — skip the auto-scroll
+    // when the formatted view was already visible. Without this guard,
+    // the programmatic scroll re-centers the segment block, shifting the
+    // viewport away from the line the pip was pointing at. The next
+    // play() then detects a different segment than the pip showed.
+    if (cursorOrigin === 'mode-switch' && !transitionedIn) {
+      pendingScrollRef.current = false
+      return
+    }
     if (cursorOrigin !== 'engine') {
       pendingScrollRef.current = true
     }

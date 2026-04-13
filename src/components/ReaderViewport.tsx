@@ -518,6 +518,29 @@ function ActiveReader({
   const switchToMode = useCallback((next: ReadingMode) => {
     controller.pause();
 
+    // Sync position from the pip before switching. Effect 3 updates the
+    // store via a rAF callback that may still be pending when the user
+    // switches modes. Without this sync, the mode switch would use a
+    // stale absoluteSegmentIndex from before the user's last scroll.
+    const snap = positionStore.getSnapshot();
+    if (snap.displayMode === 'formatted') {
+      const handle = formattedViewRef.current;
+      if (handle) {
+        handle.refreshPipPosition();
+        const segs = loaderState.segments;
+        const detected = handle.detectAtViewportCenter(snap.chapterIdx, segs);
+        if (detected?.arrIdx != null) {
+          const abs = translators.arrayToAbsolute(detected.arrIdx);
+          if (abs != null && abs !== snap.absoluteSegmentIndex) {
+            positionStore.setPosition(
+              { absoluteSegmentIndex: abs, wordIndex: 0 },
+              'user-scroll',
+            );
+          }
+        }
+      }
+    }
+
     // Eagerly persist current mode's WPM so it survives rapid switching
     const currentSnap = positionStore.getSnapshot();
     const existing = readStoredPrefs(publicationId);
@@ -535,7 +558,7 @@ function ActiveReader({
     const targetWpm = wpmByMode[next] ?? existing?.wpm ?? 250;
     positionStore.setMode(next);
     controller.setWpm(targetWpm);
-  }, [controller, publicationId]);
+  }, [controller, publicationId, formattedViewRef, loaderState.segments, translators]);
 
   const handleToggleMode = useCallback(() => {
     const modeOrder: ReadingMode[] = ['phrase', 'rsvp', 'scroll', 'track'];

@@ -50,12 +50,45 @@ export interface SegmentLike {
 // composition mismatches between source HTML and chunker output.
 const WHITESPACE_RE = /[\s\u00A0\u200B-\u200D\uFEFF]+/g
 
+// Typographic character normalization map. EPUBs frequently use smart
+// quotes, em/en dashes, and other typographic characters that may
+// differ from the chunker's output (which may use ASCII equivalents,
+// or vice versa). Normalizing both sides to ASCII ensures matching.
+const TYPOGRAPHIC_MAP: Record<string, string> = {
+  '\u2018': "'",  // left single quote
+  '\u2019': "'",  // right single quote
+  '\u201A': "'",  // single low-9 quote
+  '\u201B': "'",  // single high-reversed-9 quote
+  '\u201C': '"',  // left double quote
+  '\u201D': '"',  // right double quote
+  '\u201E': '"',  // double low-9 quote
+  '\u201F': '"',  // double high-reversed-9 quote
+  '\u2014': '-',  // em dash
+  '\u2013': '-',  // en dash
+  '\u2012': '-',  // figure dash
+  '\u2015': '-',  // horizontal bar
+  '\u2026': '...', // ellipsis
+  '\u00AB': '"',  // left-pointing double angle quote
+  '\u00BB': '"',  // right-pointing double angle quote
+  '\u2039': "'",  // single left-pointing angle quote
+  '\u203A': "'",  // single right-pointing angle quote
+}
+const TYPOGRAPHIC_RE = new RegExp(
+  '[' + Object.keys(TYPOGRAPHIC_MAP).join('') + ']',
+  'g',
+)
+
 /** Collapse runs of whitespace to single ASCII spaces, NFC-normalize,
- *  trim. Applied identically to segment.text and to the DOM-walked
- *  text so the comparison is symmetric. */
+ *  normalize typographic characters, trim. Applied identically to
+ *  segment.text and to the DOM-walked text so the comparison is
+ *  symmetric. */
 export function normalizeSegmentText(s: string): string {
   if (!s) return ''
-  return s.normalize('NFC').replace(WHITESPACE_RE, ' ').trim()
+  return s
+    .normalize('NFC')
+    .replace(TYPOGRAPHIC_RE, (ch) => TYPOGRAPHIC_MAP[ch] || ch)
+    .replace(WHITESPACE_RE, ' ')
+    .trim()
 }
 
 /** True if a character is whitespace under our normalization rules. */
@@ -129,13 +162,21 @@ export function buildSegmentRangeIndex(
         linearMap.push({ nodeIdx: i, offset: j })
         prevWasSpace = true
       } else {
-        // NFC at the character level — Unicode composition isn't
-        // strictly per-char-safe, but for the punctuation/quotes we
-        // care about it's a no-op for ASCII and a stable mapping for
-        // single-codepoint accent forms. The full normalization is
-        // applied to the segment text below.
-        linearChars.push(ch)
-        linearMap.push({ nodeIdx: i, offset: j })
+        // Typographic normalization: replace smart quotes, em dashes,
+        // etc. with their ASCII equivalents so segment.text and DOM
+        // text compare identically. For multi-char replacements
+        // (ellipsis → "...") all output chars point to the same
+        // source offset — the Range only needs the start/end boundaries.
+        const replacement = TYPOGRAPHIC_MAP[ch]
+        if (replacement) {
+          for (let k = 0; k < replacement.length; k++) {
+            linearChars.push(replacement[k])
+            linearMap.push({ nodeIdx: i, offset: j })
+          }
+        } else {
+          linearChars.push(ch)
+          linearMap.push({ nodeIdx: i, offset: j })
+        }
         prevWasSpace = false
       }
     }
