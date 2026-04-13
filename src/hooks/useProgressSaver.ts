@@ -19,6 +19,7 @@ interface UseProgressSaverOptions {
  */
 export function useProgressSaver({ publicationId }: UseProgressSaverOptions): void {
   const lastSavedKeyRef = useRef('');
+  const lastSavedChapterIdRef = useRef(0);
   const wpmByModeRef = useRef<Partial<Record<ReadingMode, number>>>({});
   const apiTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -34,6 +35,14 @@ export function useProgressSaver({ publicationId }: UseProgressSaverOptions): vo
     const snap = positionStore.getSnapshot();
     if (snap.revision === 0) return; // pre-interaction, don't write
     if (snap.chapterId === 0) return;
+    // Don't flush a chapter-transition placeholder on exit
+    if (
+      snap.absoluteSegmentIndex === 0 &&
+      snap.chapterId !== lastSavedChapterIdRef.current &&
+      lastSavedChapterIdRef.current !== 0
+    ) {
+      return;
+    }
 
     const location = {
       chapter_id: snap.chapterId,
@@ -62,9 +71,23 @@ export function useProgressSaver({ publicationId }: UseProgressSaverOptions): vo
       if (snap.revision === 0) return;
       if (snap.chapterId === 0) return;
 
+      // Skip saving position 0 when the chapter just changed. This is a
+      // placeholder from handleVisibleSectionChange / chapter-nav — the
+      // real position will be detected by Effect 3 once segments load.
+      // Saving this placeholder would overwrite the correct position in
+      // the PREVIOUS chapter, causing re-entry to jump to segment 0.
+      if (
+        snap.absoluteSegmentIndex === 0 &&
+        snap.chapterId !== lastSavedChapterIdRef.current &&
+        lastSavedChapterIdRef.current !== 0
+      ) {
+        return;
+      }
+
       const key = `${publicationId}:${snap.chapterId}:${snap.chapterIdx}:${snap.absoluteSegmentIndex}:${snap.wordIndex}:${snap.wpm}:${snap.mode}`;
       if (key !== lastSavedKeyRef.current) {
         lastSavedKeyRef.current = key;
+        lastSavedChapterIdRef.current = snap.chapterId;
         writeStoredPosition(publicationId, {
           chapter_id: snap.chapterId,
           chapter_idx: snap.chapterIdx,

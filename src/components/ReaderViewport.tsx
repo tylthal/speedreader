@@ -808,6 +808,12 @@ function ActiveReader({
       // user-driven scroll, so we always commit with 'user-scroll'
       // origin — that prevents the auto-scroll effect from snapping the
       // user back to the start of the new chapter.
+      //
+      // absoluteSegmentIndex is set to 0 as a placeholder. Effect 3
+      // detects the real position once segments load for the new chapter
+      // and commits with 'user-scroll'. The progress saver skips writing
+      // when absoluteSegmentIndex is 0 and the origin indicates a
+      // cross-chapter transition (see useProgressSaver).
       positionStore.setPosition(
         {
           chapterId: chapters[idx].id,

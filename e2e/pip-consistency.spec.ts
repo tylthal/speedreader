@@ -440,6 +440,56 @@ test.describe('PIP position consistency across modes', () => {
     }
   })
 
+  // ── Position save/restore on exit and re-entry ──
+
+  test('position is restored after exiting and re-entering book', async ({ page }) => {
+    // Scroll to a meaningful position
+    await userScroll(page, 4000)
+    await page.waitForTimeout(500)
+
+    const beforeExit = await getPositionState(page)
+    console.log(`[save-restore] Before exit: segment=${beforeExit.absoluteSegmentIndex}, ` +
+      `chapterIdx=${beforeExit.chapterIdx}`)
+    expect(beforeExit.absoluteSegmentIndex).toBeGreaterThan(0)
+
+    // Exit the reader (navigate to library)
+    const exitBtn = page.locator('[aria-label="Exit reader"], [aria-label="Back to library"]')
+    if (await exitBtn.count() > 0) {
+      await exitBtn.first().click()
+    } else {
+      // Fallback: navigate directly
+      await page.goto('/')
+    }
+    await page.waitForTimeout(1000)
+
+    // Re-enter the book
+    const bookCard = page.locator('[role="article"]').first()
+    if (await bookCard.count() > 0) {
+      await bookCard.click()
+    }
+    await page.waitForURL(/\/read\/\d+/, { timeout: 15000 })
+    await page.waitForSelector('.reader-viewport', { timeout: 10000 })
+    await page.waitForTimeout(3000) // Wait for restore + layout
+
+    const afterRestore = await getPositionState(page)
+    console.log(`[save-restore] After restore: segment=${afterRestore.absoluteSegmentIndex}, ` +
+      `chapterIdx=${afterRestore.chapterIdx}`)
+
+    // Position should be restored to approximately where we were
+    const drift = Math.abs(afterRestore.absoluteSegmentIndex - beforeExit.absoluteSegmentIndex)
+    expect(
+      drift,
+      `[save-restore] Position should be restored. Before exit: segment=${beforeExit.absoluteSegmentIndex}, ` +
+      `after restore: segment=${afterRestore.absoluteSegmentIndex}, drift=${drift}`
+    ).toBeLessThanOrEqual(5)
+
+    // Chapter should match
+    expect(
+      afterRestore.chapterIdx,
+      `[save-restore] Chapter should be restored. Before: ${beforeExit.chapterIdx}, after: ${afterRestore.chapterIdx}`
+    ).toBe(beforeExit.chapterIdx)
+  })
+
   // ── Multiple play/pause cycles preserve position ──
 
   test('multiple play/pause cycles maintain position stability', async ({ page }) => {
