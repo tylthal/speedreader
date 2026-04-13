@@ -803,6 +803,44 @@ export function usePlaybackController(
   }, [segments])
 
   /* ---------------------------------------------------------------- */
+  /*  Recompute plain-mode average speed on layout changes             */
+  /* ---------------------------------------------------------------- */
+  useEffect(() => {
+    const items = focusItemOffsetsRef.current
+    if (!items || items.size === 0) return
+
+    const lastHeights = new Map<Element, number>()
+    let pendingRaf = 0
+
+    const observer = new ResizeObserver((entries) => {
+      if (pxPerSecPerWpmRef.current === 0) return
+      let significant = false
+      for (const entry of entries) {
+        const el = entry.target
+        const newH = entry.contentRect.height
+        const prev = lastHeights.get(el) ?? 0
+        if (prev === 0 || Math.abs(newH - prev) / Math.max(prev, 1) > 0.02) {
+          lastHeights.set(el, newH)
+          significant = true
+        }
+      }
+      if (significant && !pendingRaf) {
+        pendingRaf = requestAnimationFrame(() => {
+          pendingRaf = 0
+          computeAverageSpeed()
+        })
+      }
+    })
+
+    for (const el of items.values()) observer.observe(el)
+
+    return () => {
+      if (pendingRaf) cancelAnimationFrame(pendingRaf)
+      observer.disconnect()
+    }
+  }, [segments, computeAverageSpeed])
+
+  /* ---------------------------------------------------------------- */
   /*  Public handle                                                    */
   /* ---------------------------------------------------------------- */
   return {
