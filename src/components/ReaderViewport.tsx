@@ -277,7 +277,6 @@ function ActiveReader({
     // controller will see the new chapter on its next tick and start
     // ticking from absoluteSegmentIndex=0 of the new chapter.
     autoAdvanceRef.current = true;
-    setIsAutoAdvancing(true);
     positionStore.setPosition(
       {
         chapterId: chapters[nextIdx].id,
@@ -291,7 +290,6 @@ function ActiveReader({
   }, [chapters, announce]);
 
   const autoAdvanceRef = useRef(false);
-  const [isAutoAdvancing, setIsAutoAdvancing] = useState(false);
 
   const controller = usePlaybackController({
     segments: loaderState.segments,
@@ -320,13 +318,11 @@ function ActiveReader({
   // not abort-the-auto-advance signals.
   const userPause = useCallback(() => {
     autoAdvanceRef.current = false;
-    setIsAutoAdvancing(false);
     controller.pause();
   }, [controller]);
   const userTogglePlayPause = useCallback(() => {
     if (positionStore.getSnapshot().isPlaying) {
       autoAdvanceRef.current = false;
-      setIsAutoAdvancing(false);
     }
     controller.togglePlayPause();
   }, [controller]);
@@ -340,7 +336,6 @@ function ActiveReader({
     if (!autoAdvanceRef.current) return;
     if (loaderState.segments.length === 0) return;
     autoAdvanceRef.current = false;
-    setIsAutoAdvancing(false);
     let cancelled = false;
     queueMicrotask(() => {
       if (!cancelled) controller.play();
@@ -946,7 +941,6 @@ function ActiveReader({
               onSeek={seekToArr}
               scrollContainerRef={focusContainerRef}
               scrollItemRefs={focusItemRefsMap}
-              suppressPausedView={isAutoAdvancing}
             />
           </GestureLayer>
           )}
