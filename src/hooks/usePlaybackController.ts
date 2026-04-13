@@ -370,7 +370,8 @@ export function usePlaybackController(
 
     let totalWords = 0
     for (let i = 0; i < segs.length; i++) {
-      totalWords += segs[i].word_count || segs[i].text.split(/\s+/).length
+      const wc = segs[i].word_count || segs[i].text.trim().split(/\s+/).filter(Boolean).length
+      totalWords += Math.max(wc, 0)
     }
     if (totalWords === 0) return
 
@@ -449,7 +450,10 @@ export function usePlaybackController(
       const wpm = positionStore.getSnapshot().wpm
 
       if (lastTimestampRef.current > 0 && haveModel) {
-        const dt = (timestamp - lastTimestampRef.current) / 1000
+        const rawDt = (timestamp - lastTimestampRef.current) / 1000
+        // Clamp dt to avoid massive scroll jumps after frame gaps
+        // (tab switch, heavy re-render, GC pause). 0.25 s ≈ 4 fps floor.
+        const dt = Math.min(rawDt, 0.25)
 
         // Track mode: gaze multiplier on top of base speed.
         let multiplier = 1.0

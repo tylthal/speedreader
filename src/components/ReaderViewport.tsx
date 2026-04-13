@@ -525,10 +525,10 @@ function ActiveReader({
       wpmByMode,
     });
 
-    // Resolve and apply the target mode's WPM
+    // Resolve and apply the target mode's WPM (clamped to valid range)
     const targetWpm = wpmByMode[next] ?? existing?.wpm ?? 250;
     positionStore.setMode(next);
-    positionStore.setWpm(targetWpm);
+    controller.setWpm(targetWpm);
   }, [controller, publicationId]);
 
   const handleToggleMode = useCallback(() => {
