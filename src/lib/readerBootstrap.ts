@@ -9,7 +9,7 @@ import {
 import { readDefaultDisplayMode } from '../hooks/useDefaultDisplayMode'
 import type { DisplayMode } from '../state/position/types'
 import type { ReadingMode } from '../types'
-import { readStoredPrefs, readStoredPosition, pickFreshestPosition } from './readerProgress'
+import { readStoredPrefs, readStoredPosition, pickFreshestPosition, resolveWpmForMode } from './readerProgress'
 
 export interface ReaderBootstrapSeed {
   chapterId: number
@@ -79,8 +79,8 @@ export async function loadReaderBootstrap(
   }
 
   if (prefs) {
-    wpm = prefs.wpm
     readingMode = coerceMode(prefs.readingMode)
+    wpm = resolveWpmForMode(prefs, readingMode)
   }
 
   const initialDisplayMode: ApiDisplayMode =

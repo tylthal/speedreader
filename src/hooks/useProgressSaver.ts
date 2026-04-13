@@ -1,7 +1,8 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { upsertAutoBookmark } from '../api/client';
 import { positionStore, usePositionSelector } from '../state/position/positionStore';
-import { writeStoredPosition, writeStoredPrefs } from '../lib/readerProgress';
+import { readStoredPrefs, writeStoredPosition, writeStoredPrefs } from '../lib/readerProgress';
+import type { ReadingMode } from '../types';
 
 interface UseProgressSaverOptions {
   publicationId: number;
@@ -29,6 +30,15 @@ export function useProgressSaver({ publicationId }: UseProgressSaverOptions): vo
   const revision = usePositionSelector((s) => s.revision);
 
   const lastSavedKeyRef = useRef('');
+  const wpmByModeRef = useRef<Partial<Record<ReadingMode, number>>>({});
+
+  // Seed wpmByMode from localStorage on mount
+  useEffect(() => {
+    const existing = readStoredPrefs(publicationId);
+    if (existing?.wpmByMode) {
+      wpmByModeRef.current = { ...existing.wpmByMode };
+    }
+  }, [publicationId]);
 
   const doSave = useCallback(() => {
     const snap = positionStore.getSnapshot();
@@ -43,9 +53,11 @@ export function useProgressSaver({ publicationId }: UseProgressSaverOptions): vo
     };
 
     writeStoredPosition(publicationId, location);
+    wpmByModeRef.current = { ...wpmByModeRef.current, [snap.mode]: snap.wpm };
     writeStoredPrefs(publicationId, {
       wpm: snap.wpm,
       readingMode: snap.mode,
+      wpmByMode: wpmByModeRef.current,
     });
 
     upsertAutoBookmark(publicationId, 'last_opened', location).catch((err) => {
@@ -68,7 +80,8 @@ export function useProgressSaver({ publicationId }: UseProgressSaverOptions): vo
         absolute_segment_index: absoluteSegmentIndex,
         word_index: wordIndex,
       });
-      writeStoredPrefs(publicationId, { wpm, readingMode });
+      wpmByModeRef.current = { ...wpmByModeRef.current, [readingMode]: wpm };
+      writeStoredPrefs(publicationId, { wpm, readingMode, wpmByMode: wpmByModeRef.current });
     }
 
     if (apiTimerRef.current) clearTimeout(apiTimerRef.current);

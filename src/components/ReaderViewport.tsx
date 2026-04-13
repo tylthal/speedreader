@@ -18,6 +18,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { setDisplayModePref, upsertAutoBookmark } from '../api/client';
 import { markFirstChunkRendered } from '../lib/ttfcMetric';
 import { extractSnippet } from '../lib/bookmarkSnippet';
+import { readStoredPrefs, resolveWpmForMode, writeStoredPrefs } from '../lib/readerProgress';
 import type { Chapter, TocNode } from '../api/client';
 import type { Bookmark } from '../api/types';
 import type { ReadingMode } from '../types';
@@ -510,8 +511,25 @@ function ActiveReader({
   // each frame; no per-mode seek, no carry-wpm dance, no align effects.
   const switchToMode = useCallback((next: ReadingMode) => {
     controller.pause();
+
+    // Eagerly persist current mode's WPM so it survives rapid switching
+    const currentSnap = positionStore.getSnapshot();
+    const existing = readStoredPrefs(publicationId);
+    const wpmByMode = {
+      ...existing?.wpmByMode,
+      [currentSnap.mode]: currentSnap.wpm,
+    };
+    writeStoredPrefs(publicationId, {
+      wpm: currentSnap.wpm,
+      readingMode: currentSnap.mode,
+      wpmByMode,
+    });
+
+    // Resolve and apply the target mode's WPM
+    const targetWpm = wpmByMode[next] ?? existing?.wpm ?? 250;
     positionStore.setMode(next);
-  }, [controller]);
+    positionStore.setWpm(targetWpm);
+  }, [controller, publicationId]);
 
   const handleToggleMode = useCallback(() => {
     const modeOrder: ReadingMode[] = ['phrase', 'rsvp', 'scroll', 'track'];

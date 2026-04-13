@@ -8,6 +8,17 @@ import type { AutoBookmarkLocation } from '../api/types'
 interface StoredReaderPrefs {
   wpm: number
   readingMode: ReadingMode
+  wpmByMode?: Partial<Record<ReadingMode, number>>
+}
+
+const DEFAULT_WPM = 250
+
+export function resolveWpmForMode(
+  prefs: StoredReaderPrefs | null,
+  mode: ReadingMode,
+): number {
+  if (!prefs) return DEFAULT_WPM
+  return prefs.wpmByMode?.[mode] ?? prefs.wpm ?? DEFAULT_WPM
 }
 
 function prefsKey(publicationId: number): string {
