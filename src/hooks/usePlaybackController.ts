@@ -63,6 +63,7 @@ const MIN_MULTIPLIER = -0.6
 const MAX_MULTIPLIER = 2.5
 const HOLD_THRESHOLD = 0.55
 const PLAY_GRACE_MS = 800
+const MAX_EFFECTIVE_WPM = 1500
 
 function clampWpm(value: number): number {
   return Math.max(MIN_WPM, Math.min(MAX_WPM, value))
@@ -81,11 +82,17 @@ function getWordsFromSegment(segment: Segment): string[] {
 }
 
 function getWordDuration(word: string, wpm: number): number {
-  let duration = (1 / wpm) * 60000
-  if (word.length > 8) duration *= 1.2
+  const baseDuration = (1 / wpm) * 60000
+  let duration = baseDuration
+  if (word.length > 8) {
+    duration *= Math.min(1.5, 1 + (word.length - 8) * 0.05)
+  }
   const lastChar = word[word.length - 1]
-  if (lastChar === '.' || lastChar === '!' || lastChar === '?') duration += 150
-  else if (lastChar === ',' || lastChar === ';' || lastChar === ':') duration += 80
+  if (lastChar === '.' || lastChar === '!' || lastChar === '?') {
+    duration += Math.max(30, baseDuration * 0.5)
+  } else if (lastChar === ',' || lastChar === ';' || lastChar === ':') {
+    duration += Math.max(15, baseDuration * 0.25)
+  }
   return duration
 }
 
@@ -483,12 +490,18 @@ export function usePlaybackController(
         }
 
         if (basePxPerSec > 0) {
-          scrollPositionRef.current += basePxPerSec * multiplier * dt
+          let effectivePxPerSec = basePxPerSec * multiplier
+          if (isTrack && effectivePxPerSec > 0) {
+            const pxPerSecAtOneWpm = basePxPerSec / wpm
+            effectivePxPerSec = Math.min(effectivePxPerSec, pxPerSecAtOneWpm * MAX_EFFECTIVE_WPM)
+          }
+          scrollPositionRef.current += effectivePxPerSec * dt
           if (scrollPositionRef.current < 0) scrollPositionRef.current = 0
           container.scrollTop = Math.floor(scrollPositionRef.current * dpr) / dpr
 
           const maxScroll = container.scrollHeight - container.clientHeight
-          if (container.scrollTop >= maxScroll - 1) {
+          const endTolerance = Math.max(2, Math.ceil(dpr))
+          if (container.scrollTop >= maxScroll - endTolerance) {
             positionStore.setPlaying(false)
             onCompleteRef.current?.()
             return false
