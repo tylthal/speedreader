@@ -14,7 +14,6 @@ import {
 } from '../hooks/useTocNavigation';
 import { useFormattedViewCursorSync } from '../hooks/useFormattedViewCursorSync';
 import { useReaderInitialization } from '../hooks/useReaderInitialization';
-import { useLongPress } from '../hooks/useLongPress';
 import { Link, useNavigate } from 'react-router-dom';
 import { setDisplayModePref, upsertAutoBookmark } from '../api/client';
 import { markFirstChunkRendered } from '../lib/ttfcMetric';
@@ -31,6 +30,7 @@ import ReaderHeader from './ReaderHeader';
 import TocSidebar from './TocSidebar';
 import BookmarksPanel from './BookmarksPanel';
 import BookmarkNameDialog from './BookmarkNameDialog';
+import ActionSheet from './ActionSheet';
 import FormattedView from './FormattedView';
 import type { FormattedViewHandle } from './FormattedView';
 import VelocityProfileDebugOverlay from './VelocityProfileDebugOverlay';
@@ -590,10 +590,18 @@ function ActiveReader({
     }, 'bookmark');
   }, [controller]);
 
-  /* ---- Long-press to create bookmark ---- */
-  const handleLongPress = useCallback(() => {
+  /* ---- PIP tap → bookmark menu ---- */
+  const [pipMenuOpen, setPipMenuOpen] = useState(false);
+
+  const handlePipTap = useCallback(() => {
     const snap = positionStore.getSnapshot();
     if (snap.isPlaying) return;
+    if (snap.chapterId === 0) return;
+    setPipMenuOpen(true);
+  }, []);
+
+  const handlePipAddBookmark = useCallback(() => {
+    const snap = positionStore.getSnapshot();
     if (snap.chapterId === 0) return;
 
     const snippet = extractSnippet(
@@ -610,12 +618,8 @@ function ActiveReader({
       snippet,
     });
     haptics.success();
+    setPipMenuOpen(false);
   }, [loaderState.segments, haptics]);
-
-  const longPressHandlers = useLongPress({
-    onLongPress: handleLongPress,
-    enabled: !isPlaying,
-  });
 
   const handleBookmarkConfirm = useCallback((name: string) => {
     if (!bookmarkNaming) return;
@@ -821,6 +825,15 @@ function ActiveReader({
         onJump={handleBookmarkJump}
         onClose={() => setBookmarksOpen(false)}
       />
+      {pipMenuOpen && (
+        <ActionSheet
+          title="Position"
+          options={[
+            { label: 'Add Bookmark', onSelect: handlePipAddBookmark },
+          ]}
+          onClose={() => setPipMenuOpen(false)}
+        />
+      )}
       {bookmarkNaming && (
         <BookmarkNameDialog
           defaultName={`Bookmark ${bookmarkStore.getUserBookmarkCount() + 1}`}
@@ -866,7 +879,7 @@ function ActiveReader({
         />
       )}
       {!isImageBook && !isPdfBook && (
-        <div className="long-press-wrapper" {...longPressHandlers}>
+        <div className="long-press-wrapper">
           <FormattedView
             ref={formattedViewRef}
             publicationId={publicationId}
@@ -874,6 +887,7 @@ function ActiveReader({
             currentSectionIndex={chapterIdx}
             onVisibleSectionChange={handleVisibleSectionChange}
             onTap={isPlaying ? userPause : undefined}
+            onPipTap={handlePipTap}
             velocityProfileRef={velocityProfileRef}
             onLayoutChange={onFormattedLayoutChange}
             visible={showFormattedView}

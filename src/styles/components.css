@@ -435,6 +435,8 @@ html[data-playing] .reader-header {
   background: var(--bg);
   -webkit-overflow-scrolling: touch;
   position: relative;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 /* Hidden formatted view: removed from layout via display:none so the
@@ -464,8 +466,19 @@ html[data-playing] .reader-header {
   background: var(--accent);
   opacity: 0.7;
   transition: top 180ms ease, opacity 140ms ease;
-  pointer-events: none;
+  pointer-events: auto;
+  cursor: pointer;
+  touch-action: manipulation;
   z-index: 2;
+}
+
+.formatted-view__pip::before {
+  content: '';
+  position: absolute;
+  top: -12px;
+  left: -10px;
+  width: 44px;
+  height: 44px;
 }
 
 .formatted-view__column {

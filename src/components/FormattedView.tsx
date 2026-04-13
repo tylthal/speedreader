@@ -69,6 +69,8 @@ interface FormattedViewProps {
    * Defaults to true.
    */
   visible?: boolean
+  /** Called when the user taps the PIP indicator. */
+  onPipTap?: () => void
 }
 
 /**
@@ -364,6 +366,7 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
     velocityProfileRef,
     onLayoutChange,
     visible = true,
+    onPipTap,
   },
   ref,
 ) {
@@ -1164,6 +1167,10 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
           className="formatted-view__pip"
           aria-hidden="true"
           style={{ top: `${pipTop}px` }}
+          onClick={(e) => {
+            e.stopPropagation()
+            onPipTap?.()
+          }}
         />
       )}
       <FormattedViewDiagnostics
