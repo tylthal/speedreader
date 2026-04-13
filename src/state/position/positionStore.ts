@@ -110,12 +110,13 @@ export const positionStore = {
    */
   setPosition(
     patch: Pick<PositionState, 'absoluteSegmentIndex'> &
-      Partial<Pick<PositionState, 'wordIndex' | 'chapterId' | 'chapterIdx'>>,
+      Partial<Pick<PositionState, 'wordIndex' | 'chapterId' | 'chapterIdx' | 'scrollTop'>>,
     origin: PositionOrigin,
   ): void {
     const nextWord = patch.wordIndex ?? state.wordIndex
     const nextChapId = patch.chapterId ?? state.chapterId
     const nextChapIdx = patch.chapterIdx ?? state.chapterIdx
+    const nextScrollTop = patch.scrollTop ?? state.scrollTop
     if (
       state.absoluteSegmentIndex === patch.absoluteSegmentIndex &&
       state.wordIndex === nextWord &&
@@ -131,6 +132,7 @@ export const positionStore = {
         wordIndex: nextWord,
         chapterId: nextChapId,
         chapterIdx: nextChapIdx,
+        scrollTop: nextScrollTop,
       },
       origin,
     )

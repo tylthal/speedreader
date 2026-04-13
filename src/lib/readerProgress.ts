@@ -52,6 +52,8 @@ export function writeStoredPrefs(
 
 interface StoredPositionSnapshot extends AutoBookmarkLocation {
   updated_at: string
+  /** Formatted view scrollTop for pixel-perfect restore. */
+  scroll_top?: number
 }
 
 function positionKey(publicationId: number): string {
@@ -70,7 +72,7 @@ export function readStoredPosition(publicationId: number): StoredPositionSnapsho
 
 export function writeStoredPosition(
   publicationId: number,
-  location: AutoBookmarkLocation,
+  location: AutoBookmarkLocation & { scroll_top?: number },
 ): void {
   try {
     localStorage.setItem(

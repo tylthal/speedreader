@@ -44,6 +44,10 @@ export interface PositionState {
    *  boundaries; the controller flushes the live word here on pause /
    *  visibility-hidden / unmount. */
   wordIndex: number
+  /** Formatted view scrollTop at the time of the last position commit.
+   *  Saved alongside the segment index so restore can scroll to the
+   *  exact pip position instead of computing from segment center. */
+  scrollTop: number
   /** Reading mode (phrase / rsvp / scroll / track). */
   mode: ReadingMode
   /** Display mode (plain / formatted). */
@@ -66,6 +70,7 @@ export const initialPositionState: PositionState = {
   chapterIdx: 0,
   absoluteSegmentIndex: 0,
   wordIndex: 0,
+  scrollTop: 0,
   mode: 'phrase',
   displayMode: 'plain',
   wpm: 250,

@@ -490,6 +490,72 @@ test.describe('PIP position consistency across modes', () => {
     ).toBe(beforeExit.chapterIdx)
   })
 
+  // ── Pip visual position is preserved across exit/re-enter ──
+
+  test('pip visual position matches after exit/re-enter', async ({ page }) => {
+    await userScroll(page, 4000)
+    await page.waitForTimeout(500)
+
+    // Record the exact pip visual position and text before exit
+    const beforeExit = await page.evaluate(() => {
+      const container = document.querySelector('.formatted-view') as HTMLElement
+      if (!container) return null
+      const pip = document.querySelector('.formatted-view__pip') as HTMLElement
+      if (!pip) return null
+      return {
+        scrollTop: container.scrollTop,
+        pipTop: pip.getBoundingClientRect().top,
+      }
+    })
+    const pipTextBefore = await getPipLineText(page)
+    console.log(`[pip-visual] Before exit: scrollTop=${beforeExit?.scrollTop}, pipTop=${beforeExit?.pipTop}`)
+    console.log(`[pip-visual] Pip text before: "${pipTextBefore.substring(0, 80)}"`)
+
+    // Exit
+    const exitBtn = page.locator('[aria-label="Exit reader"], [aria-label="Back to library"]')
+    if (await exitBtn.count() > 0) await exitBtn.first().click()
+    else await page.goto('/')
+    await page.waitForTimeout(1000)
+
+    // Re-enter
+    const bookCard = page.locator('[role="article"]').first()
+    if (await bookCard.count() > 0) await bookCard.click()
+    await page.waitForURL(/\/read\/\d+/, { timeout: 15000 })
+    await page.waitForSelector('.reader-viewport', { timeout: 10000 })
+    await page.waitForTimeout(3000)
+
+    const afterRestore = await page.evaluate(() => {
+      const container = document.querySelector('.formatted-view') as HTMLElement
+      if (!container) return null
+      const pip = document.querySelector('.formatted-view__pip') as HTMLElement
+      if (!pip) return null
+      return {
+        scrollTop: container.scrollTop,
+        pipTop: pip.getBoundingClientRect().top,
+      }
+    })
+    const pipTextAfter = await getPipLineText(page)
+    console.log(`[pip-visual] After restore: scrollTop=${afterRestore?.scrollTop}, pipTop=${afterRestore?.pipTop}`)
+    console.log(`[pip-visual] Pip text after: "${pipTextAfter.substring(0, 80)}"`)
+
+    // ScrollTop should be within a few pixels
+    if (beforeExit && afterRestore) {
+      const scrollDrift = Math.abs(afterRestore.scrollTop - beforeExit.scrollTop)
+      console.log(`[pip-visual] Scroll drift: ${scrollDrift}px`)
+      // Allow some tolerance for subpixel rounding and layout differences
+      expect(
+        scrollDrift,
+        `[pip-visual] scrollTop should be restored. Before=${beforeExit.scrollTop}, after=${afterRestore.scrollTop}`
+      ).toBeLessThanOrEqual(20)
+    }
+
+    // Pip text should match
+    expect(
+      pipTextAfter.substring(0, 60),
+      `[pip-visual] Pip text should match. Before: "${pipTextBefore.substring(0, 60)}", after: "${pipTextAfter.substring(0, 60)}"`
+    ).toBe(pipTextBefore.substring(0, 60))
+  })
+
   // ── Position doesn't drift on repeated exit/re-enter ──
 
   test('position does not drift on repeated exit/re-enter cycles', async ({ page }) => {

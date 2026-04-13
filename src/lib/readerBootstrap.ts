@@ -16,6 +16,7 @@ export interface ReaderBootstrapSeed {
   chapterIdx: number
   absoluteSegmentIndex: number
   wordIndex: number
+  scrollTop: number
   wpm: number
   mode: ReadingMode
   displayMode: DisplayMode
@@ -67,6 +68,8 @@ export async function loadReaderBootstrap(
   let wpm = 250
   let readingMode: ReadingMode = 'phrase'
 
+  let scrollTop = 0
+
   if (position) {
     const restoredChapterIdx = chapters.findIndex(
       (chapter) => chapter.id === position.chapter_id,
@@ -75,6 +78,8 @@ export async function loadReaderBootstrap(
       chapterIdx = restoredChapterIdx
       absoluteSegmentIndex = position.absolute_segment_index
       wordIndex = position.word_index ?? 0
+      // scroll_top comes from localStorage only (not IndexedDB bookmark)
+      scrollTop = (position as { scroll_top?: number }).scroll_top ?? 0
     }
   }
 
@@ -92,6 +97,7 @@ export async function loadReaderBootstrap(
       chapterIdx,
       absoluteSegmentIndex,
       wordIndex,
+      scrollTop,
       wpm,
       mode: readingMode,
       displayMode: initialDisplayMode as DisplayMode,

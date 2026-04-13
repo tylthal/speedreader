@@ -51,7 +51,10 @@ export function useProgressSaver({ publicationId }: UseProgressSaverOptions): vo
       word_index: snap.wordIndex,
     };
 
-    writeStoredPosition(publicationId, location);
+    writeStoredPosition(publicationId, {
+      ...location,
+      scroll_top: snap.scrollTop,
+    });
     wpmByModeRef.current = { ...wpmByModeRef.current, [snap.mode]: snap.wpm };
     writeStoredPrefs(publicationId, {
       wpm: snap.wpm,
@@ -93,6 +96,7 @@ export function useProgressSaver({ publicationId }: UseProgressSaverOptions): vo
           chapter_idx: snap.chapterIdx,
           absolute_segment_index: snap.absoluteSegmentIndex,
           word_index: snap.wordIndex,
+          scroll_top: snap.scrollTop,
         });
         wpmByModeRef.current = { ...wpmByModeRef.current, [snap.mode]: snap.wpm };
         writeStoredPrefs(publicationId, { wpm: snap.wpm, readingMode: snap.mode, wpmByMode: wpmByModeRef.current });

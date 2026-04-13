@@ -97,14 +97,6 @@ export function useFormattedViewCursorSync({
       attempts += 1
       if (!pendingScrollRef.current) return
 
-      const arrIdx = translators.absoluteToArrayIndex(absoluteSegmentIndex)
-      if (segments.length === 0 || arrIdx == null) {
-        if (attempts < maxAttempts) {
-          rafHandle = requestAnimationFrame(tryScroll)
-        }
-        return
-      }
-
       const container = handle.getScrollContainer()
       const sectionEl = handle.getSectionEl(chapterIdx)
       if (!container || !sectionEl) {
@@ -114,6 +106,19 @@ export function useFormattedViewCursorSync({
         return
       }
       if (!handle.isSectionReady(chapterIdx)) {
+        if (attempts < maxAttempts) {
+          rafHandle = requestAnimationFrame(tryScroll)
+        }
+        return
+      }
+
+      const arrIdx = translators.absoluteToArrayIndex(absoluteSegmentIndex)
+      // For restore with saved scrollTop, we can scroll immediately
+      // without waiting for segments to load. For all other cases,
+      // wait for segments so we can compute the scroll target.
+      const snapForCheck = positionStore.getSnapshot()
+      const canRestoreDirect = cursorOrigin === 'restore' && snapForCheck.scrollTop > 0
+      if (!canRestoreDirect && (segments.length === 0 || arrIdx == null)) {
         if (attempts < maxAttempts) {
           rafHandle = requestAnimationFrame(tryScroll)
         }
@@ -171,19 +176,35 @@ export function useFormattedViewCursorSync({
         }
       }
 
-      const info = handle.setHighlightForSegment(chapterIdx, arrIdx, segments)
-      if (!info) {
-        if (attempts < maxAttempts) {
-          rafHandle = requestAnimationFrame(tryScroll)
-        }
-        return
-      }
+      // On restore, use the saved scrollTop directly instead of computing
+      // from the segment center. This preserves the exact pip position
+      // because it's the same scrollTop that was saved when the pip was
+      // at the reference line. Segment-center calculation is lossy for
+      // multi-line segments and causes pip drift on exit/re-enter.
+      const snap = positionStore.getSnapshot()
+      let clamped: number
 
-      const segCenterY = info.topPx + info.heightPx / 2
-      const viewportH = container.clientHeight
-      const targetScroll = segCenterY - viewportH * REFERENCE_LINE_RATIO
-      const maxScroll = Math.max(0, container.scrollHeight - viewportH)
-      const clamped = Math.max(0, Math.min(targetScroll, maxScroll))
+      if (cursorOrigin === 'restore' && snap.scrollTop > 0) {
+        // Direct scroll restore — same value that was saved
+        const maxScroll = Math.max(0, container.scrollHeight - container.clientHeight)
+        clamped = Math.max(0, Math.min(snap.scrollTop, maxScroll))
+      } else {
+        const info = arrIdx != null
+          ? handle.setHighlightForSegment(chapterIdx, arrIdx, segments)
+          : null
+        if (!info) {
+          if (attempts < maxAttempts) {
+            rafHandle = requestAnimationFrame(tryScroll)
+          }
+          return
+        }
+
+        const segCenterY = info.topPx + info.heightPx / 2
+        const viewportH = container.clientHeight
+        const targetScroll = segCenterY - viewportH * REFERENCE_LINE_RATIO
+        const maxScroll = Math.max(0, container.scrollHeight - viewportH)
+        clamped = Math.max(0, Math.min(targetScroll, maxScroll))
+      }
 
       const behavior: ScrollBehavior =
         transitionedIn ||
@@ -262,15 +283,29 @@ export function useFormattedViewCursorSync({
 
       if (result.arrIdx == null) return
       const abs = translators.arrayToAbsolute(result.arrIdx)
+      if (abs == null) return
+
+      // Always include scrollTop so the saved position can restore to
+      // the exact pip location, not the segment center.
+      const currentScrollTop = container.scrollTop
+      const snap = positionStore.getSnapshot()
       if (
-        abs == null ||
-        abs === positionStore.getSnapshot().absoluteSegmentIndex
+        abs === snap.absoluteSegmentIndex &&
+        snap.origin === 'user-scroll'
       ) {
+        // Same segment but scroll position may have changed (scrolled
+        // within a multi-line segment). Update scrollTop silently.
+        if (Math.abs(currentScrollTop - snap.scrollTop) > 2) {
+          positionStore.setPosition(
+            { absoluteSegmentIndex: abs, wordIndex: 0, scrollTop: currentScrollTop },
+            'user-scroll',
+          )
+        }
         return
       }
 
       positionStore.setPosition(
-        { absoluteSegmentIndex: abs, wordIndex: 0 },
+        { absoluteSegmentIndex: abs, wordIndex: 0, scrollTop: currentScrollTop },
         'user-scroll',
       )
     }
