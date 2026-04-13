@@ -48,7 +48,7 @@ import {
 } from '../lib/velocityProfile'
 import { positionStore, usePositionSelector } from '../state/position/positionStore'
 import type { SegmentLoaderTranslators } from './useSegmentLoader'
-import type { FormattedViewHandle } from '../components/FormattedView'
+import { REFERENCE_LINE_RATIO, type FormattedViewHandle } from '../components/FormattedView'
 
 /* ------------------------------------------------------------------ */
 /*  Constants                                                          */
@@ -380,7 +380,7 @@ export function usePlaybackController(
         const items = focusItemOffsetsRef.current
         if (!items || items.size === 0) return null
         const containerRect = container.getBoundingClientRect()
-        const centerY = containerRect.top + containerRect.height / 2
+        const centerY = containerRect.top + containerRect.height * REFERENCE_LINE_RATIO
         let closestIdx: number | null = null
         let closestDist = Infinity
         items.forEach((el, idx) => {
@@ -471,7 +471,7 @@ export function usePlaybackController(
 
         let basePxPerSec = 0
         if (useProfile) {
-          const centerY = container.scrollTop + container.clientHeight / 2
+          const centerY = container.scrollTop + container.clientHeight * REFERENCE_LINE_RATIO
           const pxPerWeight = getPxPerWeight(
             profile,
             centerY,
@@ -599,11 +599,13 @@ export function usePlaybackController(
     // Snap the position store to the segment at the pip's current
     // location. During pause-mode scrolling, Effect 3 updates the store
     // via a rAF callback — but that callback may still be pending when
-    // the user taps play. This synchronous detection guarantees the
-    // store matches the pip before the first playback tick runs.
+    // the user taps play. Refresh the pip first so its coordinates
+    // reflect any layout changes since the last scroll event, then
+    // detect the segment synchronously.
     if (displayMode === 'formatted') {
       const handle = formattedViewRef.current
       if (handle) {
+        handle.refreshPipPosition()
         const chapterIdx = positionStore.getSnapshot().chapterIdx
         const segs = segmentsRef.current
         const detected = handle.detectAtViewportCenter(chapterIdx, segs)

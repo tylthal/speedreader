@@ -1,8 +1,9 @@
 import { useEffect, useRef } from 'react'
 import type { RefObject } from 'react'
-import type {
-  FormattedViewHandle,
-  HighlightSegment,
+import {
+  REFERENCE_LINE_RATIO,
+  type FormattedViewHandle,
+  type HighlightSegment,
 } from '../components/FormattedView'
 import { positionStore } from '../state/position/positionStore'
 import type { PositionOrigin } from '../state/position/types'
@@ -173,7 +174,7 @@ export function useFormattedViewCursorSync({
 
       const segCenterY = info.topPx + info.heightPx / 2
       const viewportH = container.clientHeight
-      const targetScroll = segCenterY - viewportH * 0.4
+      const targetScroll = segCenterY - viewportH * REFERENCE_LINE_RATIO
       const maxScroll = Math.max(0, container.scrollHeight - viewportH)
       const clamped = Math.max(0, Math.min(targetScroll, maxScroll))
 

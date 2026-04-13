@@ -24,6 +24,13 @@ import {
   type UploadDiag,
 } from './formattedView/FormattedViewDiagnostics'
 
+/**
+ * Vertical position of the reference line as a fraction of the viewport
+ * height. PIP detection, auto-scroll targeting, and segment detection all
+ * use this value so they agree on "where the user is reading".
+ */
+export const REFERENCE_LINE_RATIO = 0.4
+
 interface FormattedViewProps {
   publicationId: number
   chapters: Chapter[]
@@ -124,7 +131,12 @@ export interface FormattedViewHandle {
     htmlAnchor: string | null | undefined,
     segments: ReadonlyArray<HighlightSegment>,
   ) => TocTargetInfo | null
-  /** Unified position detection at viewport center. Reads the block
+  /** Synchronously re-run the pip detection so callers get fresh
+   *  coordinates even if no scroll event has fired since the last
+   *  layout change. Call before detectAtViewportCenter when stale
+   *  data could cause a position mismatch (e.g. play() after pause). */
+  refreshPipPosition: () => void
+  /** Unified position detection at the reference line. Reads the block
    *  found by the pip scroll listener (shared via ref), then finds
    *  the segment at the pip's line via caretRangeFromPoint. Because
    *  both systems use the same block, they cannot disagree. */
@@ -685,22 +697,26 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
   // chance to move to the new chapter.
   const lastIOSeenScrollTopRef = useRef(0)
 
-  // Keep pip at the specific TEXT LINE at viewport center — not the
+  // Keep pip at the specific TEXT LINE at the reference line — not the
   // block's midpoint. Uses caretRangeFromPoint to find the exact line,
   // positions pip at that line's vertical midpoint. Also writes the
   // found block + line Y to pipBlockRef so detectAtViewportCenter can
   // reuse it, guaranteeing both systems reference the same line.
+  //
+  // Extracted into a ref-stable function so the scroll listener and the
+  // imperative handle (refreshPipPosition) can both call it.
+  const updatePipPositionRef = useRef<() => void>(() => {})
   useEffect(() => {
     const container = containerRef.current
     if (!container) return
-    const onScroll = () => {
+    const updatePipPosition = () => {
       const containerRect = container.getBoundingClientRect()
-      const centerViewportY = containerRect.top + container.clientHeight / 2
+      const centerViewportY = containerRect.top + container.clientHeight * REFERENCE_LINE_RATIO
       const centerX = containerRect.left + containerRect.width / 2
       const el = container.ownerDocument.elementFromPoint(centerX, centerViewportY)
       if (!el) {
         pipBlockRef.current = null
-        setPipTop(container.scrollTop + container.clientHeight / 2 - 10)
+        setPipTop(container.scrollTop + container.clientHeight * REFERENCE_LINE_RATIO - 10)
         return
       }
       // Walk up to the nearest block element inside a section body
@@ -715,10 +731,10 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
         block = parent
       }
       if (block && block !== container && bodyEl) {
-        // Line-level precision: probe the caret at viewport center to
+        // Line-level precision: probe the caret at the reference line to
         // find the exact text line, then position pip at that line.
         const doc = container.ownerDocument
-        let lineViewportY = centerViewportY // fallback to viewport center
+        let lineViewportY = centerViewportY // fallback to reference line
         if ('caretRangeFromPoint' in doc) {
           const cr = (doc as unknown as { caretRangeFromPoint(x: number, y: number): Range | null })
             .caretRangeFromPoint(centerX, centerViewportY)
@@ -741,7 +757,7 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
           const cp = (doc as unknown as { caretPositionFromPoint(x: number, y: number): { offsetNode: Node; offset: number } | null })
             .caretPositionFromPoint(centerX, centerViewportY)
           if (cp) {
-            const r = doc.createRange()
+            const r = container.ownerDocument.createRange()
             r.setStart(cp.offsetNode, cp.offset)
             const maxOff = cp.offsetNode.nodeType === Node.TEXT_NODE
               ? (cp.offsetNode as Text).length : 0
@@ -768,13 +784,14 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
         pipBlockRef.current = { block, bodyEl, sectionIdx, centerX, pipViewportY: lineViewportY }
       } else {
         pipBlockRef.current = null
-        setPipTop(container.scrollTop + container.clientHeight / 2 - 10)
+        setPipTop(container.scrollTop + container.clientHeight * REFERENCE_LINE_RATIO - 10)
       }
     }
-    container.addEventListener('scroll', onScroll, { passive: true })
+    updatePipPositionRef.current = updatePipPosition
+    container.addEventListener('scroll', updatePipPosition, { passive: true })
     // Set initial position
-    onScroll()
-    return () => container.removeEventListener('scroll', onScroll)
+    updatePipPosition()
+    return () => container.removeEventListener('scroll', updatePipPosition)
   }, [])
 
   // Watch which section is at the top of the viewport and report it.
@@ -871,6 +888,9 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
       rebuildProfile: () => {
         rebuildProfileNow()
       },
+      refreshPipPosition: () => {
+        updatePipPositionRef.current()
+      },
       beginProgrammaticScroll: () => {
         isProgrammaticScrollRef.current = true
       },
@@ -940,7 +960,10 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
         }
 
         // No segment rects overlap the pip line. Find the nearest
-        // segment — check both above and below the pip.
+        // segment — check both above and below the pip, but cap the
+        // search to one viewport height. Beyond that, the match is
+        // unreliable and we'd rather return null than jump pages.
+        const maxFallbackDist = container.clientHeight
         let closestIdx: number | null = null
         let closestDist = Infinity
         for (let i = 0; i < index.length; i++) {
@@ -963,7 +986,9 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
             }
           } catch { continue }
         }
-        if (closestIdx != null) return { sectionIdx, arrIdx: closestIdx }
+        if (closestIdx != null && closestDist <= maxFallbackDist) {
+          return { sectionIdx, arrIdx: closestIdx }
+        }
 
         return { sectionIdx, arrIdx: null }
       },
