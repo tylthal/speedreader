@@ -263,19 +263,20 @@ function ActiveReader({
   const hasCalibrated = useRef(!!(() => { try { return localStorage.getItem('speedreader_gaze_calibration'); } catch { return null; } })());
 
   /* ---- The single playback controller ---- */
-  const handleAutoAdvance = useCallback(() => {
+  const handleAutoAdvance = useCallback((): boolean => {
     const nextIdx = positionStore.getSnapshot().chapterIdx + 1;
     if (nextIdx >= chapters.length) {
       announce('Book finished');
-      return;
+      return false;
     }
     if (stopAtChapterEndRef.current) {
       announce(`Chapter complete: ${chapters[nextIdx - 1]?.title ?? ''}`);
-      return;
+      return false;
     }
-    // Move the cursor to the next chapter, then resume play. The
-    // controller will see the new chapter on its next tick and start
-    // ticking from absoluteSegmentIndex=0 of the new chapter.
+    // Move the cursor to the next chapter. Return true so the engine
+    // keeps isPlaying=true — the rAF loop stops but the UI stays in
+    // playing mode. The auto-resume effect below calls resumeLoop()
+    // when the new chapter's segments arrive.
     autoAdvanceRef.current = true;
     positionStore.setPosition(
       {
@@ -287,6 +288,7 @@ function ActiveReader({
       'chapter-nav',
     );
     announce(`Next chapter: ${chapters[nextIdx]?.title ?? ''}`);
+    return true;
   }, [chapters, announce]);
 
   const autoAdvanceRef = useRef(false);
@@ -327,22 +329,15 @@ function ActiveReader({
     controller.togglePlayPause();
   }, [controller]);
 
-  /* ---- Auto-play after auto-advance ---- */
+  /* ---- Auto-resume after auto-advance ---- */
   // Fired by handleAutoAdvance via autoAdvanceRef. Wait for the new
-  // chapter's segments to load (loader effect re-runs on chapter change),
-  // then call play(). userPause/userTogglePlayPause clear the latch so
-  // a manual pause cancels the auto-resume.
+  // chapter's segments to load, then restart the tick loop via
+  // resumeLoop() — isPlaying never went false so no UI chrome flashes.
   useEffect(() => {
     if (!autoAdvanceRef.current) return;
     if (loaderState.segments.length === 0) return;
     autoAdvanceRef.current = false;
-    let cancelled = false;
-    queueMicrotask(() => {
-      if (!cancelled) controller.play();
-    });
-    return () => {
-      cancelled = true;
-    };
+    controller.resumeLoop();
   }, [loaderState.segments, controller]);
 
   /* ---- Camera lifecycle for track mode ---- */
@@ -749,25 +744,11 @@ function ActiveReader({
   /* ---- Wake lock ---- */
   useWakeLock(isPlaying || wasPlayingBeforeLost);
 
-  /* ---- Debounced playing state for UI chrome ---- */
-  // isPlaying→true takes effect immediately; isPlaying→false is delayed
-  // 250ms so brief pause/resume cycles (chapter auto-advance) don't
-  // flash the header, controls, theme toggle, or paused scroll view.
-  const [isPlayingUI, setIsPlayingUI] = useState(isPlaying);
-  useEffect(() => {
-    if (isPlaying) {
-      setIsPlayingUI(true);
-      return;
-    }
-    const timer = setTimeout(() => setIsPlayingUI(false), 250);
-    return () => clearTimeout(timer);
-  }, [isPlaying]);
-
   /* ---- Global playing attribute (for ThemeToggle fade) ---- */
   useEffect(() => {
-    document.documentElement.toggleAttribute('data-playing', isPlayingUI);
+    document.documentElement.toggleAttribute('data-playing', isPlaying);
     return () => document.documentElement.removeAttribute('data-playing');
-  }, [isPlayingUI]);
+  }, [isPlaying]);
 
   /* ---- Render ---- */
   const isPdfBook =
@@ -944,7 +925,7 @@ function ActiveReader({
           >
             <FocusChunkOverlay
               segment={currentSegment}
-              isPlaying={isPlayingUI}
+              isPlaying={isPlaying}
               progress={progress}
               mode={readingMode}
               rsvpWord={rsvpWord}
@@ -1026,7 +1007,7 @@ function ActiveReader({
       )}
 
       <ControlsBottomSheet
-        isPlaying={isPlayingUI || wasPlayingBeforeLost}
+        isPlaying={isPlaying || wasPlayingBeforeLost}
         wpm={wpm}
         progress={progress}
         onTogglePlay={userTogglePlayPause}

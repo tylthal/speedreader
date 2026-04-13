@@ -117,14 +117,21 @@ export interface UsePlaybackControllerOptions {
   gazeRef: React.RefObject<{ direction: GazeDirection; intensity: number }>
   /** Called when prefetch is needed (passes the array index). */
   onPrefetchHint?: (arrayIdx: number) => void
-  /** Called when the engine reaches the end of the chapter. */
-  onComplete?: () => void
+  /** Called when the engine reaches the end of the chapter.
+   *  Return `true` to keep the store in `isPlaying=true` state (the rAF
+   *  loop will stop, but the UI stays in playing mode). The caller is
+   *  then responsible for calling `resumeLoop()` when new segments are
+   *  ready. Return `false` (or void) to fully stop. */
+  onComplete?: () => boolean | void
 }
 
 export interface PlaybackControllerHandle {
   play: () => void
   pause: () => void
   togglePlayPause: () => void
+  /** Restart the rAF loop without toggling isPlaying. Use after
+   *  onComplete returned `true` and new segments are ready. */
+  resumeLoop: () => void
   setWpm: (wpm: number) => void
   adjustWpm: (direction: number) => void
   /** Seek to an absolute segment index. Sets origin to 'user-seek'. */
@@ -247,8 +254,7 @@ export function usePlaybackController(
           positionStore.setPlaying(false)
           return false
         }
-        positionStore.setPlaying(false)
-        onCompleteRef.current?.()
+        if (!onCompleteRef.current?.()) positionStore.setPlaying(false)
         return false
       }
 
@@ -272,8 +278,7 @@ export function usePlaybackController(
             onPrefetchHintRef.current?.(nextIdx)
             return false
           }
-          positionStore.setPlaying(false)
-          onCompleteRef.current?.()
+          if (!onCompleteRef.current?.()) positionStore.setPlaying(false)
           return false
         }
 
@@ -300,8 +305,7 @@ export function usePlaybackController(
           positionStore.setPlaying(false)
           return false
         }
-        positionStore.setPlaying(false)
-        onCompleteRef.current?.()
+        if (!onCompleteRef.current?.()) positionStore.setPlaying(false)
         return false
       }
 
@@ -330,8 +334,7 @@ export function usePlaybackController(
               onPrefetchHintRef.current?.(nextSegIdx)
               return false
             }
-            positionStore.setPlaying(false)
-            onCompleteRef.current?.()
+            if (!onCompleteRef.current?.()) positionStore.setPlaying(false)
             return false
           }
           wordIndexRef.current = 0
@@ -500,8 +503,7 @@ export function usePlaybackController(
           const maxScroll = container.scrollHeight - container.clientHeight
           const endTolerance = Math.max(2, Math.ceil(dpr))
           if (container.scrollTop >= maxScroll - endTolerance) {
-            positionStore.setPlaying(false)
-            onCompleteRef.current?.()
+            if (!onCompleteRef.current?.()) positionStore.setPlaying(false)
             return false
           }
         }
@@ -666,6 +668,28 @@ export function usePlaybackController(
     positionStore.setPlaying(true)
     rafRef.current = requestAnimationFrame(tick)
   }, [formattedViewRef, getActiveScrollContainer, tick])
+
+  /** Restart the rAF loop without touching isPlaying. Used after
+   *  onComplete returned true and new segments are ready. Resets only
+   *  the timing accumulators so the next tick starts fresh. */
+  const resumeLoop = useCallback(() => {
+    if (!positionStore.getSnapshot().isPlaying) return
+    if (rafRef.current) return // already running
+    lastTimestampRef.current = 0
+    elapsedRef.current = 0
+
+    const mode = positionStore.getSnapshot().mode
+    if (mode === 'scroll' || mode === 'track') {
+      speedMultiplierRef.current = 1.0
+      segCheckCounterRef.current = 0
+      playStartTimeRef.current = Date.now()
+      pxPerSecPerWpmRef.current = 0
+      const container = getActiveScrollContainer()
+      if (container) scrollPositionRef.current = container.scrollTop
+    }
+
+    rafRef.current = requestAnimationFrame(tick)
+  }, [getActiveScrollContainer, tick])
 
   const pause = useCallback(() => {
     stopRaf()
@@ -844,6 +868,7 @@ export function usePlaybackController(
     play,
     pause,
     togglePlayPause,
+    resumeLoop,
     setWpm,
     adjustWpm,
     seekToAbs,
