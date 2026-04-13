@@ -291,7 +291,15 @@ export function useFormattedViewCursorSync({
     // IntersectionObserver updated chapterIdx after a cross-section
     // scroll — by the time this effect re-runs with the new chapterIdx,
     // no further scroll events fire, so we must detect once now.
-    requestAnimationFrame(detectAndUpdate)
+    //
+    // SKIP during restore: the position in the store is authoritative.
+    // Effect 2 will scroll to it. Running detection now would detect
+    // whatever segment is visible BEFORE Effect 2 scrolls, overwrite the
+    // restored position, and bump revision — enabling the saver to write
+    // the wrong position. Only detect on actual user scroll events.
+    if (positionStore.getSnapshot().origin !== 'restore') {
+      requestAnimationFrame(detectAndUpdate)
+    }
 
     return () => {
       container.removeEventListener('scroll', onScroll)

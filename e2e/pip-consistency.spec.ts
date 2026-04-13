@@ -490,6 +490,46 @@ test.describe('PIP position consistency across modes', () => {
     ).toBe(beforeExit.chapterIdx)
   })
 
+  // ── Position doesn't drift on repeated exit/re-enter ──
+
+  test('position does not drift on repeated exit/re-enter cycles', async ({ page }) => {
+    await userScroll(page, 3000)
+    await page.waitForTimeout(500)
+
+    const original = await getPositionState(page)
+    console.log(`[drift-test] Original: segment=${original.absoluteSegmentIndex}, chapter=${original.chapterIdx}`)
+
+    for (let cycle = 1; cycle <= 3; cycle++) {
+      // Exit
+      const exitBtn = page.locator('[aria-label="Exit reader"], [aria-label="Back to library"]')
+      if (await exitBtn.count() > 0) {
+        await exitBtn.first().click()
+      } else {
+        await page.goto('/')
+      }
+      await page.waitForTimeout(1000)
+
+      // Re-enter
+      const bookCard = page.locator('[role="article"]').first()
+      if (await bookCard.count() > 0) {
+        await bookCard.click()
+      }
+      await page.waitForURL(/\/read\/\d+/, { timeout: 15000 })
+      await page.waitForSelector('.reader-viewport', { timeout: 10000 })
+      await page.waitForTimeout(3000)
+
+      const restored = await getPositionState(page)
+      const drift = restored.absoluteSegmentIndex - original.absoluteSegmentIndex
+      console.log(`[drift-test] Cycle ${cycle}: segment=${restored.absoluteSegmentIndex}, drift=${drift}`)
+
+      expect(
+        Math.abs(drift),
+        `[drift-test] Cycle ${cycle}: position drifted by ${drift} segments. ` +
+        `Original=${original.absoluteSegmentIndex}, restored=${restored.absoluteSegmentIndex}`
+      ).toBeLessThanOrEqual(2)
+    }
+  })
+
   // ── Multiple play/pause cycles preserve position ──
 
   test('multiple play/pause cycles maintain position stability', async ({ page }) => {
