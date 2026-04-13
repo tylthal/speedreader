@@ -67,6 +67,8 @@ export default function ControlsBottomSheet({
     announce(`${wpm + delta} words per minute`);
   };
 
+  const hasBookmarks = onJumpLastOpened || onJumpFarthestRead;
+
   return (
     <div className={`controls${isPlaying ? ' controls--playing' : ''}`} role="toolbar" aria-label="Reading controls">
       {/* Progress bar */}
@@ -77,9 +79,8 @@ export default function ControlsBottomSheet({
         />
       </div>
 
-      {/* Main controls row */}
+      {/* Compact controls row: WPM | mode | bookmarks */}
       <div className="controls__main-row">
-        {/* WPM controls */}
         <div className="controls__wpm-group">
           <button
             className="controls__btn"
@@ -88,7 +89,7 @@ export default function ControlsBottomSheet({
           >
             &minus;
           </button>
-          <span className="controls__wpm-label" aria-live="polite">{wpm} WPM</span>
+          <span className="controls__wpm-label" aria-live="polite">{wpm}</span>
           <button
             className="controls__btn"
             onClick={() => handleAdjustWpm(25)}
@@ -98,7 +99,6 @@ export default function ControlsBottomSheet({
           </button>
         </div>
 
-        {/* Mode toggle */}
         {(onToggleMode || onSetMode) && (
           <div className="controls__mode-wrapper">
             <button
@@ -137,32 +137,30 @@ export default function ControlsBottomSheet({
             )}
           </div>
         )}
-      </div>
 
-      {(onJumpLastOpened || onJumpFarthestRead) && (
-        <div className="controls__bookmark-row">
-          {onJumpLastOpened && (
-            <button
-              className="controls__bookmark-pill"
-              onClick={() => { onJumpLastOpened(); haptics.tap(); announce('Jumped to last opened position'); }}
-              disabled={!hasLastOpened}
-              aria-label="Jump to last opened position"
-            >
-              Last Opened
-            </button>
-          )}
-          {onJumpFarthestRead && (
-            <button
-              className="controls__bookmark-pill"
-              onClick={() => { onJumpFarthestRead(); haptics.tap(); announce('Jumped to farthest read position'); }}
-              disabled={!hasFarthestRead}
-              aria-label="Jump to farthest read position"
-            >
-              Farthest Read
-            </button>
-          )}
-        </div>
-      )}
+        {hasBookmarks && <div className="controls__row-spacer" />}
+
+        {onJumpLastOpened && (
+          <button
+            className="controls__bookmark-pill"
+            onClick={() => { onJumpLastOpened(); haptics.tap(); announce('Jumped to last opened position'); }}
+            disabled={!hasLastOpened}
+            aria-label="Jump to last opened position"
+          >
+            Last Opened
+          </button>
+        )}
+        {onJumpFarthestRead && (
+          <button
+            className="controls__bookmark-pill"
+            onClick={() => { onJumpFarthestRead(); haptics.tap(); announce('Jumped to farthest read position'); }}
+            disabled={!hasFarthestRead}
+            aria-label="Jump to farthest read position"
+          >
+            Farthest Read
+          </button>
+        )}
+      </div>
 
       <div className="controls__playing-hint" aria-hidden={!isPlaying}>
         {activeMode.label} mode · {wpm} WPM
