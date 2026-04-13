@@ -191,6 +191,11 @@ export function usePlaybackController(
   const playStartTimeRef = useRef(0)
   /** Track mode segment-detection throttle (every 10 frames). */
   const segCheckCounterRef = useRef(0)
+  /** Deferred segment commit for scroll/track modes. Storing in a ref
+   *  lets us push the React re-render cascade out of the rAF tick. */
+  const pendingScrollCommitRef = useRef<number | null>(null)
+  const scrollCommitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const lastScrollCommitTimeRef = useRef(0)
   /** Scroll/track average speed cache (focus mode without velocity profile). */
   const pxPerSecPerWpmRef = useRef(0)
   /** Latch flipped true when tick discovers we ran out of loaded segments
@@ -403,6 +408,8 @@ export function usePlaybackController(
    *  center, return its array index. In formatted mode: bisect the
    *  velocity profile or fall back to the proportional mapping in
    *  FormattedView's section. */
+  const lastDetectedPlainIdxRef = useRef<number>(0)
+
   const detectArrayIdxFromScroll = useCallback(
     (container: HTMLDivElement, displayMode: 'plain' | 'formatted'): number | null => {
       if (displayMode === 'plain') {
@@ -410,9 +417,25 @@ export function usePlaybackController(
         if (!items || items.size === 0) return null
         const containerRect = container.getBoundingClientRect()
         const centerY = containerRect.top + containerRect.height * REFERENCE_LINE_RATIO
+
+        // Only check items near the last detected index instead of
+        // walking all items. During forward scroll we typically advance
+        // by 0-1 items between checks, so a ±5 window is generous.
+        const SEARCH_RADIUS = 5
+        const lastIdx = lastDetectedPlainIdxRef.current
+        const keys = Array.from(items.keys())
+        const lo = Math.max(0, keys.indexOf(lastIdx) - SEARCH_RADIUS)
+        const hi = Math.min(keys.length, keys.indexOf(lastIdx) + SEARCH_RADIUS + 1)
+        // Fallback to full scan if lastIdx isn't in the map (chapter change)
+        const searchKeys = lo < hi && keys.indexOf(lastIdx) >= 0
+          ? keys.slice(lo, hi)
+          : keys
+
         let closestIdx: number | null = null
         let closestDist = Infinity
-        items.forEach((el, idx) => {
+        for (const idx of searchKeys) {
+          const el = items.get(idx)
+          if (!el) continue
           const rect = el.getBoundingClientRect()
           const itemCenter = rect.top + rect.height / 2
           const dist = Math.abs(itemCenter - centerY)
@@ -420,7 +443,8 @@ export function usePlaybackController(
             closestDist = dist
             closestIdx = idx
           }
-        })
+        }
+        if (closestIdx != null) lastDetectedPlainIdxRef.current = closestIdx
         return closestIdx
       }
 
@@ -510,21 +534,34 @@ export function usePlaybackController(
       }
       lastTimestampRef.current = timestamp
 
-      // Segment detection. Throttle both scroll and track modes to ~6 Hz
-      // to avoid position-store updates that trigger React re-renders
-      // and cause visible jitter during smooth scrolling.
-      let shouldDetect = false
+      // Segment detection. Throttle to ~6 Hz (every 10 frames) and
+      // DEFER the store commit to after paint via setTimeout. This
+      // keeps the rAF tick free of React re-render cascades that cause
+      // visible jitter during smooth scrolling. The commit is also
+      // rate-limited to at most once per second.
       if (++segCheckCounterRef.current >= 10) {
         segCheckCounterRef.current = 0
-        shouldDetect = true
-      }
-      if (shouldDetect) {
         const displayMode = positionStore.getSnapshot().displayMode
         const newIdx = detectArrayIdxFromScroll(container, displayMode)
         if (newIdx != null) {
           const currentArr = getArrayIdx()
           if (newIdx !== currentArr) {
-            commitArrayIdx(newIdx)
+            pendingScrollCommitRef.current = newIdx
+            const now = performance.now()
+            if (
+              now - lastScrollCommitTimeRef.current >= 1000 &&
+              !scrollCommitTimerRef.current
+            ) {
+              scrollCommitTimerRef.current = setTimeout(() => {
+                scrollCommitTimerRef.current = null
+                const idx = pendingScrollCommitRef.current
+                if (idx != null) {
+                  pendingScrollCommitRef.current = null
+                  lastScrollCommitTimeRef.current = performance.now()
+                  commitArrayIdx(idx)
+                }
+              }, 0)
+            }
           }
         }
       }
@@ -692,10 +729,21 @@ export function usePlaybackController(
 
   const pause = useCallback(() => {
     stopRaf()
+    // Flush any deferred scroll/track segment commit immediately so
+    // the saved position is accurate.
+    if (scrollCommitTimerRef.current) {
+      clearTimeout(scrollCommitTimerRef.current)
+      scrollCommitTimerRef.current = null
+    }
+    const pendingIdx = pendingScrollCommitRef.current
+    if (pendingIdx != null) {
+      pendingScrollCommitRef.current = null
+      commitArrayIdx(pendingIdx)
+    }
     flushLocalState()
     waitingForSegmentsRef.current = false
     positionStore.setPlaying(false)
-  }, [flushLocalState, stopRaf])
+  }, [commitArrayIdx, flushLocalState, stopRaf])
 
   const togglePlayPause = useCallback(() => {
     if (positionStore.getSnapshot().isPlaying) pause()
@@ -812,6 +860,10 @@ export function usePlaybackController(
     return () => {
       flushLocalState()
       stopRaf()
+      if (scrollCommitTimerRef.current) {
+        clearTimeout(scrollCommitTimerRef.current)
+        scrollCommitTimerRef.current = null
+      }
     }
   }, [flushLocalState, stopRaf])
 

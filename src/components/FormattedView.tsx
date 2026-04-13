@@ -645,6 +645,9 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
     }
 
     const observer = new ResizeObserver((entries) => {
+      // Skip profile rebuilds during playback — they cause layout
+      // thrashing that manifests as scroll jitter.
+      if (positionStore.getSnapshot().isPlaying) return
       let significant = false
       for (const entry of entries) {
         const el = entry.target as HTMLElement
@@ -836,6 +839,11 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
         // is showing). Otherwise stale layout shifts during play would
         // commit chapter changes the user can't see.
         if (!visibleRef.current) return
+        // During scroll/track playback the engine drives scrollTop.
+        // Let the engine's own segment detection handle position —
+        // firing a chapter-nav here would trigger a full re-render
+        // cascade mid-animation-frame and cause visible jitter.
+        if (positionStore.getSnapshot().isPlaying) return
         // Layout reflow without an actual scroll. Image decodes, font
         // loads, and late innerHTML writes all fire intersection
         // changes; without this guard those firings would commit a

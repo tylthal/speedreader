@@ -178,7 +178,18 @@ function ActiveReader({
   const readingMode = usePositionSelector((s) => s.mode);
   const displayMode = usePositionSelector((s) => s.displayMode);
   const cursorOrigin = usePositionSelector((s) => s.origin);
-  const cursorRevision = usePositionSelector((s) => s.revision);
+  // NOTE: We intentionally do NOT subscribe to `revision` here.
+  // Revision increments on every positionStore commit, which during
+  // scroll/track playback happens on each segment boundary. Subscribing
+  // to it would re-render the entire ActiveReader tree on every commit,
+  // causing scroll jitter. Effects that need commit-level granularity
+  // should use positionStore.subscribe() directly instead.
+  const cursorRevisionRef = useRef(0);
+  useEffect(() => {
+    return positionStore.subscribe(() => {
+      cursorRevisionRef.current = positionStore.getSnapshot().revision;
+    });
+  }, []);
 
   const [tocOpen, setTocOpen] = useState(false);
   const [bookmarksOpen, setBookmarksOpen] = useState(false);
@@ -553,27 +564,29 @@ function ActiveReader({
   // Note: "last_opened" auto-bookmark is now continuously updated by
   // useProgressSaver, so no mount effect is needed here.
 
-  // Update "farthest read" as user progresses
+  // Update "farthest read" as user progresses.
+  // Uses a direct store subscription instead of React state to avoid
+  // re-rendering the entire ActiveReader tree on every position commit.
   const farthestGlobalRef = useRef(-1);
   useEffect(() => {
-    if (cursorRevision === 0) return;
-    if (cursorOrigin === 'restore') return;
-    const snap = positionStore.getSnapshot();
-    if (snap.chapterId === 0) return;
+    return positionStore.subscribe(() => {
+      const snap = positionStore.getSnapshot();
+      if (snap.revision === 0) return;
+      if (snap.origin === 'restore') return;
+      if (snap.chapterId === 0) return;
 
-    // Compute a rough global index: chapterIdx * large_number + absoluteSegmentIndex
-    // This is monotonically increasing as the user progresses through chapters.
-    const globalIndex = snap.chapterIdx * 100000 + snap.absoluteSegmentIndex;
-    if (globalIndex <= farthestGlobalRef.current) return;
-    farthestGlobalRef.current = globalIndex;
+      const globalIndex = snap.chapterIdx * 100000 + snap.absoluteSegmentIndex;
+      if (globalIndex <= farthestGlobalRef.current) return;
+      farthestGlobalRef.current = globalIndex;
 
-    upsertAutoBookmark(publicationId, 'farthest_read', {
-      chapter_id: snap.chapterId,
-      chapter_idx: snap.chapterIdx,
-      absolute_segment_index: snap.absoluteSegmentIndex,
-      word_index: snap.wordIndex,
-    }).catch(() => {});
-  }, [publicationId, cursorRevision, cursorOrigin]);
+      upsertAutoBookmark(publicationId, 'farthest_read', {
+        chapter_id: snap.chapterId,
+        chapter_idx: snap.chapterIdx,
+        absolute_segment_index: snap.absoluteSegmentIndex,
+        word_index: snap.wordIndex,
+      }).catch(() => {});
+    });
+  }, [publicationId]);
 
   // Bookmark selectors for quick-jump buttons
   const hasLastOpened = useBookmarkSelector((s) => s.lastOpened !== null);
@@ -665,10 +678,10 @@ function ActiveReader({
 
   /* ---- Chapter announcements ---- */
   useEffect(() => {
-    if (currentChapter && cursorRevision > 0) {
+    if (currentChapter && cursorRevisionRef.current > 0) {
       announce(`Chapter: ${currentChapter.title}`);
     }
-  }, [currentChapter, announce, cursorRevision]);
+  }, [currentChapter, announce]);
 
   /* ---- Chapter navigation (TOC, prev/next) ---- */
   const {
@@ -701,7 +714,6 @@ function ActiveReader({
     chapterIdx,
     absoluteSegmentIndex,
     cursorOrigin,
-    cursorRevision,
     layoutVersion,
     segments: loaderState.segments,
     translators,

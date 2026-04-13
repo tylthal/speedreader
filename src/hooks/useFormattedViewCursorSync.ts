@@ -22,7 +22,6 @@ interface UseFormattedViewCursorSyncArgs {
   chapterIdx: number
   absoluteSegmentIndex: number
   cursorOrigin: PositionOrigin
-  cursorRevision: number
   layoutVersion: number
   segments: ReadonlyArray<HighlightSegment>
   translators: CursorTranslators
@@ -38,7 +37,6 @@ export function useFormattedViewCursorSync({
   chapterIdx,
   absoluteSegmentIndex,
   cursorOrigin,
-  cursorRevision,
   layoutVersion,
   segments,
   translators,
@@ -219,7 +217,6 @@ export function useFormattedViewCursorSync({
     chapterIdx,
     absoluteSegmentIndex,
     cursorOrigin,
-    cursorRevision,
     clearPendingTocTarget,
     segments,
     translators,
