@@ -41,11 +41,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Segment } from '../types'
 import type { GazeDirection } from '../lib/gazeProcessor'
-import {
-  createLookupCache,
-  getPxPerWeight,
-  type VelocityProfile,
-} from '../lib/velocityProfile'
+import type { VelocityProfile } from '../lib/velocityProfile'
 import { positionStore, usePositionSelector } from '../state/position/positionStore'
 import type { SegmentLoaderTranslators } from './useSegmentLoader'
 import { REFERENCE_LINE_RATIO, type FormattedViewHandle } from '../components/FormattedView'
@@ -190,9 +186,6 @@ export function usePlaybackController(
   const segCheckCounterRef = useRef(0)
   /** Scroll/track average speed cache (focus mode without velocity profile). */
   const pxPerSecPerWpmRef = useRef(0)
-  /** Velocity-profile lookup cache (formatted mode). */
-  const profileLookupCacheRef = useRef(createLookupCache())
-  const lastProfileGenerationRef = useRef(-1)
   /** Latch flipped true when tick discovers we ran out of loaded segments
    *  mid-play; cleared on pause(), seekToAbs(), or by the prefetch-arrival
    *  effect. While true, the prefetch-arrival effect is allowed to auto-resume. */
@@ -360,22 +353,35 @@ export function usePlaybackController(
   /* ---------------------------------------------------------------- */
 
   const computeAverageSpeed = useCallback(() => {
-    const items = focusItemOffsetsRef.current
     const segs = segmentsRef.current
-    if (!items || items.size === 0 || segs.length === 0) return
+    if (segs.length === 0) return
+
     let totalWords = 0
-    let totalHeight = 0
     for (let i = 0; i < segs.length; i++) {
-      const el = items.get(i)
-      if (el) {
-        totalWords += segs[i].word_count || segs[i].text.split(/\s+/).length
-        totalHeight += el.getBoundingClientRect().height
+      totalWords += segs[i].word_count || segs[i].text.split(/\s+/).length
+    }
+    if (totalWords === 0) return
+
+    // Use the active scroll container's scrollable height for the ratio.
+    // Works for both plain (focus) and formatted display modes.
+    const container = getActiveScrollContainer()
+    if (container && container.scrollHeight > container.clientHeight) {
+      const scrollableHeight = container.scrollHeight - container.clientHeight
+      pxPerSecPerWpmRef.current = scrollableHeight / (totalWords * 60)
+    } else {
+      // Fallback: sum individual element heights (plain mode only)
+      const items = focusItemOffsetsRef.current
+      if (!items || items.size === 0) return
+      let totalHeight = 0
+      for (let i = 0; i < segs.length; i++) {
+        const el = items.get(i)
+        if (el) totalHeight += el.getBoundingClientRect().height
+      }
+      if (totalHeight > 0) {
+        pxPerSecPerWpmRef.current = totalHeight / (totalWords * 60)
       }
     }
-    if (totalWords > 0 && totalHeight > 0) {
-      pxPerSecPerWpmRef.current = totalHeight / (totalWords * 60)
-    }
-  }, [focusItemOffsetsRef])
+  }, [focusItemOffsetsRef, getActiveScrollContainer])
 
   /** In focus mode: walk item rects, find the one closest to viewport
    *  center, return its array index. In formatted mode: bisect the
@@ -429,18 +435,14 @@ export function usePlaybackController(
       const container = getActiveScrollContainer()
       if (!container) return true // try again next frame
 
-      const profile = velocityProfileRef.current
-      const useProfile = profile !== null && profile.entries.length > 0
-      if (useProfile && profile.generation !== lastProfileGenerationRef.current) {
-        profileLookupCacheRef.current.lastIdx = 0
-        lastProfileGenerationRef.current = profile.generation
-      }
-      if (!useProfile && pxPerSecPerWpmRef.current === 0) {
+      // Always use constant-speed scrolling. Recompute the average
+      // speed ratio on first tick or after a chapter/play reset.
+      if (pxPerSecPerWpmRef.current === 0) {
         computeAverageSpeed()
         scrollPositionRef.current = container.scrollTop
       }
 
-      const haveModel = useProfile || pxPerSecPerWpmRef.current > 0
+      const haveModel = pxPerSecPerWpmRef.current > 0
       const wpm = positionStore.getSnapshot().wpm
 
       if (lastTimestampRef.current > 0 && haveModel) {
@@ -476,18 +478,7 @@ export function usePlaybackController(
           multiplier = speedMultiplierRef.current
         }
 
-        let basePxPerSec = 0
-        if (useProfile) {
-          const centerY = container.scrollTop + container.clientHeight * REFERENCE_LINE_RATIO
-          const pxPerWeight = getPxPerWeight(
-            profile,
-            centerY,
-            profileLookupCacheRef.current,
-          )
-          if (pxPerWeight > 0) basePxPerSec = pxPerWeight * (wpm / 60)
-        } else {
-          basePxPerSec = pxPerSecPerWpmRef.current * wpm
-        }
+        const basePxPerSec = pxPerSecPerWpmRef.current * wpm
 
         if (basePxPerSec > 0) {
           let effectivePxPerSec = basePxPerSec * multiplier
@@ -539,7 +530,6 @@ export function usePlaybackController(
       getActiveScrollContainer,
       commitArrayIdx,
       getArrayIdx,
-      velocityProfileRef,
       dpr,
     ],
   )
@@ -800,8 +790,6 @@ export function usePlaybackController(
   /* ---------------------------------------------------------------- */
   useEffect(() => {
     pxPerSecPerWpmRef.current = 0
-    profileLookupCacheRef.current = createLookupCache()
-    lastProfileGenerationRef.current = -1
   }, [segments])
 
   /* ---------------------------------------------------------------- */
