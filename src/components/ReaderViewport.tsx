@@ -720,8 +720,8 @@ function ActiveReader({
 
   useKeyboardHandling({
     onTogglePlay: userTogglePlayPause,
-    onSpeedUp: useCallback(() => controller.adjustWpm(25), [controller]),
-    onSpeedDown: useCallback(() => controller.adjustWpm(-25), [controller]),
+    onSpeedUp: useCallback(() => controller.adjustWpm(1), [controller]),
+    onSpeedDown: useCallback(() => controller.adjustWpm(-1), [controller]),
     onNextChunk: useCallback(() => seekToArr(activeArrayIdx + 1), [seekToArr, activeArrayIdx]),
     onPrevChunk: useCallback(() => seekToArr(activeArrayIdx - 1), [seekToArr, activeArrayIdx]),
     onNextChapter: handleNextChapter,
@@ -906,8 +906,8 @@ function ActiveReader({
             onTap={isPlaying ? userPause : undefined}
             onSwipeLeft={isPlaying ? handleNextChapter : undefined}
             onSwipeRight={isPlaying ? handlePrevChapter : undefined}
-            onSwipeUp={isPlaying ? () => controller.adjustWpm(25) : undefined}
-            onSwipeDown={isPlaying ? () => controller.adjustWpm(-25) : undefined}
+            onSwipeUp={isPlaying ? () => controller.adjustWpm(1) : undefined}
+            onSwipeDown={isPlaying ? () => controller.adjustWpm(-1) : undefined}
             enabled={isPlaying}
           >
             <FocusChunkOverlay

@@ -61,10 +61,12 @@ export default function ControlsBottomSheet({
     announce(isPlaying ? 'Paused' : `${activeMode.label} started`);
   };
 
-  const handleAdjustWpm = (delta: number) => {
-    onAdjustWpm(delta);
+  const handleAdjustWpm = (direction: number) => {
+    onAdjustWpm(direction);
     haptics.tick();
-    announce(`${wpm + delta} words per minute`);
+    const step = Math.max(10, Math.round(wpm * 0.1));
+    const predicted = Math.max(60, Math.min(1200, wpm + (direction > 0 ? step : -step)));
+    announce(`${predicted} words per minute`);
   };
 
   const hasBookmarks = onJumpLastOpened || onJumpFarthestRead;
@@ -84,7 +86,7 @@ export default function ControlsBottomSheet({
         <div className="controls__wpm-group">
           <button
             className="controls__btn"
-            onClick={() => handleAdjustWpm(-25)}
+            onClick={() => handleAdjustWpm(-1)}
             aria-label="Decrease reading speed"
           >
             &minus;
@@ -92,7 +94,7 @@ export default function ControlsBottomSheet({
           <span className="controls__wpm-label" aria-live="polite">{wpm}</span>
           <button
             className="controls__btn"
-            onClick={() => handleAdjustWpm(25)}
+            onClick={() => handleAdjustWpm(1)}
             aria-label="Increase reading speed"
           >
             +

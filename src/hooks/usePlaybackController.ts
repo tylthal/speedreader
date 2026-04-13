@@ -130,7 +130,7 @@ export interface PlaybackControllerHandle {
   pause: () => void
   togglePlayPause: () => void
   setWpm: (wpm: number) => void
-  adjustWpm: (delta: number) => void
+  adjustWpm: (direction: number) => void
   /** Seek to an absolute segment index. Sets origin to 'user-seek'. */
   seekToAbs: (absoluteSegmentIndex: number, wordIndex?: number) => void
   /** Live RSVP word for display (ticks at 4-12 Hz, isolated re-render). */
@@ -686,8 +686,10 @@ export function usePlaybackController(
     positionStore.setWpm(clampWpm(value))
   }, [])
 
-  const adjustWpm = useCallback((delta: number) => {
-    positionStore.setWpm(clampWpm(positionStore.getSnapshot().wpm + delta))
+  const adjustWpm = useCallback((direction: number) => {
+    const current = positionStore.getSnapshot().wpm
+    const step = Math.max(10, Math.round(current * 0.1))
+    positionStore.setWpm(clampWpm(current + (direction > 0 ? step : -step)))
   }, [])
 
   /** Seek to an absolute segment index. Resets all tick-local state.
