@@ -39,10 +39,7 @@ import PdfFormattedView from './PdfFormattedView';
 import CbzFormattedView from './CbzFormattedView';
 import type { ContentType } from '../api/client';
 import type { VelocityProfile } from '../lib/velocityProfile';
-import {
-  flattenTocLocations,
-  selectActiveTocLocationKey,
-} from '../lib/tocLocation';
+import { flattenTocLocations } from '../lib/tocLocation';
 import {
   positionStore,
   usePositionSelector,
@@ -412,38 +409,19 @@ function ActiveReader({
     () => flatTocLocations.filter((entry) => entry.sectionIndex === chapterIdx),
     [chapterIdx, flatTocLocations],
   );
-  const sectionTocLocationKey = useMemo(() => {
-    if (preferredTocLocation.key) return preferredTocLocation.key;
-    if (flatTocLocations.length === 0) return `${chapterIdx}`;
-
-    return (
-      selectActiveTocLocationKey({
-        entries: flatTocLocations,
-        currentSectionIndex: chapterIdx,
-        currentArrayIndex: translators.absoluteToArrayIndex(absoluteSegmentIndex),
-        preferredKey: null,
-        resolveArrayIndex: null,
-      }) ?? currentSectionTocLocations[0]?.key ?? `${chapterIdx}`
-    );
-  }, [
-    preferredTocLocation.key,
-    flatTocLocations,
-    chapterIdx,
-    translators,
-    absoluteSegmentIndex,
-    currentSectionTocLocations,
-  ]);
   const activeTocLocationKey =
     preferredTocLocation.key ??
     visualActiveTocLocationKey ??
-    sectionTocLocationKey;
+    currentSectionTocLocations[0]?.key ??
+    null;
 
+  // Reset visual key on chapter change so a stale key from the previous
+  // chapter doesn't flash before the tracking effect re-resolves.
   useEffect(() => {
     setVisualActiveTocLocationKey(null);
-  }, [chapterIdx, absoluteSegmentIndex, preferredTocLocation.key]);
+  }, [chapterIdx]);
 
   useEffect(() => {
-    if (!tocOpen) return;
     if (preferredTocLocation.key) return;
     if (currentSectionTocLocations.length <= 1) return;
 
@@ -504,7 +482,6 @@ function ActiveReader({
       if (timeoutId) clearTimeout(timeoutId);
     };
   }, [
-    tocOpen,
     preferredTocLocation.key,
     currentSectionTocLocations,
     chapterIdx,
@@ -823,6 +800,12 @@ function ActiveReader({
       // and commits with 'user-scroll'. The progress saver skips writing
       // when absoluteSegmentIndex is 0 and the origin indicates a
       // cross-chapter transition (see useProgressSaver).
+
+      // Clear sticky preferred TOC location — the user scrolled away
+      // from whatever they clicked. Without this the TOC highlight stays
+      // stuck on the old entry while the header moves to the new chapter.
+      setPreferredTocLocation({ key: null, title: null, sectionIndex: null, htmlAnchor: null });
+
       positionStore.setPosition(
         {
           chapterId: chapters[idx].id,
@@ -833,7 +816,7 @@ function ActiveReader({
         'user-scroll',
       );
     },
-    [chapterIdx, chapters],
+    [chapterIdx, chapters, setPreferredTocLocation],
   );
 
   // RSVP display values come from the controller (live word ticks at
@@ -846,11 +829,20 @@ function ActiveReader({
     loaderState.totalSegments,
   );
 
+  // Derive the header subtitle from the active TOC key so it always
+  // matches the TOC highlight. Falls back to the chapter title when
+  // the TOC tree doesn't cover the current section.
+  const displaySectionTitle = useMemo(() => {
+    const tocTitle = tocTitleByKey.get(activeTocLocationKey ?? '');
+    if (tocTitle) return tocTitle;
+    return currentChapter?.title ?? 'Untitled';
+  }, [activeTocLocationKey, tocTitleByKey, currentChapter]);
+
   return (
     <div className="reader-viewport" role="main" aria-label="Book reader" id="main-content">
       <ReaderHeader
         bookTitle={bookTitle}
-        sectionTitle={currentChapter?.title ?? 'Untitled'}
+        sectionTitle={displaySectionTitle}
         displayMode={displayMode}
         onToggleDisplayMode={isImageBook ? undefined : handleToggleDisplayMode}
         hideDisplayToggle={isImageBook}
