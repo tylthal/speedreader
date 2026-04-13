@@ -383,26 +383,46 @@ export function usePlaybackController(
     }
     if (totalWords === 0) return
 
-    // Use the active scroll container's scrollable height for the ratio.
-    // Works for both plain (focus) and formatted display modes.
     const container = getActiveScrollContainer()
-    if (container && container.scrollHeight > container.clientHeight) {
-      const scrollableHeight = container.scrollHeight - container.clientHeight
-      pxPerSecPerWpmRef.current = scrollableHeight / (totalWords * 60)
-    } else {
-      // Fallback: sum individual element heights (plain mode only)
-      const items = focusItemOffsetsRef.current
-      if (!items || items.size === 0) return
-      let totalHeight = 0
-      for (let i = 0; i < segs.length; i++) {
-        const el = items.get(i)
-        if (el) totalHeight += el.getBoundingClientRect().height
+    if (!container) return
+
+    const displayMode = positionStore.getSnapshot().displayMode
+
+    if (displayMode === 'formatted') {
+      // In formatted mode the scroll container holds ALL chapters but
+      // segments only covers the CURRENT chapter. Use the current
+      // chapter's section element height instead of the full scrollable
+      // height to avoid a massive speed mismatch.
+      const chapterIdx = positionStore.getSnapshot().chapterIdx
+      const handle = formattedViewRef.current
+      const sectionEl = handle?.getSectionEl(chapterIdx)
+      const sectionHeight = sectionEl
+        ? sectionEl.getBoundingClientRect().height
+        : container.scrollHeight - container.clientHeight
+      if (sectionHeight > 0) {
+        pxPerSecPerWpmRef.current = sectionHeight / (totalWords * 60)
       }
-      if (totalHeight > 0) {
-        pxPerSecPerWpmRef.current = totalHeight / (totalWords * 60)
+    } else {
+      // Plain / focus mode: use the focus container's scrollable height
+      // (all segments are rendered in this container).
+      if (container.scrollHeight > container.clientHeight) {
+        const scrollableHeight = container.scrollHeight - container.clientHeight
+        pxPerSecPerWpmRef.current = scrollableHeight / (totalWords * 60)
+      } else {
+        // Fallback: sum individual element heights
+        const items = focusItemOffsetsRef.current
+        if (!items || items.size === 0) return
+        let totalHeight = 0
+        for (let i = 0; i < segs.length; i++) {
+          const el = items.get(i)
+          if (el) totalHeight += el.getBoundingClientRect().height
+        }
+        if (totalHeight > 0) {
+          pxPerSecPerWpmRef.current = totalHeight / (totalWords * 60)
+        }
       }
     }
-  }, [focusItemOffsetsRef, getActiveScrollContainer])
+  }, [focusItemOffsetsRef, formattedViewRef, getActiveScrollContainer])
 
   /** In focus mode: walk item rects, find the one closest to viewport
    *  center, return its array index. In formatted mode: bisect the
