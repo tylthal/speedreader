@@ -355,6 +355,15 @@ export function usePlaybackController(
   /*  Scroll mode tick (focus + formatted)                             */
   /* ---------------------------------------------------------------- */
 
+  /** Resolve the live scroll container for the current display mode. */
+  const getActiveScrollContainer = useCallback((): HTMLDivElement | null => {
+    const displayMode = positionStore.getSnapshot().displayMode
+    if (displayMode === 'formatted') {
+      return formattedViewRef.current?.getScrollContainer() ?? null
+    }
+    return focusContainerRef.current
+  }, [focusContainerRef, formattedViewRef])
+
   const computeAverageSpeed = useCallback(() => {
     const segs = segmentsRef.current
     if (segs.length === 0) return
@@ -423,15 +432,6 @@ export function usePlaybackController(
     },
     [focusItemOffsetsRef, formattedViewRef],
   )
-
-  /** Resolve the live scroll container for the current display mode. */
-  const getActiveScrollContainer = useCallback((): HTMLDivElement | null => {
-    const displayMode = positionStore.getSnapshot().displayMode
-    if (displayMode === 'formatted') {
-      return formattedViewRef.current?.getScrollContainer() ?? null
-    }
-    return focusContainerRef.current
-  }, [focusContainerRef, formattedViewRef])
 
   const tickScroll = useCallback(
     (timestamp: number, isTrack: boolean): boolean => {
