@@ -335,8 +335,11 @@ export function usePlaybackController(
             return false
           }
           wordIndexRef.current = 0
-          rsvpWord.notify('')
           commitArrayIdx(nextSegIdx, 0)
+          // Show the first word of the next segment immediately to
+          // avoid a flash of empty content between segments.
+          const nextWords = getWordsFromSegment(segs[nextSegIdx])
+          rsvpWord.notify(nextWords[0] ?? '')
         } else {
           wordIndexRef.current = nextWordIdx
           rsvpWord.notify(words[nextWordIdx] ?? '')

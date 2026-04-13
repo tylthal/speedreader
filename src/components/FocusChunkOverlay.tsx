@@ -304,24 +304,32 @@ export default function FocusChunkOverlay({
   useEffect(() => {
     const newText = segment?.text ?? '';
     if (newText !== prevTextRef.current) {
-      setAnimClass('focus-overlay__text--entering');
-      const timer = setTimeout(() => {
+      if (isPlaying) {
+        // During playback, swap text instantly — no animation flash.
         setDisplayText(newText);
         prevTextRef.current = newText;
         setAnimClass('focus-overlay__text--visible');
-      }, 80);
-      return () => clearTimeout(timer);
+      } else {
+        // On pause or initial load, animate the transition.
+        setAnimClass('focus-overlay__text--entering');
+        const timer = setTimeout(() => {
+          setDisplayText(newText);
+          prevTextRef.current = newText;
+          setAnimClass('focus-overlay__text--visible');
+        }, 80);
+        return () => clearTimeout(timer);
+      }
     }
-  }, [segment]);
+  }, [segment, isPlaying]);
 
   useEffect(() => {
-    if (!isPlaying && segment) {
+    if (!isPlaying) {
       const timer = setTimeout(() => setWingsVisible(true), 120);
       return () => clearTimeout(timer);
     } else {
       setWingsVisible(false);
     }
-  }, [isPlaying, segment]);
+  }, [isPlaying]);
 
   const wings = useMemo(() => {
     if (!segments || currentIndex == null) return { before: [], after: [] };
