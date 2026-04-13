@@ -510,14 +510,13 @@ export function usePlaybackController(
       }
       lastTimestampRef.current = timestamp
 
-      // Segment detection. Track mode throttles to ~6 Hz; scroll runs
-      // every frame because the focus item-rect walk is cheap.
-      let shouldDetect = !isTrack
-      if (isTrack) {
-        if (++segCheckCounterRef.current >= 10) {
-          segCheckCounterRef.current = 0
-          shouldDetect = true
-        }
+      // Segment detection. Throttle both scroll and track modes to ~6 Hz
+      // to avoid position-store updates that trigger React re-renders
+      // and cause visible jitter during smooth scrolling.
+      let shouldDetect = false
+      if (++segCheckCounterRef.current >= 10) {
+        segCheckCounterRef.current = 0
+        shouldDetect = true
       }
       if (shouldDetect) {
         const displayMode = positionStore.getSnapshot().displayMode
@@ -835,6 +834,9 @@ export function usePlaybackController(
 
     const observer = new ResizeObserver((entries) => {
       if (pxPerSecPerWpmRef.current === 0) return
+      // Don't recalculate speed mid-playback — changing the constant
+      // causes a visible speed jump / jitter. Defer to next play().
+      if (positionStore.getSnapshot().isPlaying) return
       let significant = false
       for (const entry of entries) {
         const el = entry.target

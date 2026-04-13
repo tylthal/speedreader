@@ -18,6 +18,7 @@ import {
   type SegmentRangeIndex,
   type RectInContainer,
 } from './formattedView/segmentRangeIndex'
+import { positionStore } from '../state/position/positionStore'
 import {
   FormattedViewDiagnostics,
   type ImageDiag,
@@ -716,6 +717,13 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
     const container = containerRef.current
     if (!container) return
     const updatePipPosition = () => {
+      // During playback the scroll engine drives position at 60 Hz.
+      // Running caretRangeFromPoint + setPipTop every frame causes GC
+      // churn and React re-renders that manifest as periodic jitter.
+      // Skip pip updates while playing — the pip only matters visually
+      // when paused.
+      if (positionStore.getSnapshot().isPlaying) return
+
       const containerRect = container.getBoundingClientRect()
       const centerViewportY = containerRect.top + container.clientHeight * REFERENCE_LINE_RATIO
       const centerX = containerRect.left + containerRect.width / 2
