@@ -91,7 +91,7 @@ export function writeStoredPosition(
 export function pickFreshestPosition(
   bookmark: { chapter_id: number; chapter_idx: number; absolute_segment_index: number; word_index: number; updated_at: string } | null,
   localSnapshot: StoredPositionSnapshot | null,
-): AutoBookmarkLocation | null {
+): StoredPositionSnapshot | AutoBookmarkLocation | null {
   if (!bookmark && !localSnapshot) return null
   if (!bookmark) return localSnapshot
   if (!localSnapshot) return bookmark
@@ -99,6 +99,9 @@ export function pickFreshestPosition(
   const bmTime = new Date(bookmark.updated_at).getTime()
   const lsTime = new Date(localSnapshot.updated_at).getTime()
 
-  if (lsTime > bmTime) return localSnapshot
+  // Prefer localStorage when timestamps are equal or localStorage is newer,
+  // because localStorage carries scroll_top for pixel-perfect pip restore.
+  // IndexedDB bookmarks don't have scroll_top.
+  if (lsTime >= bmTime) return localSnapshot
   return bookmark
 }

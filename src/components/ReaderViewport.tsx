@@ -574,7 +574,16 @@ function ActiveReader({
   // Reads cursor + restore state from the store directly. Gate is
   // revision > 0 — the seed init() leaves revision at 0 so the saver
   // never overwrites the restored value before the user has interacted.
-  useProgressSaver({ publicationId });
+  // Pass the formatted view ref so the saver can read live scrollTop
+  // from the DOM rather than relying on the position store (which may
+  // lag behind the actual scroll position by one rAF).
+  const formattedScrollContainerRef = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    // Keep the ref pointing to the current scroll container
+    const el = formattedViewRef.current?.getScrollContainer() ?? null;
+    formattedScrollContainerRef.current = el;
+  });
+  useProgressSaver({ publicationId, scrollContainerRef: formattedScrollContainerRef });
 
   /* ---- Bookmark store init + auto bookmarks ---- */
   const haptics = useHaptics();

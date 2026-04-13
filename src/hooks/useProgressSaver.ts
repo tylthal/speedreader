@@ -6,6 +6,8 @@ import type { ReadingMode } from '../types';
 
 interface UseProgressSaverOptions {
   publicationId: number;
+  /** Ref to the formatted view scroll container, used to read live scrollTop. */
+  scrollContainerRef?: React.RefObject<HTMLElement | null>;
 }
 
 /**
@@ -17,7 +19,7 @@ interface UseProgressSaverOptions {
  * and to the API on a 2s debounce. visibility-hidden / beforeunload /
  * unmount each trigger an immediate flush.
  */
-export function useProgressSaver({ publicationId }: UseProgressSaverOptions): void {
+export function useProgressSaver({ publicationId, scrollContainerRef }: UseProgressSaverOptions): void {
   const lastSavedKeyRef = useRef('');
   const lastSavedChapterIdRef = useRef(0);
   const wpmByModeRef = useRef<Partial<Record<ReadingMode, number>>>({});
@@ -44,6 +46,10 @@ export function useProgressSaver({ publicationId }: UseProgressSaverOptions): vo
       return;
     }
 
+    // Read scrollTop directly from the DOM — the position store may lag
+    // behind because Effect 3's rAF can miss the final scroll position.
+    const liveScrollTop = scrollContainerRef?.current?.scrollTop ?? snap.scrollTop;
+
     const location = {
       chapter_id: snap.chapterId,
       chapter_idx: snap.chapterIdx,
@@ -53,7 +59,7 @@ export function useProgressSaver({ publicationId }: UseProgressSaverOptions): vo
 
     writeStoredPosition(publicationId, {
       ...location,
-      scroll_top: snap.scrollTop,
+      scroll_top: liveScrollTop,
     });
     wpmByModeRef.current = { ...wpmByModeRef.current, [snap.mode]: snap.wpm };
     writeStoredPrefs(publicationId, {
@@ -87,7 +93,12 @@ export function useProgressSaver({ publicationId }: UseProgressSaverOptions): vo
         return;
       }
 
-      const key = `${publicationId}:${snap.chapterId}:${snap.chapterIdx}:${snap.absoluteSegmentIndex}:${snap.wordIndex}:${snap.wpm}:${snap.mode}`;
+      const liveScrollTop = scrollContainerRef?.current?.scrollTop ?? snap.scrollTop;
+      // Include a coarse scrollTop in the key so intra-segment scroll
+      // changes trigger a save. Round to 10px to avoid writing on every
+      // pixel of scroll while still capturing meaningful position changes.
+      const scrollBucket = Math.round(liveScrollTop / 10) * 10;
+      const key = `${publicationId}:${snap.chapterId}:${snap.chapterIdx}:${snap.absoluteSegmentIndex}:${snap.wordIndex}:${snap.wpm}:${snap.mode}:${scrollBucket}`;
       if (key !== lastSavedKeyRef.current) {
         lastSavedKeyRef.current = key;
         lastSavedChapterIdRef.current = snap.chapterId;
@@ -96,7 +107,7 @@ export function useProgressSaver({ publicationId }: UseProgressSaverOptions): vo
           chapter_idx: snap.chapterIdx,
           absolute_segment_index: snap.absoluteSegmentIndex,
           word_index: snap.wordIndex,
-          scroll_top: snap.scrollTop,
+          scroll_top: liveScrollTop,
         });
         wpmByModeRef.current = { ...wpmByModeRef.current, [snap.mode]: snap.wpm };
         writeStoredPrefs(publicationId, { wpm: snap.wpm, readingMode: snap.mode, wpmByMode: wpmByModeRef.current });

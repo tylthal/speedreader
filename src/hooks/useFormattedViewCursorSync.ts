@@ -320,7 +320,24 @@ export function useFormattedViewCursorSync({
       })
     }
 
+    // After scroll settles, always update scrollTop to the final value.
+    // The rAF-throttled onScroll may miss the final position if the last
+    // wheel event's rAF captured an intermediate scrollTop.
+    const onScrollEnd = () => {
+      if (handle.isProgrammaticScrollActive()) return
+      const snap = positionStore.getSnapshot()
+      if (snap.origin === 'restore') return
+      const finalScrollTop = container.scrollTop
+      if (Math.abs(finalScrollTop - snap.scrollTop) > 2) {
+        positionStore.setPosition(
+          { absoluteSegmentIndex: snap.absoluteSegmentIndex, scrollTop: finalScrollTop },
+          snap.origin === 'engine' ? 'engine' : 'user-scroll',
+        )
+      }
+    }
+
     container.addEventListener('scroll', onScroll, { passive: true })
+    container.addEventListener('scrollend', onScrollEnd, { passive: true })
 
     // Run detection immediately on mount. Handles the case where the
     // IntersectionObserver updated chapterIdx after a cross-section
@@ -338,6 +355,7 @@ export function useFormattedViewCursorSync({
 
     return () => {
       container.removeEventListener('scroll', onScroll)
+      container.removeEventListener('scrollend', onScrollEnd)
     }
   }, [
     showFormattedView,
