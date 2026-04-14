@@ -998,6 +998,8 @@ function ActiveReader({
           status={gazeState.status}
           debugPitch={gazeState.debugPitch}
           debugNormalized={gazeState.debugNormalized}
+          videoRef={gazeVideoRef}
+          landmarksRef={gazeLandmarksRef}
         />
       )}
 

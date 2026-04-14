@@ -3031,6 +3031,154 @@ html[data-playing] .reader-header {
   opacity: 0.6;
 }
 
+/* ---------- Gaze HUD (camera preview + bar) ---------- */
+.gaze-hud {
+  position: fixed;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 12px);
+  right: 12px;
+  z-index: 25;
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  opacity: 0.85;
+  transition: opacity 0.3s ease;
+  pointer-events: none;
+  animation: gaze-hud-in 0.4s ease-out both;
+}
+
+@keyframes gaze-hud-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.95);
+  }
+  to {
+    opacity: 0.85;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.gaze-hud__camera {
+  position: relative;
+  width: 72px;
+  height: 54px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #000;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+
+.gaze-hud__video {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.gaze-hud__landmarks {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.gaze-hud__lost-badge {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 0.55rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #ff6b6b;
+  background: rgba(0, 0, 0, 0.7);
+  padding: 2px 6px;
+  border-radius: 4px;
+  animation: gaze-pulse 1.2s ease-in-out infinite;
+}
+
+.gaze-hud__bar {
+  display: flex;
+  align-items: stretch;
+  gap: 3px;
+  height: 54px;
+}
+
+.gaze-hud__bar-track {
+  width: 6px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.06);
+  position: relative;
+  overflow: hidden;
+}
+
+[data-theme="light"] .gaze-hud__bar-track {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.gaze-hud__bar-zone {
+  position: absolute;
+  left: 0;
+  right: 0;
+}
+
+.gaze-hud__bar-zone--up {
+  top: 0;
+  height: 30%;
+  background: rgba(120, 200, 255, 0.08);
+  border-radius: 3px 3px 0 0;
+}
+
+.gaze-hud__bar-zone--dead {
+  top: 30%;
+  height: 40%;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.gaze-hud__bar-zone--down {
+  bottom: 0;
+  height: 30%;
+  background: rgba(120, 200, 255, 0.08);
+  border-radius: 0 0 3px 3px;
+}
+
+.gaze-hud__bar-thumb {
+  position: absolute;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 6px;
+  height: 8px;
+  border-radius: 3px;
+  background: var(--accent);
+  opacity: 0.5;
+  transition: top 100ms ease-out, opacity 0.2s ease, background 0.2s ease;
+}
+
+.gaze-hud__bar-thumb--active {
+  opacity: 1;
+  box-shadow: 0 0 6px rgba(var(--accent-rgb, 15, 125, 255), 0.5);
+}
+
+.gaze-hud__bar-thumb--lost {
+  background: #ff6b6b;
+  opacity: 0.6;
+}
+
+.gaze-hud__bar-labels {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  font-size: 0.4rem;
+  color: var(--text-muted);
+  opacity: 0.6;
+  line-height: 1;
+  padding: 1px 0;
+}
+
 /* ---------- Gaze Calibration Overlay ---------- */
 .gaze-calibration {
   position: fixed;
