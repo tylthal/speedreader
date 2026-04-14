@@ -44,7 +44,10 @@ const RESUME_DELAY_MS = 2000; // must track face for 2s before resuming
 /*  Hook — runs MediaPipe FaceMesh on the main thread at ~12 Hz       */
 /* ------------------------------------------------------------------ */
 
-export function useGazeTracker(): [GazeState, React.RefObject<{ direction: GazeDirection; intensity: number }>, GazeActions] {
+/** Normalized landmark point (0-1 range) */
+export type FaceLandmark = { x: number; y: number; z: number };
+
+export function useGazeTracker(): [GazeState, React.RefObject<{ direction: GazeDirection; intensity: number }>, GazeActions, React.RefObject<HTMLVideoElement | null>, React.RefObject<FaceLandmark[] | null>] {
   const [state, setState] = useState<GazeState>({
     status: 'idle',
     direction: 'neutral',
@@ -69,6 +72,7 @@ export function useGazeTracker(): [GazeState, React.RefObject<{ direction: GazeD
   const frameCountRef = useRef(0);
   const enhanceCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const enhanceCtxRef = useRef<CanvasRenderingContext2D | null>(null);
+  const landmarksRef = useRef<FaceLandmark[] | null>(null);
   const lastGazeTimestampRef = useRef(0);
   const lostTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastStateUpdateRef = useRef(0);
@@ -152,10 +156,14 @@ export function useGazeTracker(): [GazeState, React.RefObject<{ direction: GazeD
       const hasFace = result.faceLandmarks && result.faceLandmarks.length > 0;
 
       if (!hasMatrix && !hasFace) {
+        landmarksRef.current = null;
         handleLost();
         frameInFlightRef.current = false;
         return;
       }
+
+      // Store latest landmarks for visualization
+      landmarksRef.current = hasFace ? result.faceLandmarks![0] as FaceLandmark[] : null;
 
       let pitchDeg = 0;
 
@@ -497,5 +505,5 @@ export function useGazeTracker(): [GazeState, React.RefObject<{ direction: GazeD
     resumeTracking,
   };
 
-  return [state, gazeRef, actions];
+  return [state, gazeRef, actions, videoRef, landmarksRef];
 }

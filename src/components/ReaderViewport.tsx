@@ -265,7 +265,7 @@ function ActiveReader({
   }, []);
 
   /* ---- Gaze tracker ---- */
-  const [gazeState, gazeRef, gazeActions] = useGazeTracker();
+  const [gazeState, gazeRef, gazeActions, gazeVideoRef, gazeLandmarksRef] = useGazeTracker();
   const [showCalibration, setShowCalibration] = useState(false);
   const [gazeSensitivity, setGazeSensitivity] = useState(1.0);
   const hasCalibrated = useRef(!!(() => { try { return localStorage.getItem('speedreader_gaze_calibration'); } catch { return null; } })());
@@ -1007,6 +1007,8 @@ function ActiveReader({
           onSkip={() => { setShowCalibration(false); hasCalibrated.current = true; }}
           onCalibratePoint={gazeActions.calibratePoint}
           onFinish={gazeActions.finishCalibration}
+          videoRef={gazeVideoRef}
+          landmarksRef={gazeLandmarksRef}
         />
       )}
 

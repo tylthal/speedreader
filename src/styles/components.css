@@ -3039,36 +3039,68 @@ html[data-playing] .reader-header {
   right: 0;
   bottom: 0;
   z-index: 10000;
-  background: var(--overlay-bg);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  background: #000;
   display: flex;
   align-items: center;
   justify-content: center;
 }
 
+.gaze-calibration__video-bg {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.gaze-calibration__dim {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.gaze-calibration__landmarks {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
 .gaze-calibration__intro {
+  position: relative;
+  z-index: 2;
   text-align: center;
   max-width: 320px;
   padding: 2rem;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .gaze-calibration__title {
   font-size: 1.3rem;
   font-weight: 700;
-  color: var(--text);
+  color: #fff;
   margin-bottom: 1rem;
 }
 
 .gaze-calibration__text {
   font-size: 0.95rem;
-  color: var(--text);
+  color: rgba(255, 255, 255, 0.85);
   line-height: 1.5;
   margin-bottom: 0.75rem;
 }
 
 .gaze-calibration__text--muted {
-  color: var(--text-muted);
+  color: rgba(255, 255, 255, 0.5);
   font-size: 0.8rem;
 }
 
@@ -3100,16 +3132,12 @@ html[data-playing] .reader-header {
 }
 
 .gaze-calibration__btn--secondary {
-  background: rgba(255, 255, 255, 0.1);
-  color: var(--text-muted);
-}
-
-[data-theme="light"] .gaze-calibration__btn--secondary {
-  background: rgba(0, 0, 0, 0.06);
+  background: rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.6);
 }
 
 .gaze-calibration__btn--secondary:hover {
-  background: rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.18);
 }
 
 .gaze-calibration__point-screen {
@@ -3118,6 +3146,7 @@ html[data-playing] .reader-header {
   left: 0;
   right: 0;
   bottom: 0;
+  z-index: 2;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -3128,9 +3157,10 @@ html[data-playing] .reader-header {
   bottom: 15vh;
   left: 50%;
   transform: translateX(-50%);
-  font-size: 0.9rem;
-  color: var(--text-muted);
+  font-size: 0.95rem;
+  color: rgba(255, 255, 255, 0.75);
   white-space: nowrap;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
 }
 
 .gaze-calibration__dot-container {
@@ -3148,10 +3178,12 @@ html[data-playing] .reader-header {
   border-radius: 50%;
   background: var(--accent);
   position: absolute;
+  box-shadow: 0 0 12px var(--accent), 0 0 24px rgba(var(--accent-rgb, 59, 130, 246), 0.3);
 }
 
 .gaze-calibration__ring {
   color: var(--accent);
+  filter: drop-shadow(0 0 6px var(--accent));
 }
 
 .gaze-calibration__ring-progress {
@@ -3161,6 +3193,8 @@ html[data-playing] .reader-header {
 }
 
 .gaze-calibration__done {
+  position: relative;
+  z-index: 2;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -3170,11 +3204,12 @@ html[data-playing] .reader-header {
 .gaze-calibration__check {
   font-size: 2.5rem;
   color: #22c55e;
+  text-shadow: 0 0 16px rgba(34, 197, 94, 0.5);
 }
 
 .gaze-calibration__done-text {
   font-size: 1.1rem;
-  color: var(--text);
+  color: #fff;
   font-weight: 600;
 }
 
