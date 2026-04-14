@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import type { GazeDirection } from '../lib/gazeProcessor';
 import type { GazeStatus } from '../hooks/useGazeTracker';
-import { drawCroppedFaceVideo, drawFaceLandmarks, transformLandmarksToCrop } from '../lib/drawFaceLandmarks';
+import { drawCroppedFaceVideo, drawFaceLandmarks, drawFaceMesh, transformLandmarksToCrop } from '../lib/drawFaceLandmarks';
 import type { FaceLandmark } from '../hooks/useGazeTracker';
 
 interface GazeIndicatorProps {
@@ -68,6 +68,9 @@ export default function GazeIndicator({ direction, intensity, status, videoRef, 
             // Transform landmarks to match the cropped view
             const result = transformLandmarksToCrop(landmarks, video.videoWidth || 320, video.videoHeight || 240);
             if (result) {
+              // Wire-mask mesh first (behind the feature lines)
+              drawFaceMesh(ctx, result.landmarks, canvasW, canvasH);
+              // Feature lines on top: face oval, eyes, nose dot
               drawFaceLandmarks(ctx, result.landmarks, canvasW, canvasH, {
                 ovalColor: 'rgba(120, 220, 255, 0.7)',
                 eyeColor: 'rgba(120, 220, 255, 0.85)',

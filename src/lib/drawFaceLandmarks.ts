@@ -150,6 +150,212 @@ export function transformLandmarksToCrop(
   return { landmarks: transformed, cropRect: crop }
 }
 
+/* ================================================================== */
+/*  Wire-mask mesh: low-poly triangulated face overlay                */
+/* ================================================================== */
+
+// Key structural landmark indices (MediaPipe FaceMesh 468-point model)
+const LM_FOREHEAD_TOP    = 10
+const LM_FOREHEAD_L      = 67
+const LM_FOREHEAD_R      = 297
+const LM_BROW_CENTER     = 9
+const LM_TEMPLE_L        = 127
+const LM_TEMPLE_R        = 356
+const LM_CHEEKBONE_L     = 116
+const LM_CHEEKBONE_R     = 345
+const LM_JAW_L           = 172
+const LM_JAW_R           = 397
+const LM_CHIN            = 152
+const LM_NOSE_BRIDGE     = 6
+const LM_EYE_OUTER_L     = 33
+const LM_EYE_OUTER_R     = 263
+const LM_EYE_INNER_L     = 133
+const LM_EYE_INNER_R     = 362
+const LM_MOUTH_L         = 61
+const LM_MOUTH_R         = 291
+const LM_LIP_UPPER       = 13
+const LM_LIP_LOWER       = 14
+const LM_MID_CHEEK_L     = 187
+const LM_MID_CHEEK_R     = 411
+const LM_LOWER_CHEEK_L   = 136
+const LM_LOWER_CHEEK_R   = 365
+
+// Structural triangles — each is [a, b, c] landmark indices.
+// Grouped by zone for optional per-zone coloring.
+const MESH_FOREHEAD: [number, number, number][] = [
+  [LM_FOREHEAD_TOP,  LM_FOREHEAD_L,   LM_BROW_CENTER],
+  [LM_FOREHEAD_TOP,  LM_FOREHEAD_R,   LM_BROW_CENTER],
+  [LM_FOREHEAD_TOP,  LM_FOREHEAD_L,   LM_TEMPLE_L],
+  [LM_FOREHEAD_TOP,  LM_FOREHEAD_R,   LM_TEMPLE_R],
+]
+
+const MESH_CHEEKS: [number, number, number][] = [
+  // Upper cheeks
+  [LM_EYE_OUTER_L,   LM_CHEEKBONE_L,  LM_TEMPLE_L],
+  [LM_EYE_OUTER_R,   LM_CHEEKBONE_R,  LM_TEMPLE_R],
+  [LM_EYE_OUTER_L,   LM_CHEEKBONE_L,  NOSE_TIP],
+  [LM_EYE_OUTER_R,   LM_CHEEKBONE_R,  NOSE_TIP],
+  // Mid cheeks
+  [LM_CHEEKBONE_L,   LM_MID_CHEEK_L,  NOSE_TIP],
+  [LM_CHEEKBONE_R,   LM_MID_CHEEK_R,  NOSE_TIP],
+  // Lower cheeks
+  [LM_MID_CHEEK_L,   LM_MOUTH_L,      LM_LOWER_CHEEK_L],
+  [LM_MID_CHEEK_R,   LM_MOUTH_R,      LM_LOWER_CHEEK_R],
+  [LM_CHEEKBONE_L,   LM_MID_CHEEK_L,  LM_LOWER_CHEEK_L],
+  [LM_CHEEKBONE_R,   LM_MID_CHEEK_R,  LM_LOWER_CHEEK_R],
+]
+
+const MESH_NOSE: [number, number, number][] = [
+  [LM_BROW_CENTER,   LM_EYE_INNER_L,  LM_NOSE_BRIDGE],
+  [LM_BROW_CENTER,   LM_EYE_INNER_R,  LM_NOSE_BRIDGE],
+  [LM_NOSE_BRIDGE,   LM_EYE_INNER_L,  NOSE_TIP],
+  [LM_NOSE_BRIDGE,   LM_EYE_INNER_R,  NOSE_TIP],
+]
+
+const MESH_CHIN: [number, number, number][] = [
+  [LM_MOUTH_L,       LM_LIP_LOWER,    LM_LOWER_CHEEK_L],
+  [LM_MOUTH_R,       LM_LIP_LOWER,    LM_LOWER_CHEEK_R],
+  [LM_LOWER_CHEEK_L, LM_CHIN,         LM_LIP_LOWER],
+  [LM_LOWER_CHEEK_R, LM_CHIN,         LM_LIP_LOWER],
+  [LM_LOWER_CHEEK_L, LM_CHIN,         LM_JAW_L],
+  [LM_LOWER_CHEEK_R, LM_CHIN,         LM_JAW_R],
+]
+
+const MESH_MOUTH: [number, number, number][] = [
+  [LM_MOUTH_L,       LM_LIP_UPPER,    NOSE_TIP],
+  [LM_MOUTH_R,       LM_LIP_UPPER,    NOSE_TIP],
+  [LM_MOUTH_L,       LM_LIP_LOWER,    LM_LIP_UPPER],
+  [LM_MOUTH_R,       LM_LIP_LOWER,    LM_LIP_UPPER],
+]
+
+// Eyebrow polyline indices
+const LEFT_BROW  = [70, 63, 105, 66, 107, 55, 65, 52, 53, 46]
+const RIGHT_BROW = [300, 293, 334, 296, 336, 285, 295, 282, 283, 276]
+
+// Outer lip contour
+const LIP_UPPER = [61, 185, 40, 39, 37, 0, 267, 269, 270, 409, 291]
+const LIP_LOWER = [291, 375, 321, 405, 314, 17, 84, 181, 91, 146, 61]
+
+// Nose ridge
+const NOSE_RIDGE = [9, 168, 6, 197, 195, 5, 4, 1]
+
+interface MeshZone {
+  triangles: [number, number, number][]
+  fillColor: string
+  strokeColor: string
+}
+
+/**
+ * Draw a triangulated wire-mask mesh over the face.
+ * Creates a low-poly faceted look with semi-transparent fills
+ * and visible edges, plus eyebrow arcs, lip contour, and nose ridge.
+ */
+export function drawFaceMesh(
+  ctx: CanvasRenderingContext2D,
+  landmarks: FaceLandmark[],
+  w: number,
+  h: number,
+): void {
+  if (!landmarks || landmarks.length < 400) return
+
+  const lx = (lm: FaceLandmark) => (1 - lm.x) * w
+  const ly = (lm: FaceLandmark) => lm.y * h
+
+  // Zone definitions with per-zone colors
+  const zones: MeshZone[] = [
+    {
+      triangles: MESH_FOREHEAD,
+      fillColor: 'rgba(100, 180, 255, 0.07)',
+      strokeColor: 'rgba(100, 180, 255, 0.35)',
+    },
+    {
+      triangles: MESH_CHEEKS,
+      fillColor: 'rgba(120, 220, 255, 0.06)',
+      strokeColor: 'rgba(120, 220, 255, 0.30)',
+    },
+    {
+      triangles: MESH_NOSE,
+      fillColor: 'rgba(140, 230, 255, 0.08)',
+      strokeColor: 'rgba(140, 230, 255, 0.35)',
+    },
+    {
+      triangles: MESH_CHIN,
+      fillColor: 'rgba(110, 200, 255, 0.05)',
+      strokeColor: 'rgba(110, 200, 255, 0.25)',
+    },
+    {
+      triangles: MESH_MOUTH,
+      fillColor: 'rgba(130, 210, 255, 0.06)',
+      strokeColor: 'rgba(130, 210, 255, 0.28)',
+    },
+  ]
+
+  // Draw filled + stroked triangles
+  for (const zone of zones) {
+    for (const [a, b, c] of zone.triangles) {
+      const la = landmarks[a], lb = landmarks[b], lc = landmarks[c]
+      if (!la || !lb || !lc) continue
+
+      ctx.beginPath()
+      ctx.moveTo(lx(la), ly(la))
+      ctx.lineTo(lx(lb), ly(lb))
+      ctx.lineTo(lx(lc), ly(lc))
+      ctx.closePath()
+
+      ctx.fillStyle = zone.fillColor
+      ctx.fill()
+
+      ctx.strokeStyle = zone.strokeColor
+      ctx.lineWidth = 1
+      ctx.stroke()
+    }
+  }
+
+  // Draw vertex dots at structural points
+  const structuralPoints = [
+    LM_FOREHEAD_TOP, LM_FOREHEAD_L, LM_FOREHEAD_R, LM_BROW_CENTER,
+    LM_TEMPLE_L, LM_TEMPLE_R, LM_CHEEKBONE_L, LM_CHEEKBONE_R,
+    LM_JAW_L, LM_JAW_R, LM_CHIN, NOSE_TIP, LM_NOSE_BRIDGE,
+    LM_EYE_OUTER_L, LM_EYE_OUTER_R, LM_EYE_INNER_L, LM_EYE_INNER_R,
+    LM_MOUTH_L, LM_MOUTH_R, LM_LIP_UPPER, LM_LIP_LOWER,
+    LM_MID_CHEEK_L, LM_MID_CHEEK_R, LM_LOWER_CHEEK_L, LM_LOWER_CHEEK_R,
+  ]
+  ctx.fillStyle = 'rgba(120, 220, 255, 0.5)'
+  for (const idx of structuralPoints) {
+    const lm = landmarks[idx]
+    if (!lm) continue
+    ctx.beginPath()
+    ctx.arc(lx(lm), ly(lm), 1.5, 0, Math.PI * 2)
+    ctx.fill()
+  }
+
+  // Eyebrows
+  const drawPolyline = (indices: number[], color: string, lineWidth: number) => {
+    ctx.beginPath()
+    ctx.strokeStyle = color
+    ctx.lineWidth = lineWidth
+    const first = landmarks[indices[0]]
+    if (!first) return
+    ctx.moveTo(lx(first), ly(first))
+    for (let i = 1; i < indices.length; i++) {
+      const lm = landmarks[indices[i]]
+      if (!lm) continue
+      ctx.lineTo(lx(lm), ly(lm))
+    }
+    ctx.stroke()
+  }
+
+  drawPolyline(LEFT_BROW, 'rgba(120, 220, 255, 0.6)', 1.5)
+  drawPolyline(RIGHT_BROW, 'rgba(120, 220, 255, 0.6)', 1.5)
+
+  // Nose ridge
+  drawPolyline(NOSE_RIDGE, 'rgba(140, 230, 255, 0.45)', 1.2)
+
+  // Lip contour
+  drawPolyline(LIP_UPPER, 'rgba(150, 200, 255, 0.45)', 1)
+  drawPolyline(LIP_LOWER, 'rgba(150, 200, 255, 0.45)', 1)
+}
+
 interface DrawLandmarksOptions {
   ovalColor?: string
   eyeColor?: string
