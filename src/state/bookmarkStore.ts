@@ -5,7 +5,6 @@
  * subscriber set, useSyncExternalStore hook for React integration.
  */
 
-import { useSyncExternalStore } from 'react'
 import { createSelector } from './createSelector'
 import type { Bookmark, CreateBookmarkInput, AutoBookmarkLocation } from '../api/types'
 import {
@@ -43,11 +42,6 @@ const listeners = new Set<Listener>()
 
 function emit(): void {
   listeners.forEach((l) => l())
-}
-
-function bump(): void {
-  state = { ...state, revision: state.revision + 1 }
-  emit()
 }
 
 function classifyBookmarks(all: Bookmark[]): Pick<BookmarkStoreState, 'bookmarks' | 'lastOpened' | 'farthestRead'> {
