@@ -1414,6 +1414,32 @@ html[data-playing] .reader-header {
   animation: wpmPulse 0.3s ease;
 }
 
+/* Face HUD embedded in the strip */
+.controls__strip-hud {
+  flex-shrink: 0;
+}
+
+/* Override GazeIndicator's fixed positioning when inside the strip */
+.controls__strip-hud .gaze-hud {
+  position: static;
+  animation: none;
+  opacity: 1;
+  gap: 4px;
+}
+
+.controls__strip-hud .gaze-hud__camera {
+  width: 40px;
+  height: 40px;
+}
+
+.controls__strip-hud .gaze-hud__bar {
+  height: 40px;
+}
+
+.controls__strip-hud .gaze-hud__bar-track {
+  width: 4px;
+}
+
 .controls__strip-pause {
   display: flex;
   align-items: center;

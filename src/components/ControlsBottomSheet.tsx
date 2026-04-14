@@ -2,6 +2,9 @@ import { useState, useRef, useEffect, useCallback, type CSSProperties } from 're
 import { useAnnounce } from '../hooks/useAnnounce';
 import { useHaptics } from '../hooks/useHaptics';
 import type { ReadingMode } from '../types';
+import type { GazeDirection } from '../lib/gazeProcessor';
+import type { GazeStatus, FaceLandmark } from '../hooks/useGazeTracker';
+import GazeIndicator from './GazeIndicator';
 
 interface ControlsBottomSheetProps {
   isPlaying: boolean;
@@ -29,6 +32,12 @@ interface ControlsBottomSheetProps {
   // Legacy boolean props (kept for backwards compat, ignored if progress fractions provided)
   hasLastOpened?: boolean;
   hasFarthestRead?: boolean;
+  /** Gaze tracking state — when provided, the face HUD renders inside the strip. */
+  gazeDirection?: GazeDirection;
+  gazeIntensity?: number;
+  gazeStatus?: GazeStatus;
+  gazeVideoRef?: React.RefObject<HTMLVideoElement | null>;
+  gazeLandmarksRef?: React.RefObject<FaceLandmark[] | null>;
 }
 
 const MODE_META: Record<ReadingMode, { label: string; short: string; description: string }> = {
@@ -58,6 +67,11 @@ export default function ControlsBottomSheet({
   farthestReadProgress,
   onSeek,
   totalSegments,
+  gazeDirection,
+  gazeIntensity,
+  gazeStatus,
+  gazeVideoRef,
+  gazeLandmarksRef,
 }: ControlsBottomSheetProps) {
   const { announce } = useAnnounce();
   const haptics = useHaptics();
@@ -388,6 +402,20 @@ export default function ControlsBottomSheet({
             style={{ width: `${progress * 100}%` }}
           />
         </div>
+
+        {/* Face HUD embedded in strip when in track mode */}
+        {gazeStatus && gazeStatus !== 'idle' && (
+          <div className="controls__strip-hud">
+            <GazeIndicator
+              direction={gazeDirection ?? 'neutral'}
+              intensity={gazeIntensity ?? 0}
+              status={gazeStatus}
+              videoRef={gazeVideoRef}
+              landmarksRef={gazeLandmarksRef}
+            />
+          </div>
+        )}
+
         <div className="controls__strip-info">
           <span className="controls__strip-mode">{activeMode.short}</span>
           <span className="controls__strip-separator" aria-hidden="true">&middot;</span>

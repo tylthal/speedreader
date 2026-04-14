@@ -25,7 +25,6 @@ import type { ReadingMode } from '../types';
 import GestureLayer from './GestureLayer';
 import FocusChunkOverlay from './FocusChunkOverlay';
 import ControlsBottomSheet from './ControlsBottomSheet';
-import GazeIndicator from './GazeIndicator';
 import TrackCalibration from './TrackCalibration';
 import ReaderHeader from './ReaderHeader';
 import TocSidebar from './TocSidebar';
@@ -1022,17 +1021,7 @@ function ActiveReader({
         </div>
       )}
 
-      {readingMode === 'track' && gazeState.status !== 'idle' && isPlaying && (
-        <GazeIndicator
-          direction={gazeState.direction}
-          intensity={gazeState.intensity}
-          status={gazeState.status}
-          debugPitch={gazeState.debugPitch}
-          debugNormalized={gazeState.debugNormalized}
-          videoRef={gazeVideoRef}
-          landmarksRef={gazeLandmarksRef}
-        />
-      )}
+      {/* GazeIndicator now renders inside ControlsBottomSheet strip */}
 
       {showCalibration && (
         <TrackCalibration
@@ -1113,6 +1102,11 @@ function ActiveReader({
         farthestReadProgress={farthestReadProgress}
         onSeek={handleProgressSeek}
         totalSegments={loaderState.totalSegments}
+        gazeDirection={gazeState.direction}
+        gazeIntensity={gazeState.intensity}
+        gazeStatus={readingMode === 'track' ? gazeState.status : undefined}
+        gazeVideoRef={gazeVideoRef}
+        gazeLandmarksRef={gazeLandmarksRef}
       />
     </div>
   );
