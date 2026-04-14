@@ -3195,7 +3195,7 @@ html[data-playing] .reader-header {
 /* ---------- Gaze HUD (camera preview + bar) ---------- */
 .gaze-hud {
   position: fixed;
-  bottom: calc(env(safe-area-inset-bottom, 0px) + 12px);
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 68px);
   right: 12px;
   z-index: 25;
   display: flex;
@@ -3224,7 +3224,7 @@ html[data-playing] .reader-header {
   height: 72px;
   border-radius: 50%;
   overflow: hidden;
-  background: #000;
+  background: rgba(0, 0, 0, 0.6);
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.5), 0 0 0 1.5px rgba(120, 220, 255, 0.3);
 }
 
@@ -3235,7 +3235,7 @@ html[data-playing] .reader-header {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  opacity: 0.35;
+  opacity: 0;
 }
 
 .gaze-hud__landmarks {

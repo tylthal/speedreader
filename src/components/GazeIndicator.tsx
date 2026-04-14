@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import type { GazeDirection } from '../lib/gazeProcessor';
 import type { GazeStatus } from '../hooks/useGazeTracker';
-import { drawCroppedFaceVideo, drawFaceLandmarks, drawFaceMesh, transformLandmarksToCrop } from '../lib/drawFaceLandmarks';
+import { drawFaceLandmarks, drawFaceMesh, transformLandmarksToCrop } from '../lib/drawFaceLandmarks';
 import type { FaceLandmark } from '../hooks/useGazeTracker';
 
 interface GazeIndicatorProps {
@@ -48,13 +48,14 @@ export default function GazeIndicator({ direction, intensity, status, videoRef, 
       const canvasW = 144;
       const canvasH = 144;
 
-      if (video && vc && video.readyState >= 2) {
+      // Clear the video canvas — we only show the wire-mask artifacts,
+      // no camera feed, for a cleaner look while reading.
+      if (vc) {
         const ctx = vc.getContext('2d');
         if (ctx) {
           if (vc.width !== canvasW) vc.width = canvasW;
           if (vc.height !== canvasH) vc.height = canvasH;
-          // Draw video cropped to the face region
-          drawCroppedFaceVideo(ctx, video, landmarks, canvasW, canvasH);
+          ctx.clearRect(0, 0, canvasW, canvasH);
         }
       }
 
