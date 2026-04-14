@@ -440,13 +440,15 @@ html[data-playing] .reader-header {
   contain: content;
 }
 
-/* During engine-driven playback, escalate containment, promote to its own
-   compositor layer, and disable hit-testing on the subtree. Mirrors the
-   plain-mode .focus-scroll--playing rule. The attribute is toggled directly
-   from a positionStore subscription (no React re-render). */
+/* During engine-driven playback, promote to its own compositor layer and
+   disable the smooth-scroll behavior so the engine's rAF writes land
+   exactly. The attribute is toggled directly from a positionStore
+   subscription (no React re-render). NOTE: we intentionally do NOT set
+   pointer-events: none here — the formatted view is the tap-to-pause
+   surface, unlike the plain-mode focus-scroll which has a separate
+   GestureLayer handling taps outside the scroll container. */
 .formatted-view[data-playing="true"] {
   will-change: transform, scroll-position;
-  pointer-events: none;
   scroll-behavior: auto;
 }
 
