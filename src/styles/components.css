@@ -911,11 +911,7 @@ html[data-playing] .reader-header {
 .controls--playing:not(.controls--expanded) .controls__play-bar,
 .controls--playing:not(.controls--expanded) .controls__advanced,
 .controls--playing:not(.controls--expanded) .controls__track-row {
-  transform: translateY(100%);
-  opacity: 0;
-  max-height: 0;
-  pointer-events: none;
-  overflow: hidden;
+  display: none;
 }
 
 /* ---------- Interactive Progress Bar ---------- */
