@@ -50,7 +50,7 @@ import { REFERENCE_LINE_RATIO, type FormattedViewHandle } from '../components/Fo
 /*  Constants                                                          */
 /* ------------------------------------------------------------------ */
 
-const MIN_WPM = 60
+const MIN_WPM = 50
 const MAX_WPM = 1200
 const DEFAULT_WPM = 250
 
@@ -62,7 +62,8 @@ const PLAY_GRACE_MS = 800
 const MAX_EFFECTIVE_WPM = 1500
 
 function clampWpm(value: number): number {
-  return Math.max(MIN_WPM, Math.min(MAX_WPM, value))
+  const snapped = Math.round(value / 25) * 25
+  return Math.max(MIN_WPM, Math.min(MAX_WPM, snapped))
 }
 
 function computeOrpIndex(word: string): number {
@@ -776,8 +777,7 @@ export function usePlaybackController(
 
   const adjustWpm = useCallback((direction: number) => {
     const current = positionStore.getSnapshot().wpm
-    const step = Math.max(10, Math.round(current * 0.1))
-    positionStore.setWpm(clampWpm(current + (direction > 0 ? step : -step)))
+    positionStore.setWpm(clampWpm(current + (direction > 0 ? 25 : -25)))
   }, [])
 
   /** Seek to an absolute segment index. Resets all tick-local state.

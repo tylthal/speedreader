@@ -163,8 +163,7 @@ export default function ControlsBottomSheet({
   const handleAdjustWpm = useCallback((direction: number) => {
     onAdjustWpm(direction);
     haptics.tick();
-    const step = Math.max(10, Math.round(wpm * 0.1));
-    const predicted = Math.max(60, Math.min(1200, wpm + (direction > 0 ? step : -step)));
+    const predicted = Math.max(50, Math.min(1200, wpm + (direction > 0 ? 25 : -25)));
     announce(`${predicted} words per minute`);
   }, [onAdjustWpm, haptics, wpm, announce]);
 
