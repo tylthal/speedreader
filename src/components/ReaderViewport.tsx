@@ -381,10 +381,17 @@ function ActiveReader({
     if (readingMode !== 'track') return;
     if (isPlaying) {
       gazeActions.resumeTracking();
-    } else if (!wasPlayingBeforeLost) {
+    } else if (!wasPlayingBeforeLost && !showCalibration) {
       gazeActions.pauseTracking();
     }
-  }, [readingMode, isPlaying, wasPlayingBeforeLost, gazeActions]);
+  }, [readingMode, isPlaying, wasPlayingBeforeLost, gazeActions, showCalibration]);
+
+  // Ensure camera feed + frame capture are active while calibration is open
+  useEffect(() => {
+    if (showCalibration && readingMode === 'track') {
+      gazeActions.resumeTracking();
+    }
+  }, [showCalibration, readingMode, gazeActions]);
 
   /* ---- showFormattedView decision ---- */
   // Phrase/RSVP show their focus display while playing; when paused

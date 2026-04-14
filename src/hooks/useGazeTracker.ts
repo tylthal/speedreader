@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { GazeProcessor, extractPitchFromMatrix, extractYawFromMatrix } from '../lib/gazeProcessor';
 import type { GazeDirection, CalibrationData } from '../lib/gazeProcessor';
 
@@ -494,7 +494,7 @@ export function useGazeTracker(): [GazeState, React.RefObject<{ direction: GazeD
     return () => document.removeEventListener('visibilitychange', handleVisibility);
   }, [stopFrameCapture, startFrameCapture]);
 
-  const actions: GazeActions = {
+  const actions: GazeActions = useMemo(() => ({
     start,
     stop,
     startCalibration,
@@ -503,7 +503,7 @@ export function useGazeTracker(): [GazeState, React.RefObject<{ direction: GazeD
     setSensitivity,
     pauseTracking,
     resumeTracking,
-  };
+  }), [start, stop, startCalibration, calibratePoint, finishCalibration, setSensitivity, pauseTracking, resumeTracking]);
 
   return [state, gazeRef, actions, videoRef, landmarksRef];
 }
