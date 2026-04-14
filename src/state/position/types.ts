@@ -10,8 +10,8 @@
 // Replaces the entire src/state/cursor/* module.
 
 import type { ReadingMode } from '../../types'
-
-export type DisplayMode = 'plain' | 'formatted'
+import type { DisplayMode } from '../../api/types'
+export type { DisplayMode }
 
 export type PositionOrigin =
   /** RestoreCoordinator landed a saved position. */

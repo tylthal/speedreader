@@ -9,8 +9,9 @@
  */
 
 import type { ParsedSection } from './types'
+import type { SegmentKind } from '../api/types'
 
-export type SegmentKind = 'text' | 'section_title'
+export type { SegmentKind }
 
 export interface Segment {
   index: number

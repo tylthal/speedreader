@@ -1,5 +1,6 @@
 import { db } from './database'
 import type { DBPublication, DBBookmark } from './database'
+import type { DisplayMode } from '../api/types'
 import type { SpeedReaderClient } from '../api/interface'
 import type {
   Bookmark,
@@ -453,7 +454,7 @@ export class LocalClient implements SpeedReaderClient {
     }
   }
 
-  async setDisplayModePref(pubId: number, mode: 'plain' | 'formatted' | null): Promise<void> {
+  async setDisplayModePref(pubId: number, mode: DisplayMode | null): Promise<void> {
     await db.publications.update(pubId, { display_mode_pref: mode })
   }
 

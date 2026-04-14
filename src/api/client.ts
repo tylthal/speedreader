@@ -1,4 +1,5 @@
 import type { SpeedReaderClient } from './interface'
+import type { DisplayMode } from './types'
 import { LocalClient } from '../db/localClient'
 import { ensureSchemaWipe } from '../db/database'
 import { getImageUrl as resolveImageUrl } from '../lib/fileStorage'
@@ -92,7 +93,7 @@ export function getImageUrl(pubId: number, imagePath: string) {
   return resolveImageUrl(pubId, imagePath)
 }
 
-export function setDisplayModePref(pubId: number, mode: 'plain' | 'formatted' | null) {
+export function setDisplayModePref(pubId: number, mode: DisplayMode | null) {
   return getClient().setDisplayModePref(pubId, mode)
 }
 

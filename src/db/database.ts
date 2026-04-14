@@ -1,11 +1,10 @@
 import Dexie from 'dexie'
 import type { Table } from 'dexie'
+import type { DisplayMode, SegmentKind, BookmarkType } from '../api/types'
 
 // ---------------------------------------------------------------------------
 // Table interfaces
 // ---------------------------------------------------------------------------
-
-export type DisplayMode = 'plain' | 'formatted'
 
 export interface DBPublication {
   id?: number
@@ -45,7 +44,6 @@ export interface DBChapter {
   meta?: string | null
 }
 
-export type SegmentKind = 'text' | 'section_title'
 
 export interface DBSegment {
   id?: number
@@ -103,7 +101,6 @@ export interface DBBlobStorage {
 // Bookmark table
 // ---------------------------------------------------------------------------
 
-export type BookmarkType = 'user' | 'last_opened' | 'farthest_read'
 
 export interface DBBookmark {
   id?: number
