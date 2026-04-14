@@ -72,14 +72,14 @@ export default function ControlsBottomSheet({
   // WPM bump animation
   const [wpmBump, setWpmBump] = useState(false);
   const prevWpmRef = useRef(wpm);
-  const bumpTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  const bumpTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   // Strip WPM pulse
   const [stripWpmChanged, setStripWpmChanged] = useState(false);
-  const stripPulseTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  const stripPulseTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   // Long-press acceleration for speed buttons
-  const speedIntervalRef = useRef<ReturnType<typeof setInterval>>();
+  const speedIntervalRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
   const speedCountRef = useRef(0);
 
   useEffect(() => {

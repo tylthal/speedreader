@@ -883,7 +883,8 @@ function ActiveReader({
         onExit={() => {
           if (readingMode === 'track') {
             positionStore.setMode('scroll');
-            writeStoredPrefs(publicationId, { readingMode: 'scroll' });
+            const existing = readStoredPrefs(publicationId);
+            writeStoredPrefs(publicationId, { ...existing, wpm: existing?.wpm ?? wpm, readingMode: 'scroll' });
           }
           navigate('/');
         }}
