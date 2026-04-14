@@ -31,6 +31,11 @@ export function useProgressSaver({ publicationId, scrollContainerRef, formattedV
   const lastSavedChapterIdRef = useRef(0);
   const wpmByModeRef = useRef<Partial<Record<ReadingMode, number>>>({});
   const apiTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Last section-relative offset computed while the DOM was live.
+   *  Used as a fallback in doSave() when the container may be detached
+   *  (e.g. during React unmount cleanup in Safari, where detached
+   *  elements return scrollTop=0). */
+  const lastLiveSectionOffsetRef = useRef<number | null>(null);
 
   // Seed wpmByMode from localStorage on mount
   useEffect(() => {
@@ -60,9 +65,34 @@ export function useProgressSaver({ publicationId, scrollContainerRef, formattedV
     const sectionEl = formattedViewRef?.current?.getSectionEl(snap.chapterIdx);
     let sectionOffset = snap.scrollTop; // fallback to store value
     if (container && sectionEl) {
-      sectionOffset = container.scrollTop - sectionEl.offsetTop;
+      const rawOffset = container.scrollTop - sectionEl.offsetTop;
+      // Guard against detached DOM elements (Safari iOS zeroes
+      // scrollTop/offsetTop on detached elements). If the DOM reads
+      // zero but the store has a non-zero scrollTop, the container is
+      // likely detached — use the last value computed while DOM was live.
+      if (
+        rawOffset === 0 &&
+        snap.scrollTop > 0 &&
+        container.scrollTop === 0 &&
+        lastLiveSectionOffsetRef.current != null
+      ) {
+        sectionOffset = lastLiveSectionOffsetRef.current;
+      } else {
+        sectionOffset = rawOffset;
+      }
     } else if (container) {
-      sectionOffset = container.scrollTop;
+      if (
+        container.scrollTop === 0 &&
+        snap.scrollTop > 0 &&
+        lastLiveSectionOffsetRef.current != null
+      ) {
+        sectionOffset = lastLiveSectionOffsetRef.current;
+      } else {
+        sectionOffset = container.scrollTop;
+      }
+    } else if (lastLiveSectionOffsetRef.current != null) {
+      // Refs already cleared (unmount) — use cached value
+      sectionOffset = lastLiveSectionOffsetRef.current;
     }
 
     const location = {
@@ -117,6 +147,10 @@ export function useProgressSaver({ publicationId, scrollContainerRef, formattedV
       } else if (container) {
         sectionOffset = container.scrollTop;
       }
+      // Cache the offset while the DOM is known to be live. This value
+      // is the fallback for doSave() during unmount, when the DOM
+      // elements may be detached and return stale/zero geometry.
+      lastLiveSectionOffsetRef.current = sectionOffset;
       // Include a coarse offset in the key so intra-segment scroll
       // changes trigger a save. Round to 10px to avoid writing on every
       // pixel of scroll while still capturing meaningful position changes.

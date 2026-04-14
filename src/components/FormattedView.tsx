@@ -742,13 +742,6 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
     const container = containerRef.current
     if (!container) return
     const updatePipPosition = () => {
-      // During playback the scroll engine drives position at 60 Hz.
-      // Running caretRangeFromPoint + setPipTop every frame causes GC
-      // churn and React re-renders that manifest as periodic jitter.
-      // Skip pip updates while playing — the pip only matters visually
-      // when paused.
-      if (positionStore.getSnapshot().isPlaying) return
-
       const containerRect = container.getBoundingClientRect()
       const centerViewportY = containerRect.top + container.clientHeight * REFERENCE_LINE_RATIO
       const centerX = containerRect.left + containerRect.width / 2
@@ -827,10 +820,37 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
       }
     }
     updatePipPositionRef.current = updatePipPosition
-    container.addEventListener('scroll', updatePipPosition, { passive: true })
-    // Set initial position
+
+    // The listener is only useful while paused — during engine-driven
+    // playback the pip freezes at its last paused position (by design).
+    // Keeping the listener attached at 60 Hz during playback wastes a
+    // JS dispatch per scroll frame even though updatePipPosition early-
+    // returned inside. Attach on pause, detach on play, via a direct
+    // positionStore subscription so this doesn't bounce through React
+    // state.
+    let attached = false
+    const attach = () => {
+      if (attached) return
+      container.addEventListener('scroll', updatePipPosition, { passive: true })
+      attached = true
+    }
+    const detach = () => {
+      if (!attached) return
+      container.removeEventListener('scroll', updatePipPosition)
+      attached = false
+    }
+    const sync = () => {
+      if (positionStore.getSnapshot().isPlaying) detach()
+      else attach()
+    }
+    sync()
+    // Set initial position now that the container is laid out
     updatePipPosition()
-    return () => container.removeEventListener('scroll', updatePipPosition)
+    const unsub = positionStore.subscribe(sync)
+    return () => {
+      unsub()
+      detach()
+    }
   }, [])
 
   // Watch which section is at the top of the viewport and report it.

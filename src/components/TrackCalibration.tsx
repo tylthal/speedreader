@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import type { FaceLandmark } from '../hooks/useGazeTracker';
-import { NOSE_TIP, FOREHEAD, syncCanvasSize, drawMirroredVideo, drawFaceLandmarks } from '../lib/drawFaceLandmarks';
+import { NOSE_TIP, FOREHEAD, drawMirroredVideo, drawFaceLandmarks } from '../lib/drawFaceLandmarks';
 
 interface TrackCalibrationProps {
   onComplete: () => void;
@@ -63,46 +63,53 @@ export default function TrackCalibration({
       const videoCanvas = videoCanvasRef.current;
       const landmarkCanvas = canvasRef.current;
 
+      // Use native video resolution so nothing gets stretched
+      const vw = video?.videoWidth || 320;
+      const vh = video?.videoHeight || 240;
+
       if (video && videoCanvas && video.readyState >= 2) {
         const vCtx = videoCanvas.getContext('2d');
         if (vCtx) {
-          const { w, h } = syncCanvasSize(videoCanvas);
-          drawMirroredVideo(vCtx, video, w, h);
+          if (videoCanvas.width !== vw) videoCanvas.width = vw;
+          if (videoCanvas.height !== vh) videoCanvas.height = vh;
+          drawMirroredVideo(vCtx, video, vw, vh);
         }
       }
 
       if (landmarkCanvas) {
         const ctx = landmarkCanvas.getContext('2d');
         if (ctx) {
-          const { w, h } = syncCanvasSize(landmarkCanvas);
-          ctx.clearRect(0, 0, w, h);
+          if (landmarkCanvas.width !== vw) landmarkCanvas.width = vw;
+          if (landmarkCanvas.height !== vh) landmarkCanvas.height = vh;
+          ctx.clearRect(0, 0, vw, vh);
 
           const landmarks = landmarksRef.current;
           if (landmarks && landmarks.length > 0) {
-            drawFaceLandmarks(ctx, landmarks, w, h, {
-              ovalColor: 'rgba(120, 200, 255, 0.4)',
-              eyeColor: 'rgba(120, 200, 255, 0.6)',
-              noseColor: 'rgba(120, 200, 255, 0.9)',
-              eyeWidth: 1.5,
-              noseRadius: 4,
+            drawFaceLandmarks(ctx, landmarks, vw, vh, {
+              ovalColor: 'rgba(120, 220, 255, 0.7)',
+              eyeColor: 'rgba(120, 220, 255, 0.85)',
+              noseColor: 'rgba(120, 220, 255, 1)',
+              ovalWidth: 2.5,
+              eyeWidth: 2,
+              noseRadius: 5,
             });
 
             // Extra calibration-specific overlays: forehead + pitch axis line
-            const lx = (lm: FaceLandmark) => (1 - lm.x) * w;
-            const ly = (lm: FaceLandmark) => lm.y * h;
+            const lx = (lm: FaceLandmark) => (1 - lm.x) * vw;
+            const ly = (lm: FaceLandmark) => lm.y * vh;
             const fh = landmarks[FOREHEAD];
             const nose = landmarks[NOSE_TIP];
 
             ctx.beginPath();
-            ctx.arc(lx(fh), ly(fh), 3, 0, Math.PI * 2);
-            ctx.fillStyle = 'rgba(120, 200, 255, 0.6)';
+            ctx.arc(lx(fh), ly(fh), 4, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(120, 220, 255, 0.85)';
             ctx.fill();
 
             ctx.beginPath();
             ctx.moveTo(lx(fh), ly(fh));
             ctx.lineTo(lx(nose), ly(nose));
-            ctx.strokeStyle = 'rgba(120, 200, 255, 0.3)';
-            ctx.lineWidth = 1;
+            ctx.strokeStyle = 'rgba(120, 220, 255, 0.5)';
+            ctx.lineWidth = 1.5;
             ctx.setLineDash([4, 4]);
             ctx.stroke();
             ctx.setLineDash([]);
