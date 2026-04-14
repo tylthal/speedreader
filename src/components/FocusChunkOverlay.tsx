@@ -1,4 +1,4 @@
-import { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback } from 'react';
+import { memo, useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback } from 'react';
 import type { Segment, InlineImage } from '../types';
 import type { ReadingMode } from '../types';
 import RsvpDisplay from './RsvpDisplay';
@@ -282,7 +282,7 @@ function ScrollPlayingView({
 /*  Main overlay                                                       */
 /* ------------------------------------------------------------------ */
 
-export default function FocusChunkOverlay({
+function FocusChunkOverlayInner({
   segment,
   isPlaying,
   progress,
@@ -443,3 +443,10 @@ export default function FocusChunkOverlay({
     </div>
   );
 }
+
+// Memoized to stop the re-render cascade from ActiveReader. ActiveReader
+// subscribes to several positionStore slices and re-renders on every
+// segment-boundary commit (~every 1–2s during scroll/track playback); the
+// overlay itself only needs to update when its own props actually change.
+const FocusChunkOverlay = memo(FocusChunkOverlayInner);
+export default FocusChunkOverlay;

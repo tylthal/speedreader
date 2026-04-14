@@ -437,6 +437,22 @@ html[data-playing] .reader-header {
   position: relative;
   -webkit-user-select: none;
   user-select: none;
+  contain: content;
+}
+
+/* During engine-driven playback, escalate containment, promote to its own
+   compositor layer, and disable hit-testing on the subtree. Mirrors the
+   plain-mode .focus-scroll--playing rule. The attribute is toggled directly
+   from a positionStore subscription (no React re-render). */
+.formatted-view[data-playing="true"] {
+  will-change: transform, scroll-position;
+  pointer-events: none;
+  scroll-behavior: auto;
+}
+
+.formatted-view[data-playing="true"] .formatted-view__pip {
+  will-change: transform;
+  transition: none;
 }
 
 /* Hidden formatted view: removed from layout via display:none so the

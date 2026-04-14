@@ -636,6 +636,7 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
 
     const lastHeights = new Map<HTMLElement, number>()
     let pendingRaf = 0
+    let pendingRebuildAfterPause = false
     const scheduleRebuild = () => {
       if (pendingRaf) return
       pendingRaf = requestAnimationFrame(() => {
@@ -645,9 +646,6 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
     }
 
     const observer = new ResizeObserver((entries) => {
-      // Skip profile rebuilds during playback — they cause layout
-      // thrashing that manifests as scroll jitter.
-      if (positionStore.getSnapshot().isPlaying) return
       let significant = false
       for (const entry of entries) {
         const el = entry.target as HTMLElement
@@ -658,8 +656,31 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
           significant = true
         }
       }
-      if (significant) scheduleRebuild()
+      if (!significant) return
+      // During playback, profile rebuilds cause layout thrashing that
+      // manifests as scroll jitter. Defer until pause — otherwise the
+      // first frame after an image decodes during scroll will stall.
+      if (positionStore.getSnapshot().isPlaying) {
+        pendingRebuildAfterPause = true
+        return
+      }
+      scheduleRebuild()
     })
+
+    // When playback stops, drain any deferred rebuild. Uses
+    // requestIdleCallback so the rebuild lands between frames rather
+    // than blocking the first post-pause paint.
+    const onPlaybackChange = () => {
+      if (positionStore.getSnapshot().isPlaying) return
+      if (!pendingRebuildAfterPause) return
+      pendingRebuildAfterPause = false
+      const ric = (window as Window & {
+        requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number
+      }).requestIdleCallback
+      if (ric) ric(() => rebuildProfileNow(), { timeout: 500 })
+      else scheduleRebuild()
+    }
+    const unsubPlayback = positionStore.subscribe(onPlaybackChange)
 
     for (const el of sectionRefs.current.values()) {
       observer.observe(el)
@@ -667,6 +688,7 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
 
     return () => {
       if (pendingRaf) cancelAnimationFrame(pendingRaf)
+      unsubPlayback()
       observer.disconnect()
     }
     // We intentionally re-run when chapters change so the observer attaches
@@ -1205,6 +1227,25 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
 
   const diagEnabled = isImageDiagEnabled()
   const uploadDiag = diagEnabled ? readUploadDiag(publicationId) : null
+
+  // Mirror positionStore.isPlaying onto a `data-playing` attribute on the
+  // scroll container. CSS uses this to escalate will-change, disable
+  // pointer-events, and switch off scroll-behavior during engine-driven
+  // playback. Subscribing directly to the store (instead of through React
+  // state) keeps this out of the render path — play/pause transitions
+  // are rare but a React state bump would force a re-render of the whole
+  // formatted view tree.
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container) return
+    const apply = () => {
+      const playing = positionStore.getSnapshot().isPlaying
+      if (playing) container.setAttribute('data-playing', 'true')
+      else container.removeAttribute('data-playing')
+    }
+    apply()
+    return positionStore.subscribe(apply)
+  }, [])
 
   return (
     <div
