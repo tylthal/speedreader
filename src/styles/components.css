@@ -883,27 +883,34 @@ html[data-playing] .reader-header {
 }
 
 .controls--playing {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  border-top-color: transparent;
-  background: linear-gradient(to top, color-mix(in srgb, var(--bg) 94%, transparent), transparent);
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
-  box-shadow: none;
+  border-top-color: var(--surface-border);
+  padding: 0 0;
+  padding-bottom: env(safe-area-inset-bottom);
+  gap: 0;
 }
 
-.controls__main-row,
-.controls__secondary-row,
+.controls--playing.controls--expanded {
+  padding: 6px 10px;
+  padding-bottom: calc(6px + env(safe-area-inset-bottom));
+  gap: 6px;
+}
+
+/* ---------- Collapse elements during playback (unless expanded) ---------- */
+.controls__segment-group,
+.controls__speed-row,
 .controls__play-bar,
-.controls__playing-hint {
+.controls__advanced,
+.controls__track-row {
   transition: transform 0.4s ease, opacity 0.4s ease, max-height 0.4s ease;
   max-height: 120px;
 }
 
-.controls--playing .controls__main-row,
-.controls--playing .controls__secondary-row {
+.controls--playing:not(.controls--expanded) .controls__progress-wrap,
+.controls--playing:not(.controls--expanded) .controls__segment-group,
+.controls--playing:not(.controls--expanded) .controls__speed-row,
+.controls--playing:not(.controls--expanded) .controls__play-bar,
+.controls--playing:not(.controls--expanded) .controls__advanced,
+.controls--playing:not(.controls--expanded) .controls__track-row {
   transform: translateY(100%);
   opacity: 0;
   max-height: 0;
@@ -911,34 +918,253 @@ html[data-playing] .reader-header {
   overflow: hidden;
 }
 
-.controls__playing-hint {
-  display: none;
-  align-self: center;
-  font-size: 0.72rem;
-  color: var(--text-muted);
-  letter-spacing: 0.03em;
-}
-
-.controls--playing .controls__playing-hint {
-  display: block;
-  max-height: 24px;
-  opacity: 1;
-  transform: translateY(0);
+/* ---------- Interactive Progress Bar ---------- */
+.controls__progress-wrap {
+  position: relative;
+  width: 100%;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .controls__progress {
   width: 100%;
-  height: 3px;
+  height: 10px;
   background: var(--progress-track);
-  border-radius: 2px;
-  overflow: hidden;
+  border-radius: 5px;
+  overflow: visible;
+  position: relative;
 }
 
 .controls__progress-bar {
   height: 100%;
   background: var(--accent);
+  border-radius: 5px;
   transition: width 0.15s linear;
 }
+
+.controls__progress-wrap--scrubbing .controls__progress-bar {
+  transition: none;
+}
+
+.controls__progress-thumb {
+  position: absolute;
+  top: 50%;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--bg-surface);
+  transform: translate(-50%, -50%);
+  box-shadow: 0 1px 4px rgba(0,0,0,0.3);
+  opacity: 0;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+  pointer-events: none;
+}
+
+.controls__progress-wrap:hover .controls__progress-thumb,
+.controls__progress-wrap--scrubbing .controls__progress-thumb {
+  opacity: 1;
+}
+
+.controls__progress-wrap--scrubbing .controls__progress-thumb {
+  transform: translate(-50%, -50%) scale(1.2);
+}
+
+.controls__progress-label {
+  position: absolute;
+  top: 2px;
+  right: 8px;
+  font-size: 0.68rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  line-height: 1;
+  pointer-events: none;
+}
+
+/* ---------- Bookmark markers on progress bar ---------- */
+.controls__progress-marker {
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1.5px solid var(--bg-surface);
+  background: var(--text-muted);
+  cursor: pointer;
+  padding: 0;
+  z-index: 2;
+  transition: transform 0.15s ease, background 0.15s ease;
+}
+
+.controls__progress-marker::before {
+  content: '';
+  position: absolute;
+  top: -18px;
+  left: -18px;
+  right: -18px;
+  bottom: -18px;
+}
+
+.controls__progress-marker:hover,
+.controls__progress-marker:active {
+  transform: translate(-50%, -50%) scale(1.4);
+  background: var(--accent);
+}
+
+.controls__progress-marker--farthest {
+  background: var(--accent);
+}
+
+.controls__progress-marker::after {
+  content: attr(data-label);
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 4px 8px;
+  background: var(--bg-surface);
+  border: 1px solid var(--surface-border);
+  border-radius: 6px;
+  font-size: 0.68rem;
+  color: var(--text);
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+}
+
+.controls__progress-marker:hover::after,
+.controls__progress-marker:focus::after {
+  opacity: 1;
+}
+
+/* ---------- Segmented Mode Control ---------- */
+.controls__segment-group {
+  display: flex;
+  position: relative;
+  width: 100%;
+  height: 44px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface-hover) 82%, transparent);
+  border: 1px solid var(--surface-border);
+  overflow: hidden;
+}
+
+.controls__segment-group::before {
+  content: '';
+  position: absolute;
+  width: calc(25% - 4px);
+  height: calc(100% - 6px);
+  top: 3px;
+  left: 3px;
+  border-radius: 8px;
+  background: var(--accent-subtle);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  transform: translateX(calc(var(--active-index, 0) * (100% + 5.4px)));
+  transition: transform 0.2s ease;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.controls__segment {
+  flex: 1;
+  min-height: 44px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  position: relative;
+  z-index: 1;
+  transition: color 0.2s ease;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+.controls__segment--active {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+/* ---------- Speed Row ---------- */
+.controls__speed-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 0 16px;
+  height: 44px;
+}
+
+.controls__speed-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+  border-radius: 50%;
+  border: 1px solid var(--surface-border);
+  background: var(--surface-hover);
+  color: var(--text);
+  font-size: 1.2rem;
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.1s ease;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.controls__speed-btn:active {
+  transform: scale(0.92);
+  background: var(--accent-subtle);
+}
+
+.controls__speed-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.controls__speed-display {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 80px;
+  justify-content: center;
+  user-select: none;
+}
+
+.controls__speed-value {
+  font-size: 1.3rem;
+  font-weight: 700;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.controls__speed-unit {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+@keyframes wpmBump {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.08); }
+  100% { transform: scale(1); }
+}
+
+.controls__speed-value--bump {
+  animation: wpmBump 0.15s ease;
+}
+
+/* ---------- Play Button (pill with idle glow) ---------- */
 
 .controls__exit-btn {
   font-size: 1.2rem;
@@ -1067,66 +1293,9 @@ html[data-playing] .reader-header {
   white-space: nowrap;
 }
 
-.controls__main-row {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  flex-wrap: wrap;
-}
+/* (controls__main-row, controls__wpm-group, controls__btn removed — replaced by segment-group + speed-row) */
 
-.controls__row-spacer {
-  flex: 1;
-  min-width: 4px;
-}
-
-.controls__secondary-row {
-  display: flex;
-  justify-content: stretch;
-}
-
-.controls__wpm-group {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  padding: 2px 4px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--surface-hover) 82%, transparent);
-}
-
-.controls__wpm-label {
-  font-size: 0.78rem;
-  color: var(--text-muted);
-  min-width: 36px;
-  text-align: center;
-  font-variant-numeric: tabular-nums;
-}
-
-.controls__btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 36px;
-  min-height: 36px;
-  border: none;
-  border-radius: 50%;
-  background: transparent;
-  color: var(--text);
-  font-size: 1.1rem;
-  cursor: pointer;
-  transition: background 0.15s ease;
-}
-
-.controls__btn:hover {
-  background: var(--surface-hover);
-}
-
-.controls__btn:disabled {
-  opacity: 0.3;
-  cursor: not-allowed;
-}
-
-/* Play/Pause — full-width bar at bottom */
+/* Play/Pause — pill with idle glow */
 .controls__play-bar {
   display: flex;
   align-items: center;
@@ -1136,13 +1305,13 @@ html[data-playing] .reader-header {
   min-height: 48px;
   padding: 10px 16px;
   border: none;
-  border-radius: 12px;
+  border-radius: 999px;
   background: var(--accent);
   color: #fff;
   font-size: 1rem;
   font-weight: 600;
   cursor: pointer;
-  transition: background 0.15s ease, transform 0.1s ease;
+  transition: background 0.15s ease, transform 0.1s ease, width 0.35s ease, min-height 0.3s ease, padding 0.3s ease;
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation;
   position: relative;
@@ -1157,27 +1326,118 @@ html[data-playing] .reader-header {
   transform: scale(0.98);
 }
 
+@keyframes play-idle-glow {
+  0%, 100% { box-shadow: 0 0 0 0 transparent; }
+  50% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 20%, transparent); }
+}
+
+.controls:not(.controls--playing) .controls__play-bar {
+  animation: play-idle-glow 2.5s ease-in-out infinite;
+}
+
 .controls__play-bar-icon {
-  font-size: 1.3rem;
+  font-size: 1.4rem;
   line-height: 1;
 }
 
 .controls__play-bar-label {
   font-size: 0.95rem;
   letter-spacing: 0.02em;
+  max-width: 200px;
+  overflow: hidden;
+  transition: opacity 0.2s ease 0.1s, max-width 0.3s ease 0.05s;
 }
 
-.controls--playing .controls__play-bar {
-  width: auto;
-  min-height: 44px;
-  margin: 0 auto;
-  padding: 0.7rem 1rem;
-  border-radius: 999px;
-  box-shadow: var(--shadow-card-hover);
+/* ---------- Playing-State Strip ---------- */
+.controls__strip {
+  display: none;
+  align-items: center;
+  gap: 12px;
+  min-height: 52px;
+  padding: 10px 14px 6px;
+  width: 100%;
+  position: relative;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
 }
 
-.controls--playing .controls__play-bar-label {
-  font-size: 0.82rem;
+.controls--playing:not(.controls--expanded) .controls__strip {
+  display: flex;
+}
+
+.controls__strip-progress {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 4px;
+  background: var(--progress-track);
+  border-radius: 2px 2px 0 0;
+  overflow: hidden;
+}
+
+.controls__strip-progress-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.15s linear;
+}
+
+.controls__strip-info {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--text);
+  min-width: 0;
+}
+
+.controls__strip-separator {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.controls__strip-wpm {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+@keyframes wpmPulse {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.15); }
+  100% { transform: scale(1); }
+}
+
+.controls__strip-wpm--changed {
+  animation: wpmPulse 0.3s ease;
+}
+
+.controls__strip-pause {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border: none;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  font-size: 1.1rem;
+  cursor: pointer;
+  flex-shrink: 0;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  transition: background 0.15s ease, transform 0.1s ease;
+}
+
+.controls__strip-pause:hover {
+  background: var(--accent-hover);
+}
+
+.controls__strip-pause:active {
+  transform: scale(0.92);
 }
 
 /* ==========================================================================
@@ -2766,95 +3026,7 @@ html[data-playing] .reader-header {
 }
 
 /* ---------- Mode Toggle Button ---------- */
-.controls__mode-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 4px 10px;
-  border: 1px solid var(--surface-border);
-  border-radius: 999px;
-  background: var(--surface-hover);
-  color: var(--text);
-  font-size: 0.72rem;
-  font-weight: 600;
-  letter-spacing: 0.03em;
-  cursor: pointer;
-  min-height: 28px;
-  white-space: nowrap;
-  transition: background 0.15s ease, border-color 0.15s ease;
-}
-
-.controls__mode-btn:hover {
-  background: var(--surface-subtle);
-  border-color: var(--accent);
-}
-
-/* ---------- Mode Selector Dropdown ---------- */
-.controls__mode-wrapper {
-  position: relative;
-}
-
-.controls__mode-list {
-  position: absolute;
-  bottom: 100%;
-  left: 50%;
-  transform: translateX(-50%);
-  margin-bottom: 6px;
-  background: var(--bg-surface);
-  color: var(--text);
-  border: 1px solid var(--surface-border);
-  border-radius: 10px;
-  box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.3);
-  overflow: hidden;
-  min-width: 120px;
-  z-index: 30;
-  animation: slideUp 0.15s ease-out;
-}
-
-.controls__mode-list-item {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 0.15rem;
-  width: 100%;
-  padding: 10px 16px;
-  background: none;
-  border: none;
-  border-bottom: 1px solid var(--surface-border);
-  color: var(--text);
-  font-family: inherit;
-  font-size: 0.85rem;
-  line-height: 1.4;
-  cursor: pointer;
-  text-align: left;
-  min-height: 44px;
-  -webkit-appearance: none;
-  appearance: none;
-}
-
-.controls__mode-list-label {
-  font-size: 0.88rem;
-  font-weight: 600;
-}
-
-.controls__mode-list-desc {
-  font-size: 0.72rem;
-  color: var(--text-muted);
-  line-height: 1.35;
-}
-
-.controls__mode-list-item:last-child {
-  border-bottom: none;
-}
-
-.controls__mode-list-item:hover {
-  background: var(--surface-hover);
-}
-
-.controls__mode-list-item--active {
-  color: var(--accent);
-  font-weight: 600;
-}
+/* (controls__mode-btn and controls__mode-list removed — replaced by segment-group) */
 
 .controls__advanced {
   display: flex;
@@ -2864,12 +3036,7 @@ html[data-playing] .reader-header {
   flex-wrap: wrap;
 }
 
-.controls--playing .controls__advanced {
-  opacity: 0;
-  max-height: 0;
-  overflow: hidden;
-  pointer-events: none;
-}
+/* controls__advanced playing state now handled by the unified playing selector above */
 
 .controls__advanced-toggle {
   display: inline-flex;
@@ -2911,13 +3078,7 @@ html[data-playing] .reader-header {
   max-height: 88px;
 }
 
-.controls--playing .controls__track-row {
-  transform: translateY(100%);
-  opacity: 0;
-  max-height: 0;
-  pointer-events: none;
-  overflow: hidden;
-}
+/* controls__track-row playing state now handled by the unified playing selector above */
 
 .controls__sensitivity-label {
   display: flex;
@@ -3074,6 +3235,7 @@ html[data-playing] .reader-header {
   width: 100%;
   height: 100%;
   object-fit: cover;
+  opacity: 0.35;
 }
 
 .gaze-hud__landmarks {
@@ -3082,6 +3244,7 @@ html[data-playing] .reader-header {
   left: 0;
   width: 100%;
   height: 100%;
+  object-fit: cover;
   pointer-events: none;
 }
 
@@ -3200,6 +3363,7 @@ html[data-playing] .reader-header {
   width: 100%;
   height: 100%;
   object-fit: cover;
+  opacity: 0.35;
 }
 
 .gaze-calibration__dim {
@@ -3217,6 +3381,7 @@ html[data-playing] .reader-header {
   left: 0;
   width: 100%;
   height: 100%;
+  object-fit: cover;
   pointer-events: none;
 }
 
@@ -4144,25 +4309,4 @@ html[data-playing] .reader-header {
    Controls — Quick-jump bookmark buttons
    ========================================================================== */
 
-.controls__bookmark-pill {
-  padding: 0.2rem 0.6rem;
-  background: var(--surface-hover, rgba(127, 127, 127, 0.1));
-  border: 1px solid var(--surface-border, rgba(127, 127, 127, 0.18));
-  border-radius: 20px;
-  color: var(--text-muted);
-  font-size: 0.68rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background 0.15s ease;
-  white-space: nowrap;
-}
-
-.controls__bookmark-pill:hover:not(:disabled) {
-  background: var(--surface-hover);
-  border-color: var(--accent, #4a9eff);
-}
-
-.controls__bookmark-pill:disabled {
-  opacity: 0.35;
-  cursor: default;
-}
+/* (controls__bookmark-pill removed — bookmarks now shown as progress bar markers) */

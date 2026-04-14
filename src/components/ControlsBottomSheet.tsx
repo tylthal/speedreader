@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef, useEffect, useCallback, type CSSProperties } from 'react';
 import { useAnnounce } from '../hooks/useAnnounce';
 import { useHaptics } from '../hooks/useHaptics';
 import type { ReadingMode } from '../types';
@@ -18,9 +18,26 @@ interface ControlsBottomSheetProps {
   onRecalibrate?: () => void;
   onJumpLastOpened?: () => void;
   onJumpFarthestRead?: () => void;
+  /** 0-1 fraction for "last opened" bookmark position on the progress bar. */
+  lastOpenedProgress?: number;
+  /** 0-1 fraction for "farthest read" bookmark position on the progress bar. */
+  farthestReadProgress?: number;
+  /** Callback when the user scrubs the progress bar. Receives 0-1 fraction. */
+  onSeek?: (progress: number) => void;
+  /** Total segment count across all chapters — used for "~N min left". */
+  totalSegments?: number;
+  // Legacy boolean props (kept for backwards compat, ignored if progress fractions provided)
   hasLastOpened?: boolean;
   hasFarthestRead?: boolean;
 }
+
+const MODE_META: Record<ReadingMode, { label: string; short: string; description: string }> = {
+  phrase: { label: 'Focus', short: 'Focus', description: 'One phrase at a time' },
+  rsvp: { label: 'Word-by-word', short: 'Word', description: 'Single words at speed' },
+  scroll: { label: 'Scroll', short: 'Scroll', description: 'Continuous teleprompter view' },
+  track: { label: 'Hands-free', short: 'Free', description: 'Scroll with head tracking' },
+};
+const ALL_MODES: ReadingMode[] = ['phrase', 'rsvp', 'scroll', 'track'];
 
 export default function ControlsBottomSheet({
   isPlaying,
@@ -37,137 +54,239 @@ export default function ControlsBottomSheet({
   onRecalibrate,
   onJumpLastOpened,
   onJumpFarthestRead,
-  hasLastOpened = false,
-  hasFarthestRead = false,
+  lastOpenedProgress,
+  farthestReadProgress,
+  onSeek,
+  totalSegments,
 }: ControlsBottomSheetProps) {
   const { announce } = useAnnounce();
   const haptics = useHaptics();
-  const [showModeList, setShowModeList] = useState(false);
   const [showTrackOptions, setShowTrackOptions] = useState(false);
+  const [isStripExpanded, setIsStripExpanded] = useState(false);
 
-  const modeMeta: Record<ReadingMode, { label: string; description: string }> = {
-    phrase: { label: 'Focus', description: 'One phrase at a time' },
-    rsvp: { label: 'Word-by-word', description: 'Single words at speed' },
-    scroll: { label: 'Scroll', description: 'Continuous teleprompter view' },
-    track: { label: 'Hands-free', description: 'Scroll with head tracking' },
-  };
-  const allModes: ReadingMode[] = ['phrase', 'rsvp', 'scroll', 'track'];
-  const activeMode = modeMeta[mode];
+  // Scrubbing state
+  const [isScrubbing, setIsScrubbing] = useState(false);
+  const [scrubProgress, setScrubProgress] = useState(0);
+  const progressRef = useRef<HTMLDivElement>(null);
+
+  // WPM bump animation
+  const [wpmBump, setWpmBump] = useState(false);
+  const prevWpmRef = useRef(wpm);
+  const bumpTimerRef = useRef<ReturnType<typeof setTimeout>>();
+
+  // Strip WPM pulse
+  const [stripWpmChanged, setStripWpmChanged] = useState(false);
+  const stripPulseTimerRef = useRef<ReturnType<typeof setTimeout>>();
+
+  // Long-press acceleration for speed buttons
+  const speedIntervalRef = useRef<ReturnType<typeof setInterval>>();
+  const speedCountRef = useRef(0);
+
+  useEffect(() => {
+    if (wpm !== prevWpmRef.current) {
+      prevWpmRef.current = wpm;
+      setWpmBump(true);
+      setStripWpmChanged(true);
+      clearTimeout(bumpTimerRef.current);
+      clearTimeout(stripPulseTimerRef.current);
+      bumpTimerRef.current = setTimeout(() => setWpmBump(false), 150);
+      stripPulseTimerRef.current = setTimeout(() => setStripWpmChanged(false), 300);
+    }
+  }, [wpm]);
+
+  // Reset strip expanded when playback stops
+  useEffect(() => {
+    if (!isPlaying) setIsStripExpanded(false);
+  }, [isPlaying]);
+
+  const activeMode = MODE_META[mode];
+  const activeIndex = ALL_MODES.indexOf(mode);
   const canShowTrackOptions = mode === 'track' && Boolean(onGazeSensitivityChange || onRecalibrate);
+  const displayProgress = isScrubbing ? scrubProgress : progress;
 
-  const handleTogglePlay = () => {
+  // ── Progress bar scrubbing ──
+  const updateScrubProgress = useCallback((e: React.PointerEvent) => {
+    const rect = progressRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const fraction = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    setScrubProgress(fraction);
+  }, []);
+
+  const handleProgressPointerDown = useCallback((e: React.PointerEvent) => {
+    e.currentTarget.setPointerCapture(e.pointerId);
+    setIsScrubbing(true);
+    const rect = progressRef.current?.getBoundingClientRect();
+    if (rect) {
+      setScrubProgress(Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)));
+    }
+    haptics.tick();
+  }, [haptics]);
+
+  const handleProgressPointerMove = useCallback((e: React.PointerEvent) => {
+    if (!isScrubbing) return;
+    const rect = progressRef.current?.getBoundingClientRect();
+    if (rect) {
+      setScrubProgress(Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)));
+    }
+  }, [isScrubbing]);
+
+  const handleProgressPointerUp = useCallback(() => {
+    if (!isScrubbing) return;
+    setIsScrubbing(false);
+    onSeek?.(scrubProgress);
+    haptics.tap();
+    announce(`Seeked to ${Math.round(scrubProgress * 100)}%`);
+  }, [isScrubbing, scrubProgress, onSeek, haptics, announce]);
+
+  // ── Play/pause ──
+  const handleTogglePlay = useCallback(() => {
     onTogglePlay();
     haptics.tap();
     announce(isPlaying ? 'Paused' : `${activeMode.label} started`);
-  };
+  }, [onTogglePlay, haptics, announce, isPlaying, activeMode.label]);
 
-  const handleAdjustWpm = (direction: number) => {
+  // ── WPM adjustment with long-press ──
+  const handleAdjustWpm = useCallback((direction: number) => {
     onAdjustWpm(direction);
     haptics.tick();
     const step = Math.max(10, Math.round(wpm * 0.1));
     const predicted = Math.max(60, Math.min(1200, wpm + (direction > 0 ? step : -step)));
     announce(`${predicted} words per minute`);
-  };
+  }, [onAdjustWpm, haptics, wpm, announce]);
 
-  const hasBookmarks = onJumpLastOpened || onJumpFarthestRead;
+  const startSpeedRepeat = useCallback((direction: number) => {
+    handleAdjustWpm(direction);
+    speedCountRef.current = 0;
+    speedIntervalRef.current = setInterval(() => {
+      speedCountRef.current++;
+      onAdjustWpm(direction);
+      haptics.tick();
+      // Accelerate after ~1 second (6 ticks at 150ms)
+      if (speedCountRef.current === 6 && speedIntervalRef.current) {
+        clearInterval(speedIntervalRef.current);
+        speedIntervalRef.current = setInterval(() => {
+          onAdjustWpm(direction);
+          haptics.tick();
+        }, 80);
+      }
+    }, 150);
+  }, [handleAdjustWpm, onAdjustWpm, haptics]);
+
+  const stopSpeedRepeat = useCallback(() => {
+    if (speedIntervalRef.current) {
+      clearInterval(speedIntervalRef.current);
+      speedIntervalRef.current = undefined;
+    }
+    speedCountRef.current = 0;
+  }, []);
+
+  // ── Time remaining ──
+  const timeRemaining = totalSegments && totalSegments > 0
+    ? Math.round(((1 - progress) * totalSegments) / (wpm / 60))
+    : null;
+  const timeLabel = timeRemaining !== null
+    ? timeRemaining >= 60
+      ? `~${Math.round(timeRemaining / 60)} min left`
+      : `~${timeRemaining}s left`
+    : null;
+
+  // ── Strip expand ──
+  const handleStripTap = useCallback((e: React.MouseEvent) => {
+    // Don't expand if tapping the pause button
+    if ((e.target as HTMLElement).closest('.controls__strip-pause')) return;
+    setIsStripExpanded(true);
+    haptics.tap();
+  }, [haptics]);
+
+  const className = [
+    'controls',
+    isPlaying ? 'controls--playing' : '',
+    isStripExpanded ? 'controls--expanded' : '',
+  ].filter(Boolean).join(' ');
 
   return (
-    <div className={`controls${isPlaying ? ' controls--playing' : ''}`} role="toolbar" aria-label="Reading controls">
-      {/* Progress bar */}
-      <div className="controls__progress">
-        <div
-          className="controls__progress-bar"
-          style={{ width: `${progress * 100}%` }}
-        />
-      </div>
+    <div className={className} role="toolbar" aria-label="Reading controls">
+      {/* ── Interactive Progress Bar ── */}
+      <div
+        className={`controls__progress-wrap${isScrubbing ? ' controls__progress-wrap--scrubbing' : ''}`}
+        onPointerDown={onSeek ? handleProgressPointerDown : undefined}
+        onPointerMove={onSeek ? handleProgressPointerMove : undefined}
+        onPointerUp={onSeek ? handleProgressPointerUp : undefined}
+        onPointerCancel={onSeek ? handleProgressPointerUp : undefined}
+        role="slider"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={Math.round(displayProgress * 100)}
+        aria-label="Reading progress"
+      >
+        <div className="controls__progress" ref={progressRef}>
+          <div
+            className="controls__progress-bar"
+            style={{ width: `${displayProgress * 100}%` }}
+          />
+          <div
+            className="controls__progress-thumb"
+            style={{ left: `${displayProgress * 100}%` }}
+          />
 
-      {/* Compact controls row: WPM | mode | bookmarks */}
-      <div className="controls__main-row">
-        <div className="controls__wpm-group">
-          <button
-            className="controls__btn"
-            onClick={() => handleAdjustWpm(-1)}
-            aria-label="Decrease reading speed"
-          >
-            &minus;
-          </button>
-          <span className="controls__wpm-label" aria-live="polite">{wpm}</span>
-          <button
-            className="controls__btn"
-            onClick={() => handleAdjustWpm(1)}
-            aria-label="Increase reading speed"
-          >
-            +
-          </button>
+          {/* Bookmark markers */}
+          {lastOpenedProgress != null && onJumpLastOpened && (
+            <button
+              className="controls__progress-marker"
+              style={{ left: `${lastOpenedProgress * 100}%` }}
+              onClick={(e) => { e.stopPropagation(); onJumpLastOpened(); haptics.tap(); announce('Jumped to last opened position'); }}
+              aria-label={`Last opened position: ${Math.round(lastOpenedProgress * 100)}%`}
+              data-label="Last Opened"
+            />
+          )}
+          {farthestReadProgress != null && onJumpFarthestRead && (
+            <button
+              className="controls__progress-marker controls__progress-marker--farthest"
+              style={{ left: `${farthestReadProgress * 100}%` }}
+              onClick={(e) => { e.stopPropagation(); onJumpFarthestRead(); haptics.tap(); announce('Jumped to farthest read position'); }}
+              aria-label={`Farthest read position: ${Math.round(farthestReadProgress * 100)}%`}
+              data-label="Farthest Read"
+            />
+          )}
         </div>
 
-        {(onToggleMode || onSetMode) && (
-          <div className="controls__mode-wrapper">
+        <span className="controls__progress-label">
+          {isScrubbing
+            ? `${Math.round(scrubProgress * 100)}%`
+            : timeLabel ?? `${Math.round(progress * 100)}%`}
+        </span>
+      </div>
+
+      {/* ── Segmented Mode Control ── */}
+      {(onToggleMode || onSetMode) && (
+        <div
+          className="controls__segment-group"
+          role="radiogroup"
+          aria-label="Reading mode"
+          style={{ '--active-index': activeIndex } as CSSProperties}
+        >
+          {ALL_MODES.map((m) => (
             <button
-              className="controls__mode-btn"
+              key={m}
+              className={`controls__segment${m === mode ? ' controls__segment--active' : ''}`}
+              role="radio"
+              aria-checked={m === mode}
+              aria-label={`${MODE_META[m].label}: ${MODE_META[m].description}`}
               onClick={() => {
-                setShowModeList(v => !v);
+                if (m !== mode && onSetMode) {
+                  onSetMode(m);
+                  announce(`Switched to ${MODE_META[m].label}`);
+                }
                 haptics.tap();
               }}
-              aria-label={`Reading mode: ${activeMode.label}. ${activeMode.description}`}
-              aria-expanded={showModeList}
             >
-              {activeMode.label} &#9662;
+              {MODE_META[m].short}
             </button>
-            {showModeList && (
-              <div className="controls__mode-list" role="listbox" aria-label="Select reading mode">
-                {allModes.map(m => (
-                  <button
-                    key={m}
-                    className={`controls__mode-list-item${m === mode ? ' controls__mode-list-item--active' : ''}`}
-                    role="option"
-                    aria-selected={m === mode}
-                    onClick={() => {
-                      if (m !== mode && onSetMode) {
-                        onSetMode(m);
-                        announce(`Switched to ${modeMeta[m].label}`);
-                      }
-                      setShowModeList(false);
-                      haptics.tap();
-                    }}
-                  >
-                    <span className="controls__mode-list-label">{modeMeta[m].label}</span>
-                    <span className="controls__mode-list-desc">{modeMeta[m].description}</span>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
+          ))}
+        </div>
+      )}
 
-        {hasBookmarks && <div className="controls__row-spacer" />}
-
-        {onJumpLastOpened && (
-          <button
-            className="controls__bookmark-pill"
-            onClick={() => { onJumpLastOpened(); haptics.tap(); announce('Jumped to last opened position'); }}
-            disabled={!hasLastOpened}
-            aria-label="Jump to last opened position"
-          >
-            Last Opened
-          </button>
-        )}
-        {onJumpFarthestRead && (
-          <button
-            className="controls__bookmark-pill"
-            onClick={() => { onJumpFarthestRead(); haptics.tap(); announce('Jumped to farthest read position'); }}
-            disabled={!hasFarthestRead}
-            aria-label="Jump to farthest read position"
-          >
-            Farthest Read
-          </button>
-        )}
-      </div>
-
-      <div className="controls__playing-hint" aria-hidden={!isPlaying}>
-        {activeMode.label} mode · {wpm} WPM
-      </div>
-
+      {/* ── Track mode options ── */}
       {canShowTrackOptions && (
         <div className="controls__advanced">
           <button
@@ -175,7 +294,7 @@ export default function ControlsBottomSheet({
             type="button"
             aria-expanded={showTrackOptions}
             onClick={() => {
-              setShowTrackOptions((value) => !value);
+              setShowTrackOptions((v) => !v);
               haptics.tap();
             }}
           >
@@ -187,7 +306,6 @@ export default function ControlsBottomSheet({
         </div>
       )}
 
-      {/* Track mode controls */}
       {canShowTrackOptions && showTrackOptions && (
         <div className="controls__track-row">
           {onGazeSensitivityChange && (
@@ -225,14 +343,82 @@ export default function ControlsBottomSheet({
         </div>
       )}
 
-      {/* Play/Pause — large bottom target */}
+      {/* ── Speed Row ── */}
+      <div className="controls__speed-row">
+        <button
+          className="controls__speed-btn"
+          onPointerDown={() => startSpeedRepeat(-1)}
+          onPointerUp={stopSpeedRepeat}
+          onPointerLeave={stopSpeedRepeat}
+          onPointerCancel={stopSpeedRepeat}
+          aria-label="Decrease reading speed"
+        >
+          &minus;
+        </button>
+        <div className="controls__speed-display">
+          <span className={`controls__speed-value${wpmBump ? ' controls__speed-value--bump' : ''}`}>
+            {wpm}
+          </span>
+          <span className="controls__speed-unit">WPM</span>
+        </div>
+        <button
+          className="controls__speed-btn"
+          onPointerDown={() => startSpeedRepeat(1)}
+          onPointerUp={stopSpeedRepeat}
+          onPointerLeave={stopSpeedRepeat}
+          onPointerCancel={stopSpeedRepeat}
+          aria-label="Increase reading speed"
+        >
+          +
+        </button>
+      </div>
+
+      {/* ── Playing-State Strip ── */}
+      <div
+        className="controls__strip"
+        onClick={handleStripTap}
+        role="button"
+        tabIndex={0}
+        aria-label="Expand controls"
+        aria-expanded={isStripExpanded}
+      >
+        <div className="controls__strip-progress">
+          <div
+            className="controls__strip-progress-fill"
+            style={{ width: `${progress * 100}%` }}
+          />
+        </div>
+        <div className="controls__strip-info">
+          <span className="controls__strip-mode">{activeMode.short}</span>
+          <span className="controls__strip-separator" aria-hidden="true">&middot;</span>
+          <span
+            className={`controls__strip-wpm${stripWpmChanged ? ' controls__strip-wpm--changed' : ''}`}
+            aria-live="polite"
+          >
+            {wpm} WPM
+          </span>
+        </div>
+        <button
+          className="controls__strip-pause"
+          onClick={(e) => { e.stopPropagation(); handleTogglePlay(); }}
+          aria-label="Pause reading"
+        >
+          &#x2759;&#x2759;
+        </button>
+      </div>
+
+      {/* ── Play/Pause Button ── */}
       <button
         className="controls__play-bar"
         onClick={handleTogglePlay}
         aria-label={isPlaying ? 'Pause reading' : 'Play reading'}
       >
-        <span className="controls__play-bar-icon">{isPlaying ? '\u2759\u2759' : '\u25B6\uFE0E'}</span>
-        <span className="controls__play-bar-label">{isPlaying ? 'Pause' : 'Start reading'}</span>
+        <span className="controls__play-bar-icon">
+          {isPlaying ? '\u2759\u2759' : '\u25B6\uFE0E'}
+        </span>
+        <span className="controls__play-bar-label">
+          {isPlaying ? 'Pause' : 'Start reading'}
+        </span>
       </button>
     </div>
   );

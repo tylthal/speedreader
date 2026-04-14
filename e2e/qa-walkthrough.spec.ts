@@ -90,53 +90,42 @@ test.describe('QA Walkthrough - Full App (Mobile)', () => {
       await shot('08-reader-paused');
     }
 
-    // ─── 7. MODE SELECTOR ───
-    const modeBtn = page.locator('.controls__mode-btn, button[aria-label*="mode" i]').first();
-    if (await modeBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
-      await modeBtn.click();
-      await page.waitForTimeout(500);
-      await shot('09-mode-dropdown');
-    } else {
-      // Try finding mode button by text
-      for (const modeName of ['Phrase', 'RSVP', 'Scroll']) {
-        const btn = page.locator(`.controls__main-row button:has-text("${modeName}")`).first();
-        if (await btn.isVisible({ timeout: 500 }).catch(() => false)) {
-          await btn.click();
-          await page.waitForTimeout(500);
-          await shot('09-mode-dropdown');
-          break;
-        }
+    // ─── 7. MODE SELECTOR (segmented control) ───
+    const modeSegment = page.locator('.controls__segment').first();
+    if (await modeSegment.isVisible({ timeout: 1000 }).catch(() => false)) {
+      await shot('09-mode-segmented');
+      // Try switching to Word mode
+      const wordBtn = page.locator('.controls__segment:nth-child(2)').first();
+      if (await wordBtn.isVisible({ timeout: 500 }).catch(() => false)) {
+        await wordBtn.click();
+        await page.waitForTimeout(500);
+        await shot('09-mode-switched');
       }
     }
 
-    // Switch to RSVP if available
-    const rsvpItem = page.locator('.controls__mode-list-item:has-text("RSVP")').first();
-    if (await rsvpItem.isVisible({ timeout: 1000 }).catch(() => false)) {
-      await rsvpItem.click();
+    // Switch to Word mode via segmented control
+    const wordSegment = page.locator('.controls__segment:nth-child(2)').first();
+    if (await wordSegment.isVisible({ timeout: 1000 }).catch(() => false)) {
+      await wordSegment.click();
       await page.waitForTimeout(500);
-      await shot('10-mode-rsvp');
+      await shot('10-mode-word');
 
-      // Play RSVP
+      // Play Word mode
       if (await playBar.isVisible({ timeout: 1000 }).catch(() => false)) {
         await playBar.click();
         await page.waitForTimeout(2000);
-        await shot('10b-rsvp-playing');
+        await shot('10b-word-playing');
         await page.mouse.click(195, 400);
         await page.waitForTimeout(500);
       }
     }
 
-    // Switch to Scroll mode
-    // Need to reopen mode list
-    const modeBtn2 = page.locator('button[aria-label*="Reading mode"]').first();
-    if (await modeBtn2.isVisible({ timeout: 1000 }).catch(() => false)) {
-      await modeBtn2.click();
+    // Switch to Scroll mode via segmented control
+    const scrollSegment = page.locator('.controls__segment:nth-child(3)').first();
+    if (await scrollSegment.isVisible({ timeout: 1000 }).catch(() => false)) {
+      await scrollSegment.click();
       await page.waitForTimeout(500);
-      const scrollItem = page.locator('.controls__mode-list-item:has-text("Scroll")').first();
-      if (await scrollItem.isVisible({ timeout: 1000 }).catch(() => false)) {
-        await scrollItem.click();
-        await page.waitForTimeout(500);
-        await shot('11-mode-scroll');
+      await shot('11-mode-scroll');
 
         if (await playBar.isVisible({ timeout: 1000 }).catch(() => false)) {
           await playBar.click();

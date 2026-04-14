@@ -604,9 +604,26 @@ function ActiveReader({
     });
   }, [publicationId]);
 
-  // Bookmark selectors for quick-jump buttons
+  // Bookmark selectors for quick-jump buttons & progress bar markers
   const hasLastOpened = useBookmarkSelector((s) => s.lastOpened !== null);
   const hasFarthestRead = useBookmarkSelector((s) => s.farthestRead !== null);
+
+  const lastOpenedProgress = useBookmarkSelector((s) => {
+    const b = s.lastOpened;
+    if (!b || loaderState.totalSegments <= 0) return undefined;
+    return b.absolute_segment_index / loaderState.totalSegments;
+  });
+  const farthestReadProgress = useBookmarkSelector((s) => {
+    const b = s.farthestRead;
+    if (!b || loaderState.totalSegments <= 0) return undefined;
+    return b.absolute_segment_index / loaderState.totalSegments;
+  });
+
+  const handleProgressSeek = useCallback((fraction: number) => {
+    const total = loaderState.totalSegments > 0 ? loaderState.totalSegments : loaderState.segments.length;
+    const targetAbs = Math.round(fraction * total);
+    controller.seekToAbs(targetAbs);
+  }, [loaderState.totalSegments, loaderState.segments.length, controller]);
 
   const handleJumpLastOpened = useCallback(() => {
     const b = bookmarkStore.getSnapshot().lastOpened;
@@ -863,7 +880,13 @@ function ActiveReader({
         formattedSuppressed={phraseLikeMode && displayMode === 'formatted'}
         onOpenToc={() => setTocOpen(true)}
         onOpenBookmarks={() => setBookmarksOpen(true)}
-        onExit={() => navigate('/')}
+        onExit={() => {
+          if (readingMode === 'track') {
+            positionStore.setMode('scroll');
+            writeStoredPrefs(publicationId, { readingMode: 'scroll' });
+          }
+          navigate('/');
+        }}
       />
       <TocSidebar
         open={tocOpen}
@@ -1085,8 +1108,10 @@ function ActiveReader({
         }}
         onJumpLastOpened={handleJumpLastOpened}
         onJumpFarthestRead={handleJumpFarthestRead}
-        hasLastOpened={hasLastOpened}
-        hasFarthestRead={hasFarthestRead}
+        lastOpenedProgress={lastOpenedProgress}
+        farthestReadProgress={farthestReadProgress}
+        onSeek={handleProgressSeek}
+        totalSegments={loaderState.totalSegments}
       />
     </div>
   );

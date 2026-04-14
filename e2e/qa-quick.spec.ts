@@ -47,16 +47,14 @@ test('quick controls check', async ({ browser }) => {
   });
   console.log('Controls computed styles:', JSON.stringify(controlsStyle, null, 2));
 
-  // Open mode dropdown
-  const modeBtn = page.locator('button[aria-label*="Reading mode"]').first();
-  if (await modeBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
-    await modeBtn.click();
-    await page.waitForTimeout(500);
-    await page.screenshot({ path: path.join(SHOTS, 'qq-02-mode-dropdown.png') });
-
-    // Check mode list item styles
-    const itemStyles = await page.evaluate(() => {
-      const items = document.querySelectorAll('.controls__mode-list-item');
+  // Check segmented mode control
+  const segments = page.locator('.controls__segment');
+  const segmentCount = await segments.count();
+  console.log('Segment count:', segmentCount);
+  if (segmentCount > 0) {
+    await page.screenshot({ path: path.join(SHOTS, 'qq-02-mode-segments.png') });
+    const segmentStyles = await page.evaluate(() => {
+      const items = document.querySelectorAll('.controls__segment');
       return Array.from(items).map(item => {
         const cs = getComputedStyle(item);
         return {
@@ -64,13 +62,10 @@ test('quick controls check', async ({ browser }) => {
           color: cs.color,
           backgroundColor: cs.backgroundColor,
           fontSize: cs.fontSize,
-          display: cs.display,
-          visibility: cs.visibility,
-          opacity: cs.opacity,
         };
       });
     });
-    console.log('Mode list items:', JSON.stringify(itemStyles, null, 2));
+    console.log('Segment styles:', JSON.stringify(segmentStyles, null, 2));
   }
 
   await context.close();

@@ -23,15 +23,12 @@ async function ensureFormattedView(page: Page): Promise<void> {
 }
 
 async function selectScrollMode(page: Page): Promise<void> {
-  const modeBtn = page.locator('[aria-label^="Reading mode:"]');
-  await expect(modeBtn).toBeVisible();
-  const label = await modeBtn.getAttribute('aria-label');
-  if (label && label.toLowerCase().includes('scroll')) return;
-  await modeBtn.click();
-  // Pick the Scroll option from the listbox
-  await page.locator('[role="listbox"][aria-label="Select reading mode"] >> text=Scroll').click();
-  // Wait for the dropdown to dismiss
-  await expect(modeBtn).toContainText(/Scroll/);
+  const scrollSegment = page.locator('.controls__segment[aria-label*="Scroll"]');
+  await expect(scrollSegment).toBeVisible();
+  const isActive = await scrollSegment.getAttribute('aria-checked');
+  if (isActive === 'true') return;
+  await scrollSegment.click();
+  await expect(scrollSegment).toHaveAttribute('aria-checked', 'true');
 }
 
 test.describe('Formatted-view auto-scroll', () => {

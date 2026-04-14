@@ -16,25 +16,21 @@ async function ensureFormattedView(page: Page): Promise<void> {
   await expect(page.locator('.formatted-view')).toBeVisible()
 }
 
-/** Mode name → the option label text used in the listbox. */
-const MODE_OPTION_MAP: Record<string, string> = {
-  Scroll: 'Scroll Continuous',
-  'Word-by-word': 'Word-by-word Single',
-  Focus: 'Focus One phrase',
+/** Mode name → the segment aria-label substring used in the segmented control. */
+const MODE_SEGMENT_MAP: Record<string, string> = {
+  Scroll: 'Scroll',
+  'Word-by-word': 'Word-by-word',
+  Focus: 'Focus',
 }
 
 async function selectMode(page: Page, modeName: string): Promise<void> {
-  const modeBtn = page.locator('[aria-label^="Reading mode:"]')
-  await expect(modeBtn).toBeVisible()
-  const label = await modeBtn.getAttribute('aria-label')
-  if (label && label.toLowerCase().includes(modeName.toLowerCase())) return
-  await modeBtn.click()
-  const optionName = MODE_OPTION_MAP[modeName] ?? modeName
-  await page
-    .locator('[role="listbox"][aria-label="Select reading mode"]')
-    .getByRole('option', { name: optionName })
-    .click()
-  await expect(modeBtn).toContainText(new RegExp(modeName, 'i'))
+  const segmentName = MODE_SEGMENT_MAP[modeName] ?? modeName
+  const segment = page.locator(`.controls__segment[aria-label*="${segmentName}"]`)
+  await expect(segment).toBeVisible()
+  const isActive = await segment.getAttribute('aria-checked')
+  if (isActive === 'true') return
+  await segment.click()
+  await expect(segment).toHaveAttribute('aria-checked', 'true')
 }
 
 /**
@@ -207,7 +203,7 @@ test.describe('Playback controls', () => {
   })
 
   test('WPM can be increased and decreased', async ({ page }) => {
-    const wpmLabel = page.locator('.controls__wpm-label')
+    const wpmLabel = page.locator('.controls__speed-value')
     await expect(wpmLabel).toBeVisible()
     const initialWpm = await wpmLabel.textContent()
 
@@ -225,20 +221,20 @@ test.describe('Playback controls', () => {
   })
 
   test('reading mode can be switched between phrase, word-by-word, and scroll', async ({ page }) => {
-    const modeBtn = page.locator('[aria-label^="Reading mode:"]')
-    await expect(modeBtn).toBeVisible()
+    const segmentGroup = page.locator('.controls__segment-group')
+    await expect(segmentGroup).toBeVisible()
 
     // Switch to Scroll
     await selectMode(page, 'Scroll')
-    await expect(modeBtn).toContainText(/Scroll/i)
+    await expect(page.locator('.controls__segment[aria-label*="Scroll"]')).toHaveAttribute('aria-checked', 'true')
 
     // Switch to Word-by-word (RSVP)
     await selectMode(page, 'Word-by-word')
-    await expect(modeBtn).toContainText(/Word/i)
+    await expect(page.locator('.controls__segment[aria-label*="Word-by-word"]')).toHaveAttribute('aria-checked', 'true')
 
     // Switch back to Focus (phrase)
     await selectMode(page, 'Focus')
-    await expect(modeBtn).toContainText(/Focus/i)
+    await expect(page.locator('.controls__segment[aria-label*="Focus"]')).toHaveAttribute('aria-checked', 'true')
   })
 
   test('progress bar advances during playback', async ({ page }) => {
@@ -369,26 +365,21 @@ test.describe('Scrolling behavior', () => {
     expect(afterScroll).toBeGreaterThan(initialScroll)
   })
 
-  test('bookmark quick-jump pills are present in controls', async ({ page }) => {
-    // Quick-jump bookmark pills should be rendered in the controls
-    const pills = page.locator('.controls__bookmark-pill')
-    await expect(pills.first()).toBeVisible({ timeout: 5000 })
-
-    // Should have at least 1 pill (Last Opened / Farthest Read)
-    const pillCount = await pills.count()
-    expect(pillCount).toBeGreaterThanOrEqual(1)
-
-    // Play briefly so auto-bookmarks get set, then check an enabled pill can be clicked
+  test('bookmark markers are present on progress bar', async ({ page }) => {
+    // Play briefly so auto-bookmarks get set
     await page.getByLabel('Play reading').click()
     await page.waitForTimeout(5000)
     await page.getByLabel('Pause reading').click()
     await page.waitForTimeout(1000)
 
-    // Find an enabled pill and click it
-    const enabledPill = pills.locator(':not([disabled])').first()
-    const enabledCount = await pills.locator(':not([disabled])').count()
-    if (enabledCount > 0) {
-      await enabledPill.click()
+    // Bookmark markers should appear on the progress bar
+    const markers = page.locator('.controls__progress-marker')
+    const markerCount = await markers.count()
+    expect(markerCount).toBeGreaterThanOrEqual(1)
+
+    // Click a marker to jump
+    if (markerCount > 0) {
+      await markers.first().click()
       await page.waitForTimeout(1000)
       // Reader should still be functional after jump
       await expect(page.locator('.reader-viewport')).toBeVisible()
