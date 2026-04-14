@@ -1,4 +1,3 @@
-import type { SpeedReaderClient } from './interface'
 import type { DisplayMode } from './types'
 import { LocalClient } from '../db/localClient'
 import { ensureSchemaWipe } from '../db/database'
@@ -24,18 +23,16 @@ export type {
   AutoBookmarkLocation,
 } from './types'
 
-export type { SpeedReaderClient } from './interface'
-
 // --- Client ---
 
-let _client: SpeedReaderClient | null = null
+let _client: LocalClient | null = null
 
 export async function initClient(): Promise<void> {
   await ensureSchemaWipe()
   _client = new LocalClient()
 }
 
-function getClient(): SpeedReaderClient {
+function getClient(): LocalClient {
   if (!_client) {
     _client = new LocalClient()
   }
@@ -50,7 +47,7 @@ export function uploadBook(
   file: File,
   onProgress?: (phase: string, percent: number) => void,
 ) {
-  const client = getClient() as LocalClient
+  const client = getClient()
   if (onProgress) client.onUploadProgress = onProgress
   const result = client.uploadBook(file)
   result.finally(() => { client.onUploadProgress = undefined })

@@ -1,7 +1,6 @@
 import { db } from './database'
 import type { DBPublication, DBBookmark } from './database'
 import type { DisplayMode } from '../api/types'
-import type { SpeedReaderClient } from '../api/interface'
 import type {
   Bookmark,
   CreateBookmarkInput,
@@ -143,7 +142,7 @@ async function runParse(
 /** Progress callback for upload/import operations */
 export type UploadProgressCallback = (phase: string, percent: number) => void
 
-export class LocalClient implements SpeedReaderClient {
+export class LocalClient {
   /** Set by the caller before uploadBook() to receive progress updates */
   onUploadProgress?: UploadProgressCallback
 
