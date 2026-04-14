@@ -59,6 +59,14 @@ const MIN_MULTIPLIER = -0.6
 const MAX_MULTIPLIER = 2.5
 const HOLD_THRESHOLD = 0.55
 const PLAY_GRACE_MS = 800
+// Below this raw gaze intensity the target snaps to 1.0 (neutral) so
+// residual classifier noise doesn't feed a non-zero target into the
+// speed-multiplier lerp. The processor's own deadzone handles direction
+// classification; this is a secondary floor on the intensity magnitude.
+const INTENSITY_DEADZONE = 0.04
+// When the lerp's remaining delta to target falls below this, snap
+// the multiplier exactly onto target. Stops float-noise asymptotes.
+const MULTIPLIER_SNAP = 0.002
 const MAX_EFFECTIVE_WPM = 1500
 
 function clampWpm(value: number): number {
@@ -513,29 +521,43 @@ export function usePlaybackController(
         let multiplier = 1.0
         if (isTrack) {
           const gaze = gazeRef.current
-          const elapsedSincePlay = Date.now() - playStartTimeRef.current
+          const elapsedSincePlay = performance.now() - playStartTimeRef.current
           const inGracePeriod = elapsedSincePlay < PLAY_GRACE_MS
+          // Intensity deadzone: gaze.intensity already comes from the
+          // processor with its own classifier-level deadzone, but tiny
+          // residual jitter just above that floor still feeds a non-zero
+          // target which the lerp then chases forever. Treat intensity
+          // below INTENSITY_DEADZONE as neutral to keep the target at 1.0.
+          const intensity = gaze.intensity < INTENSITY_DEADZONE ? 0 : gaze.intensity
           let target = 1.0
           if (inGracePeriod) {
             target = 1.0
-          } else if (gaze.direction === 'down') {
-            target = 1.0 + 1.5 * gaze.intensity
-          } else if (gaze.direction === 'up') {
-            if (gaze.intensity <= HOLD_THRESHOLD) {
-              const holdProgress = gaze.intensity / HOLD_THRESHOLD
+          } else if (gaze.direction === 'down' && intensity > 0) {
+            target = 1.0 + 1.5 * intensity
+          } else if (gaze.direction === 'up' && intensity > 0) {
+            if (intensity <= HOLD_THRESHOLD) {
+              const holdProgress = intensity / HOLD_THRESHOLD
               target = 1.0 - holdProgress
             } else {
               const reverseProgress =
-                (gaze.intensity - HOLD_THRESHOLD) / (1 - HOLD_THRESHOLD)
+                (intensity - HOLD_THRESHOLD) / (1 - HOLD_THRESHOLD)
               target = MIN_MULTIPLIER * reverseProgress
             }
           }
           target = Math.max(MIN_MULTIPLIER, Math.min(MAX_MULTIPLIER, target))
-          const isDecelerating = target < speedMultiplierRef.current
-          const tau = isDecelerating ? 0.45 : 0.30
-          const lerpRate = 1 - Math.exp(-dt / tau)
-          speedMultiplierRef.current +=
-            (target - speedMultiplierRef.current) * lerpRate
+          const delta = target - speedMultiplierRef.current
+          // Hysteresis snap: once within MULTIPLIER_SNAP of target, set
+          // exactly — prevents the exponential lerp from asymptotically
+          // oscillating on float noise (the residual drift is far below
+          // perceptible but pulls on the px/sec integration every frame).
+          if (Math.abs(delta) < MULTIPLIER_SNAP) {
+            speedMultiplierRef.current = target
+          } else {
+            const isDecelerating = delta < 0
+            const tau = isDecelerating ? 0.45 : 0.30
+            const lerpRate = 1 - Math.exp(-dt / tau)
+            speedMultiplierRef.current += delta * lerpRate
+          }
           multiplier = speedMultiplierRef.current
         }
 
@@ -687,7 +709,7 @@ export function usePlaybackController(
     if (mode === 'scroll' || mode === 'track') {
       speedMultiplierRef.current = 1.0
       segCheckCounterRef.current = 0
-      playStartTimeRef.current = Date.now()
+      playStartTimeRef.current = performance.now()
       pxPerSecPerWpmRef.current = 0 // re-cache on next tick
     }
 
@@ -765,7 +787,7 @@ export function usePlaybackController(
     if (mode === 'scroll' || mode === 'track') {
       speedMultiplierRef.current = 1.0
       segCheckCounterRef.current = 0
-      playStartTimeRef.current = Date.now()
+      playStartTimeRef.current = performance.now()
       pxPerSecPerWpmRef.current = 0
       const container = getActiveScrollContainer()
       if (container) scrollPositionRef.current = container.scrollTop
