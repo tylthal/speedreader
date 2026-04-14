@@ -1,5 +1,6 @@
 import type { ReadingMode } from '../types'
 import type { AutoBookmarkLocation } from '../api/types'
+import { safeGetItem, safeSetItem } from './safeStorage'
 
 // ---------------------------------------------------------------------------
 // Reader preferences — wpm + reading_mode stored per-publication in localStorage
@@ -26,9 +27,9 @@ function prefsKey(publicationId: number): string {
 }
 
 export function readStoredPrefs(publicationId: number): StoredReaderPrefs | null {
+  const raw = safeGetItem(prefsKey(publicationId))
+  if (!raw) return null
   try {
-    const raw = localStorage.getItem(prefsKey(publicationId))
-    if (!raw) return null
     return JSON.parse(raw) as StoredReaderPrefs
   } catch {
     return null
@@ -39,11 +40,7 @@ export function writeStoredPrefs(
   publicationId: number,
   prefs: StoredReaderPrefs,
 ): void {
-  try {
-    localStorage.setItem(prefsKey(publicationId), JSON.stringify(prefs))
-  } catch {
-    /* storage full or unavailable */
-  }
+  safeSetItem(prefsKey(publicationId), JSON.stringify(prefs))
 }
 
 // ---------------------------------------------------------------------------
@@ -61,9 +58,9 @@ function positionKey(publicationId: number): string {
 }
 
 export function readStoredPosition(publicationId: number): StoredPositionSnapshot | null {
+  const raw = safeGetItem(positionKey(publicationId))
+  if (!raw) return null
   try {
-    const raw = localStorage.getItem(positionKey(publicationId))
-    if (!raw) return null
     return JSON.parse(raw) as StoredPositionSnapshot
   } catch {
     return null
@@ -74,14 +71,10 @@ export function writeStoredPosition(
   publicationId: number,
   location: AutoBookmarkLocation & { scroll_top?: number },
 ): void {
-  try {
-    localStorage.setItem(
-      positionKey(publicationId),
-      JSON.stringify({ ...location, updated_at: new Date().toISOString() }),
-    )
-  } catch {
-    /* storage full or unavailable */
-  }
+  safeSetItem(
+    positionKey(publicationId),
+    JSON.stringify({ ...location, updated_at: new Date().toISOString() }),
+  )
 }
 
 /**
