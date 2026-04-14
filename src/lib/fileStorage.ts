@@ -3,37 +3,41 @@ import { isNative } from './platform';
 /**
  * Unified file storage facade.
  * Dispatches to @capacitor/filesystem on native, OPFS on web.
- * Uses dynamic imports so native code is never loaded in the browser.
+ * The backend module is resolved once and cached.
  */
 
-export async function storeBookFile(
-  pubId: number,
-  file: File,
-): Promise<void> {
-  if (isNative()) {
-    const { storeBookFile } = await import('./nativeFs');
-    return storeBookFile(pubId, file);
+interface StorageBackend {
+  storeBookFile(pubId: number, file: File): Promise<void>;
+  getBookFile(pubId: number): Promise<File | null>;
+  deleteBookFiles(pubId: number): Promise<void>;
+  storeImage(pubId: number, name: string, blob: Blob): Promise<any>;
+  getImageBlob(pubId: number, name: string): Promise<Blob | null>;
+  storeCover(pubId: number, blob: Blob, ext: string): Promise<string>;
+  getCoverBlob(path: string): Promise<Blob | null>;
+}
+
+let backend: Promise<StorageBackend> | null = null;
+
+function getBackend(): Promise<StorageBackend> {
+  if (!backend) {
+    backend = isNative() ? import('./nativeFs') : import('./opfs');
   }
-  const { storeBookFile } = await import('./opfs');
-  return storeBookFile(pubId, file);
+  return backend;
+}
+
+export async function storeBookFile(pubId: number, file: File): Promise<void> {
+  const b = await getBackend();
+  return b.storeBookFile(pubId, file);
 }
 
 export async function getBookFile(pubId: number): Promise<File | null> {
-  if (isNative()) {
-    const { getBookFile } = await import('./nativeFs');
-    return getBookFile(pubId);
-  }
-  const { getBookFile } = await import('./opfs');
-  return getBookFile(pubId);
+  const b = await getBackend();
+  return b.getBookFile(pubId);
 }
 
 export async function deleteBookFiles(pubId: number): Promise<void> {
-  if (isNative()) {
-    const { deleteBookFiles } = await import('./nativeFs');
-    return deleteBookFiles(pubId);
-  }
-  const { deleteBookFiles } = await import('./opfs');
-  return deleteBookFiles(pubId);
+  const b = await getBackend();
+  return b.deleteBookFiles(pubId);
 }
 
 export type ImageStoreBackend = 'opfs' | 'dexie' | 'native';
@@ -44,24 +48,20 @@ export async function storeImage(
   blob: Blob,
 ): Promise<ImageStoreBackend> {
   if (isNative()) {
-    const { storeImage } = await import('./nativeFs');
-    await storeImage(pubId, name, blob);
+    const b = await getBackend();
+    await b.storeImage(pubId, name, blob);
     return 'native';
   }
-  const { storeImage } = await import('./opfs');
-  return storeImage(pubId, name, blob);
+  const b = await getBackend();
+  return b.storeImage(pubId, name, blob);
 }
 
 export async function getImageBlob(
   pubId: number,
   name: string,
 ): Promise<Blob | null> {
-  if (isNative()) {
-    const { getImageBlob } = await import('./nativeFs');
-    return getImageBlob(pubId, name);
-  }
-  const { getImageBlob } = await import('./opfs');
-  return getImageBlob(pubId, name);
+  const b = await getBackend();
+  return b.getImageBlob(pubId, name);
 }
 
 /**
@@ -101,8 +101,8 @@ export async function getImageBlobWithSource(
   name: string,
 ): Promise<{ blob: Blob | null; source: ImageBlobSource }> {
   if (isNative()) {
-    const { getImageBlob } = await import('./nativeFs');
-    const blob = await getImageBlob(pubId, name);
+    const b = await getBackend();
+    const blob = await b.getImageBlob(pubId, name);
     return { blob, source: blob ? 'native' : 'missing' };
   }
   const { getImageBlobWithSource } = await import('./opfs');
@@ -114,21 +114,13 @@ export async function storeCover(
   blob: Blob,
   ext: string,
 ): Promise<string> {
-  if (isNative()) {
-    const { storeCover } = await import('./nativeFs');
-    return storeCover(pubId, blob, ext);
-  }
-  const { storeCover } = await import('./opfs');
-  return storeCover(pubId, blob, ext);
+  const b = await getBackend();
+  return b.storeCover(pubId, blob, ext);
 }
 
 export async function getCoverBlob(path: string): Promise<Blob | null> {
-  if (isNative()) {
-    const { getCoverBlob } = await import('./nativeFs');
-    return getCoverBlob(path);
-  }
-  const { getCoverBlob } = await import('./opfs');
-  return getCoverBlob(path);
+  const b = await getBackend();
+  return b.getCoverBlob(path);
 }
 
 /** Returns an object URL for a stored cover, or null if not present. */
