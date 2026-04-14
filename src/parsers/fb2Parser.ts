@@ -11,7 +11,7 @@ import type { ParsedBook, ParsedSection, ParsedCover, ParsedImage } from './type
 
 const FB2_NS = 'http://www.gribuser.ru/xml/fictionbook/2.0'
 const XLINK_NS = 'http://www.w3.org/1999/xlink'
-const WHITESPACE_RE = /\s+/g
+import { normalizeWhitespace } from './textUtils'
 
 const EXT_BY_MIME: Record<string, string> = {
   'image/jpeg': '.jpg',
@@ -66,8 +66,8 @@ function getSectionTitle(section: Element): string {
     const t = p.textContent?.trim()
     if (t) parts.push(t)
   }
-  const joined = parts.join(' ').replace(WHITESPACE_RE, ' ').trim()
-  return joined || (titleEl.textContent ?? '').replace(WHITESPACE_RE, ' ').trim()
+  const joined = normalizeWhitespace(parts.join(' '))
+  return joined || normalizeWhitespace(titleEl.textContent ?? '')
 }
 
 /** Recursively serialize an FB2 element into sanitized HTML. */
@@ -206,13 +206,13 @@ export async function parseFb2(data: ArrayBuffer, filename?: string): Promise<Pa
     ).filter((s) => s.parentElement === body)
 
     if (!topSections.length) {
-      const text = elementToText(body, binaries).replace(WHITESPACE_RE, ' ').trim()
+      const text = normalizeWhitespace(elementToText(body, binaries))
       const html = elementToHtml(body, binaries)
       sections.push({ title: 'Untitled', text, html })
     } else {
       for (const sec of topSections) {
         const sectionTitle = getSectionTitle(sec) || 'Untitled'
-        const text = elementToText(sec, binaries).replace(WHITESPACE_RE, ' ').trim()
+        const text = normalizeWhitespace(elementToText(sec, binaries))
         const html = elementToHtml(sec, binaries)
         sections.push({ title: sectionTitle, text, html })
       }

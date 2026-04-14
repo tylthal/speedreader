@@ -5,8 +5,7 @@
 
 import type { ParsedBook, ParsedSection } from './types'
 import { sanitizeDocument } from '../lib/sanitize'
-
-const WHITESPACE_RE = /\s+/g
+import { normalizeWhitespace } from './textUtils'
 
 function firstHeading(doc: Document): string | null {
   for (const tag of ['h1', 'h2', 'h3']) {
@@ -36,7 +35,7 @@ export function parseHtml(data: ArrayBuffer): ParsedBook {
   const author = authorEl?.getAttribute('content')?.trim() || 'Unknown Author'
 
   const body = doc.body ?? doc.documentElement
-  const text = (body.textContent ?? '').replace(WHITESPACE_RE, ' ').trim()
+  const text = normalizeWhitespace(body.textContent ?? '')
   const html = sanitizeDocument(doc)
 
   // PRD §3.2 — section title is NCX/heading/Untitled. For a single-document

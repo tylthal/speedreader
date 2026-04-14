@@ -11,7 +11,7 @@ import mammoth from 'mammoth'
 import type { ParsedBook, ParsedSection, ParsedCover, ParsedImage } from './types'
 import { sanitizeHtml, sanitizeDocument } from '../lib/sanitize'
 
-const WHITESPACE_RE = /\s+/g
+import { normalizeWhitespace } from './textUtils'
 
 const EXT_BY_MIME: Record<string, string> = {
   'image/jpeg': '.jpg',
@@ -63,7 +63,7 @@ export async function parseDocx(data: ArrayBuffer): Promise<ParsedBook> {
   if (firstH1?.textContent?.trim()) title = firstH1.textContent.trim()
 
   const body = doc.body ?? doc.documentElement
-  const text = (body.textContent ?? '').replace(WHITESPACE_RE, ' ').trim()
+  const text = normalizeWhitespace(body.textContent ?? '')
   const sanitized = sanitizeDocument(doc)
   // sanitizeHtml is referenced for tree-shaking discipline; ensure it's used.
   void sanitizeHtml

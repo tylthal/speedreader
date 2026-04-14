@@ -16,8 +16,7 @@
 import JSZip from 'jszip'
 import type { ParsedBook, ParsedSection, ParsedCover, TocNode, ParsedImage } from './types'
 import { sanitizeDocument } from '../lib/sanitize'
-
-const WHITESPACE_RE = /\s+/g
+import { normalizeWhitespace } from './textUtils'
 
 interface ManifestItem {
   id: string
@@ -487,7 +486,7 @@ export async function parseEpub(data: ArrayBuffer): Promise<ParsedBook> {
 
     const headingTitle = firstHeading(htmlDoc)
     const body = htmlDoc.body ?? htmlDoc.documentElement
-    const text = (body.textContent ?? '').replace(WHITESPACE_RE, ' ').trim()
+    const text = normalizeWhitespace(body.textContent ?? '')
     const html = sanitizeDocument(htmlDoc)
 
     spineHrefToSectionIdx.set(item.href, sectionSources.length)

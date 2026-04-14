@@ -17,14 +17,15 @@ import type { ParsedBook, ParsedSection, ParsedCover, TocNode } from './types'
 
 pdfjsLib.GlobalWorkerOptions.workerPort = new PdfWorker()
 
-const WHITESPACE_RE = /\s+/g
+import { normalizeWhitespace } from './textUtils'
+
 const BLANK_LINES_RE = /\n{3,}/g
 
 function normalizeText(text: string): string {
   text = text.replace(BLANK_LINES_RE, '\n\n')
   return text
     .split('\n')
-    .map((line) => line.replace(WHITESPACE_RE, ' ').trim())
+    .map((line) => normalizeWhitespace(line))
     .join('\n')
     .trim()
 }
