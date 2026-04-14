@@ -219,7 +219,13 @@ export function usePlaybackController(
       cancelAnimationFrame(rafRef.current)
       rafRef.current = 0
     }
-  }, [])
+    // Drop any sub-pixel transform offset now that the engine is no
+    // longer writing scrollTop. Leaving it applied would offset every
+    // getBoundingClientRect read inside the column by a fractional
+    // pixel — harmless visually, but makes segment detection and
+    // highlight math slightly off.
+    formattedViewRef.current?.resetSubpixelScroll?.()
+  }, [formattedViewRef])
 
   /** Translate the store's absolute segment index into a loaded array
    *  index. Returns null if the cursor points outside the loaded window. */
@@ -543,7 +549,27 @@ export function usePlaybackController(
           }
           scrollPositionRef.current += effectivePxPerSec * dt
           if (scrollPositionRef.current < 0) scrollPositionRef.current = 0
-          container.scrollTop = Math.floor(scrollPositionRef.current * dpr) / dpr
+
+          // Sub-pixel smoothing for formatted mode. Browsers snap
+          // scrollTop to integer pixels on assignment, producing
+          // visible 1-px stair-stepping at slow track-mode speeds
+          // (< ~1 px/frame). We split the virtual position into an
+          // integer part (written to scrollTop) and a fractional
+          // remainder (applied as translate3d on the inner column).
+          // The transform lives on a compositor layer so per-frame
+          // updates don't touch layout/paint. Plain mode keeps the
+          // original rounded-write behavior since its focus-scroll
+          // container has a different DOM shape.
+          const displayMode = positionStore.getSnapshot().displayMode
+          if (displayMode === 'formatted') {
+            const intended = scrollPositionRef.current
+            const intTop = Math.floor(intended)
+            const frac = intended - intTop
+            container.scrollTop = intTop
+            formattedViewRef.current?.applySubpixelScroll(-frac)
+          } else {
+            container.scrollTop = Math.floor(scrollPositionRef.current * dpr) / dpr
+          }
 
           const maxScroll = container.scrollHeight - container.clientHeight
           const endTolerance = Math.max(2, Math.ceil(dpr))

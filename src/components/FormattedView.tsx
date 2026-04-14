@@ -178,6 +178,15 @@ export interface FormattedViewHandle {
    *  behavior on frame.source instead of threading isPlaying. */
   setScrollSource: (source: 'user' | 'engine' | 'programmatic' | 'restore') => void
   clearScrollSource: () => void
+  /** Apply a sub-pixel vertical offset to the inner content column via
+   *  translate3d. Used by the playback engine to smooth over the integer-
+   *  pixel snapping of `container.scrollTop` during track/scroll mode.
+   *  Caller should pass negative values to move content upward (matches
+   *  the direction of scrollTop advancing). */
+  applySubpixelScroll: (offsetPx: number) => void
+  /** Reset the sub-pixel offset to zero. Called on pause/stop/programmatic
+   *  scroll so subsequent reads of getBoundingClientRect are unambiguous. */
+  resetSubpixelScroll: () => void
 }
 
 const OPFS_SRC_RE = /<img\s[^>]*?src=["']opfs:([^"']+)["']/gi
@@ -401,6 +410,15 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
   visibleRef.current = visible
   const tapHandlers = useContentTap(onTap)
   const containerRef = useRef<HTMLDivElement>(null)
+  // Inner content wrapper. During engine-driven playback, the playback
+  // controller writes the integer part of the virtual scroll position
+  // to `container.scrollTop` and the sub-pixel fractional remainder as
+  // a translate3d on this element. Browsers snap scrollTop to integer
+  // pixels, causing visible 1-px stair-stepping at slow track-mode
+  // speeds; the transform fills the sub-pixel gap on the compositor,
+  // yielding smooth motion. See M1 in docs.
+  const columnRef = useRef<HTMLDivElement>(null)
+  const subpixelOffsetRef = useRef(0)
   // Lazily-created ScrollDriver for this view. One passive scroll
   // listener, one rAF throttle, one FrameRectCache, fan-out to named
   // subscribers. Created on mount by the init effect below.
@@ -989,6 +1007,21 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
     ref,
     () => ({
       getScrollContainer: () => containerRef.current,
+      applySubpixelScroll: (offsetPx: number) => {
+        const el = columnRef.current
+        if (!el) return
+        // Round to 0.05 px to avoid spamming style writes with float
+        // noise; the eye cannot resolve finer than that.
+        const q = Math.round(offsetPx * 20) / 20
+        if (q === subpixelOffsetRef.current) return
+        subpixelOffsetRef.current = q
+        el.style.transform = q === 0 ? '' : `translate3d(0, ${q}px, 0)`
+      },
+      resetSubpixelScroll: () => {
+        const el = columnRef.current
+        subpixelOffsetRef.current = 0
+        if (el) el.style.transform = ''
+      },
       getSectionEl: (idx) => sectionRefs.current.get(idx) ?? null,
       isSectionReady: (idx) => getReadySectionContext(idx) != null,
       rebuildProfile: () => {
@@ -1358,7 +1391,7 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
         imageDiag={imageDiag}
         uploadDiag={uploadDiag}
       />
-      <div className="formatted-view__column">
+      <div className="formatted-view__column" ref={columnRef}>
         {chapters.map((ch, idx) => (
           <article
             key={ch.id}

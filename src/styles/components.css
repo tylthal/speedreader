@@ -457,6 +457,14 @@ html[data-playing] .reader-header {
   transition: none;
 }
 
+/* During engine-driven playback the content column receives a per-frame
+   translate3d with the sub-pixel remainder of the virtual scroll position.
+   Promoting to its own compositor layer keeps those updates off the main
+   paint path. */
+.formatted-view[data-playing="true"] .formatted-view__column {
+  will-change: transform;
+}
+
 /* Hidden formatted view: removed from layout via display:none so the
    GestureLayer (a flex sibling that takes flex:1) gets the full
    available space for the focus overlay during phrase/RSVP playback.
@@ -823,6 +831,26 @@ html[data-playing] .reader-header {
 
 .focus-scroll__spacer {
   flex: 0 0 50vh;
+}
+
+.focus-scroll__chapter {
+  display: contents;
+}
+
+.focus-scroll__chapter-title {
+  flex-shrink: 0;
+  margin: 1.5rem 0 0.5rem;
+  padding: 8px 16px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  text-align: center;
+  border-top: 1px solid color-mix(in srgb, currentColor 12%, transparent);
+  padding-top: 1rem;
+  width: 90%;
+  max-width: 90%;
 }
 
 .focus-scroll__item {
