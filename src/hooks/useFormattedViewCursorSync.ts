@@ -281,8 +281,6 @@ export function useFormattedViewCursorSync({
     const container = handle.getScrollContainer()
     if (!container) return
 
-    let rafScheduled = false
-
     const detectAndUpdate = () => {
       if (handle.isProgrammaticScrollActive()) return
 
@@ -328,19 +326,21 @@ export function useFormattedViewCursorSync({
       )
     }
 
-    const onScroll = () => {
-      if (handle.isProgrammaticScrollActive() || rafScheduled) return
-
-      rafScheduled = true
-      requestAnimationFrame(() => {
-        rafScheduled = false
-        detectAndUpdate()
-      })
-    }
+    // Subscribe to the shared ScrollDriver instead of attaching our own
+    // scroll listener. The driver owns one passive listener + rAF
+    // throttle + FrameRectCache per view, and invokes subscribers with
+    // a ScrollSource tag. Skip frames tagged 'engine' / 'programmatic' /
+    // 'restore' — those aren't user-initiated and shouldn't overwrite
+    // the store cursor.
+    const unsubDriver = handle.subscribeToScroll('cursor-sync', (frame) => {
+      if (frame.source !== 'user') return
+      if (handle.isProgrammaticScrollActive()) return
+      detectAndUpdate()
+    })
 
     // After scroll settles, always update scrollTop to the final value.
-    // The rAF-throttled onScroll may miss the final position if the last
-    // wheel event's rAF captured an intermediate scrollTop.
+    // The rAF-throttled subscriber may miss the final position if the
+    // last wheel event's rAF captured an intermediate scrollTop.
     const onScrollEnd = () => {
       if (handle.isProgrammaticScrollActive()) return
       const snap = positionStore.getSnapshot()
@@ -354,7 +354,6 @@ export function useFormattedViewCursorSync({
       }
     }
 
-    container.addEventListener('scroll', onScroll, { passive: true })
     container.addEventListener('scrollend', onScrollEnd, { passive: true })
 
     // Run detection immediately on mount. Handles the case where the
@@ -372,7 +371,7 @@ export function useFormattedViewCursorSync({
     }
 
     return () => {
-      container.removeEventListener('scroll', onScroll)
+      unsubDriver()
       container.removeEventListener('scrollend', onScrollEnd)
     }
   }, [

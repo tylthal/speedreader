@@ -656,14 +656,40 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
     if (!container) return
 
     const lastHeights = new Map<HTMLElement, number>()
-    let pendingRaf = 0
+    let pendingHandle = 0
+    let pendingIsIdle = false
     let pendingRebuildAfterPause = false
+    // Profile rebuilds are important but never truly urgent — they affect
+    // scroll speed on the NEXT frame, not the current one. Prefer
+    // requestIdleCallback so the rebuild slots into browser idle time
+    // rather than competing with the next paint. Falls back to rAF on
+    // browsers without idle callback (Safari pre-17).
+    const ric = (window as Window & {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number
+      cancelIdleCallback?: (h: number) => void
+    }).requestIdleCallback
+    const cic = (window as Window & {
+      cancelIdleCallback?: (h: number) => void
+    }).cancelIdleCallback
     const scheduleRebuild = () => {
-      if (pendingRaf) return
-      pendingRaf = requestAnimationFrame(() => {
-        pendingRaf = 0
+      if (pendingHandle) return
+      const run = () => {
+        pendingHandle = 0
         rebuildProfileNow()
-      })
+      }
+      if (ric) {
+        pendingIsIdle = true
+        pendingHandle = ric(run, { timeout: 500 })
+      } else {
+        pendingIsIdle = false
+        pendingHandle = requestAnimationFrame(run)
+      }
+    }
+    const cancelPending = () => {
+      if (!pendingHandle) return
+      if (pendingIsIdle && cic) cic(pendingHandle)
+      else if (!pendingIsIdle) cancelAnimationFrame(pendingHandle)
+      pendingHandle = 0
     }
 
     const observer = new ResizeObserver((entries) => {
@@ -688,18 +714,14 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
       scheduleRebuild()
     })
 
-    // When playback stops, drain any deferred rebuild. Uses
-    // requestIdleCallback so the rebuild lands between frames rather
-    // than blocking the first post-pause paint.
+    // When playback stops, drain any deferred rebuild. scheduleRebuild
+    // uses requestIdleCallback internally, so the rebuild lands between
+    // frames rather than blocking the first post-pause paint.
     const onPlaybackChange = () => {
       if (positionStore.getSnapshot().isPlaying) return
       if (!pendingRebuildAfterPause) return
       pendingRebuildAfterPause = false
-      const ric = (window as Window & {
-        requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number
-      }).requestIdleCallback
-      if (ric) ric(() => rebuildProfileNow(), { timeout: 500 })
-      else scheduleRebuild()
+      scheduleRebuild()
     }
     const unsubPlayback = positionStore.subscribe(onPlaybackChange)
 
@@ -708,7 +730,7 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
     }
 
     return () => {
-      if (pendingRaf) cancelAnimationFrame(pendingRaf)
+      cancelPending()
       unsubPlayback()
       observer.disconnect()
     }
