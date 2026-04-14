@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useModalAnimation } from '../hooks/useModalAnimation'
 
 interface BookmarkNameDialogProps {
   defaultName: string
@@ -17,7 +18,7 @@ export default function BookmarkNameDialog({
 }: BookmarkNameDialogProps) {
   const [name, setName] = useState(defaultName)
   const inputRef = useRef<HTMLInputElement>(null)
-  const dialogRef = useRef<HTMLDivElement>(null)
+  const { ref: dialogRef } = useModalAnimation(onCancel, 'bookmark-dialog--visible')
 
   // Auto-focus and select all text on mount
   useEffect(() => {
@@ -27,18 +28,8 @@ export default function BookmarkNameDialog({
         input.focus()
         input.select()
       }
-      dialogRef.current?.classList.add('bookmark-dialog--visible')
     })
   }, [])
-
-  // Escape to cancel
-  useEffect(() => {
-    const handleKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onCancel()
-    }
-    document.addEventListener('keydown', handleKey)
-    return () => document.removeEventListener('keydown', handleKey)
-  }, [onCancel])
 
   const handleSubmit = () => {
     const trimmed = name.trim()

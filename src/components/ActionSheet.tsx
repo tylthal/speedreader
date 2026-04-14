@@ -1,4 +1,5 @@
-import React, { useEffect, useRef } from 'react';
+import React from 'react';
+import { useModalAnimation } from '../hooks/useModalAnimation';
 
 export interface ActionSheetOption {
   label: string;
@@ -15,27 +16,7 @@ interface ActionSheetProps {
 }
 
 export default function ActionSheet({ title, subtitle, options, onClose }: ActionSheetProps) {
-  const sheetRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const handleKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    document.addEventListener('keydown', handleKey);
-    return () => document.removeEventListener('keydown', handleKey);
-  }, [onClose]);
-
-  // Animate in
-  useEffect(() => {
-    requestAnimationFrame(() => {
-      sheetRef.current?.classList.add('action-sheet--visible');
-    });
-  }, []);
-
-  const handleClose = () => {
-    sheetRef.current?.classList.remove('action-sheet--visible');
-    setTimeout(onClose, 200);
-  };
+  const { ref: sheetRef, handleClose } = useModalAnimation(onClose, 'action-sheet--visible');
 
   return (
     <div className="action-sheet__overlay" onClick={handleClose}>
