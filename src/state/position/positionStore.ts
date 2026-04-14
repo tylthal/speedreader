@@ -31,7 +31,8 @@
 // guard. It is NOT used for breaking feedback loops — there are no
 // feedback loops because there is no second copy of position.
 
-import { useSyncExternalStore, useRef } from 'react'
+import { useSyncExternalStore } from 'react'
+import { createSelector } from '../createSelector'
 import {
   initialPositionState,
   type PositionOrigin,
@@ -170,31 +171,7 @@ export const positionStore = {
 /** Subscribe to a slice of the store with equality short-circuiting.
  *  Returns the same reference across renders when the selected slice
  *  is shallowly equal, so consumers can put it directly in effect deps. */
-export function usePositionSelector<T>(
-  selector: (s: PositionState) => T,
-  equalityFn: (a: T, b: T) => boolean = Object.is,
-): T {
-  const lastRef = useRef<T | undefined>(undefined)
-  const lastSnapshotRef = useRef<PositionState | null>(null)
-
-  const getSelected = (): T => {
-    const snapshot = positionStore.getSnapshot()
-    if (
-      lastSnapshotRef.current === snapshot &&
-      lastRef.current !== undefined
-    ) {
-      return lastRef.current
-    }
-    const next = selector(snapshot)
-    if (lastRef.current === undefined || !equalityFn(lastRef.current, next)) {
-      lastRef.current = next
-    }
-    lastSnapshotRef.current = snapshot
-    return lastRef.current!
-  }
-
-  return useSyncExternalStore(positionStore.subscribe, getSelected, getSelected)
-}
+export const usePositionSelector = createSelector(positionStore)
 
 /** Convenience hook for the full state. Re-renders on every commit. */
 export function usePositionState(): PositionState {

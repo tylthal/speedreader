@@ -5,7 +5,8 @@
  * subscriber set, useSyncExternalStore hook for React integration.
  */
 
-import { useSyncExternalStore, useRef } from 'react'
+import { useSyncExternalStore } from 'react'
+import { createSelector } from './createSelector'
 import type { Bookmark, CreateBookmarkInput, AutoBookmarkLocation } from '../api/types'
 import {
   getBookmarks,
@@ -174,25 +175,4 @@ export const bookmarkStore = {
 // React hooks
 // ---------------------------------------------------------------------------
 
-export function useBookmarkSelector<T>(
-  selector: (s: BookmarkStoreState) => T,
-  equalityFn: (a: T, b: T) => boolean = Object.is,
-): T {
-  const lastRef = useRef<T | undefined>(undefined)
-  const lastSnapshotRef = useRef<BookmarkStoreState | null>(null)
-
-  const getSelected = (): T => {
-    const snapshot = bookmarkStore.getSnapshot()
-    if (lastSnapshotRef.current === snapshot && lastRef.current !== undefined) {
-      return lastRef.current
-    }
-    const next = selector(snapshot)
-    if (lastRef.current === undefined || !equalityFn(lastRef.current, next)) {
-      lastRef.current = next
-    }
-    lastSnapshotRef.current = snapshot
-    return lastRef.current!
-  }
-
-  return useSyncExternalStore(bookmarkStore.subscribe, getSelected, getSelected)
-}
+export const useBookmarkSelector = createSelector(bookmarkStore)
