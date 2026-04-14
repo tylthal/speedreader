@@ -1352,9 +1352,9 @@ html[data-playing] .reader-header {
 .controls__strip {
   display: none;
   align-items: center;
-  gap: 12px;
-  min-height: 52px;
-  padding: 10px 14px 6px;
+  gap: 14px;
+  min-height: 72px;
+  padding: 12px 16px 10px;
   width: 100%;
   position: relative;
   cursor: pointer;
@@ -1382,26 +1382,66 @@ html[data-playing] .reader-header {
   transition: width 0.15s linear;
 }
 
-.controls__strip-info {
+/* Center column: mode label + inline speed controls */
+.controls__strip-center {
   flex: 1;
   display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 0.88rem;
-  font-weight: 600;
-  color: var(--text);
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
   min-width: 0;
 }
 
-.controls__strip-separator {
+.controls__strip-mode {
+  font-size: 0.72rem;
+  font-weight: 600;
   color: var(--text-muted);
-  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.controls__strip-speed {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.controls__strip-speed-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--surface-border);
+  border-radius: 50%;
+  background: var(--surface-hover);
+  color: var(--text);
+  font-size: 1rem;
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.1s ease;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+.controls__strip-speed-btn:active {
+  transform: scale(0.9);
+  background: var(--accent-subtle);
 }
 
 .controls__strip-wpm {
+  font-size: 1.4rem;
+  font-weight: 700;
   font-variant-numeric: tabular-nums;
+  color: var(--text);
+  line-height: 1;
+}
+
+.controls__strip-wpm-unit {
+  font-size: 0.65rem;
+  font-weight: 600;
   color: var(--text-muted);
-  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 @keyframes wpmPulse {
@@ -1414,7 +1454,7 @@ html[data-playing] .reader-header {
   animation: wpmPulse 0.3s ease;
 }
 
-/* Face HUD embedded in the strip */
+/* ---------- Face HUD embedded in the strip ---------- */
 .controls__strip-hud {
   flex-shrink: 0;
 }
@@ -1424,33 +1464,34 @@ html[data-playing] .reader-header {
   position: static;
   animation: none;
   opacity: 1;
-  gap: 4px;
+  gap: 5px;
 }
 
 .controls__strip-hud .gaze-hud__camera {
-  width: 40px;
-  height: 40px;
+  width: 52px;
+  height: 52px;
 }
 
 .controls__strip-hud .gaze-hud__bar {
-  height: 40px;
+  height: 52px;
 }
 
 .controls__strip-hud .gaze-hud__bar-track {
-  width: 4px;
+  width: 5px;
 }
 
+/* ---------- Pause button ---------- */
 .controls__strip-pause {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 44px;
-  height: 44px;
+  width: 52px;
+  height: 52px;
   border: none;
   border-radius: 50%;
   background: var(--accent);
   color: #fff;
-  font-size: 1.1rem;
+  font-size: 1.2rem;
   cursor: pointer;
   flex-shrink: 0;
   -webkit-tap-highlight-color: transparent;

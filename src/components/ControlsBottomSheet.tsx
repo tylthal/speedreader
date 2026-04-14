@@ -416,16 +416,33 @@ export default function ControlsBottomSheet({
           </div>
         )}
 
-        <div className="controls__strip-info">
-          <span className="controls__strip-mode">{activeMode.short}</span>
-          <span className="controls__strip-separator" aria-hidden="true">&middot;</span>
-          <span
-            className={`controls__strip-wpm${stripWpmChanged ? ' controls__strip-wpm--changed' : ''}`}
-            aria-live="polite"
-          >
-            {wpm} WPM
-          </span>
+        <div className="controls__strip-center">
+          <span className="controls__strip-mode">{activeMode.label}</span>
+          <div className="controls__strip-speed">
+            <button
+              className="controls__strip-speed-btn"
+              onClick={(e) => { e.stopPropagation(); handleAdjustWpm(-1); }}
+              aria-label="Decrease speed"
+            >
+              &minus;
+            </button>
+            <span
+              className={`controls__strip-wpm${stripWpmChanged ? ' controls__strip-wpm--changed' : ''}`}
+              aria-live="polite"
+            >
+              {wpm}
+            </span>
+            <span className="controls__strip-wpm-unit">WPM</span>
+            <button
+              className="controls__strip-speed-btn"
+              onClick={(e) => { e.stopPropagation(); handleAdjustWpm(1); }}
+              aria-label="Increase speed"
+            >
+              +
+            </button>
+          </div>
         </div>
+
         <button
           className="controls__strip-pause"
           onClick={(e) => { e.stopPropagation(); handleTogglePlay(); }}
