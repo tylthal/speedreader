@@ -39,6 +39,7 @@ import CbzFormattedView from './CbzFormattedView';
 import type { ContentType } from '../api/client';
 import type { VelocityProfile } from '../lib/velocityProfile';
 import { flattenTocLocations } from '../lib/tocLocation';
+import { shallowEqual } from '../lib/shallowEqual';
 import {
   positionStore,
   usePositionSelector,
@@ -167,13 +168,23 @@ function ActiveReader({
   tocTree,
   contentType,
 }: ActiveReaderProps) {
-  const chapterIdx = usePositionSelector((s) => s.chapterIdx);
-  const absoluteSegmentIndex = usePositionSelector((s) => s.absoluteSegmentIndex);
-  const isPlaying = usePositionSelector((s) => s.isPlaying);
-  const wpm = usePositionSelector((s) => s.wpm);
-  const readingMode = usePositionSelector((s) => s.mode);
-  const displayMode = usePositionSelector((s) => s.displayMode);
-  const cursorOrigin = usePositionSelector((s) => s.origin);
+  // Single composite selector — returns a stable reference while the
+  // 7 slice values are shallowly equal. Collapses what used to be 7
+  // independent useSyncExternalStore subscriptions into one, reducing
+  // React-internal subscription churn during playback.
+  const { chapterIdx, absoluteSegmentIndex, isPlaying, wpm, readingMode, displayMode, cursorOrigin } =
+    usePositionSelector(
+      (s) => ({
+        chapterIdx: s.chapterIdx,
+        absoluteSegmentIndex: s.absoluteSegmentIndex,
+        isPlaying: s.isPlaying,
+        wpm: s.wpm,
+        readingMode: s.mode,
+        displayMode: s.displayMode,
+        cursorOrigin: s.origin,
+      }),
+      shallowEqual,
+    );
   // NOTE: We intentionally do NOT subscribe to `revision` here.
   // Revision increments on every positionStore commit, which during
   // scroll/track playback happens on each segment boundary. Subscribing
