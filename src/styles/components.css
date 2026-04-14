@@ -485,6 +485,7 @@ html[data-playing] .reader-header {
 
 .formatted-view__pip {
   position: absolute;
+  top: 0;
   left: 2px;
   width: 10px;
   height: 32px;
@@ -492,7 +493,10 @@ html[data-playing] .reader-header {
   background: var(--accent-subtle);
   border: 1px solid var(--accent);
   opacity: 0.85;
-  transition: top 180ms ease, opacity 140ms ease;
+  /* Y position is driven by transform: translate3d() from JS. Transition
+     on transform so pause-mode pip movement stays smooth. */
+  transition: transform 180ms ease, opacity 140ms ease;
+  will-change: transform;
   pointer-events: auto;
   cursor: pointer;
   touch-action: manipulation;

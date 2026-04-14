@@ -898,7 +898,14 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
     // effectively zero cost during playback. The positionStore.isPlaying
     // mirror on the driver source is the responsibility of the playback
     // controller (it wraps its scroll writes in withSource('engine')).
-    const unsubPip = driver.subscribe('pip', () => updatePipPosition())
+    // Gate on the latched frame.source (matches SCROLL_ARCHITECTURE.md)
+    // as the primary guard, and also on the live driver source inside
+    // updatePipPosition as a belt-and-suspenders for imperative callers
+    // (refreshPipPosition) that bypass the subscriber path.
+    const unsubPip = driver.subscribe('pip', (frame) => {
+      if (frame.source === 'engine') return
+      updatePipPosition()
+    })
 
     // Set initial position now that the container is laid out.
     updatePipPosition()
@@ -1379,7 +1386,10 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
         <div
           className="formatted-view__pip"
           aria-hidden="true"
-          style={{ top: `${pipTop}px` }}
+          // Positioned via transform so repositioning is a compositor-
+          // only operation (no layout). The CSS anchor at top: 0 stays
+          // static; translateY carries the per-scroll pip offset.
+          style={{ transform: `translate3d(0, ${pipTop}px, 0)` }}
           onClick={(e) => {
             e.stopPropagation()
             onPipTap?.()
