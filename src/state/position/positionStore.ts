@@ -60,6 +60,13 @@ function commit(patch: Partial<PositionState>, origin: PositionOrigin): void {
   emit()
 }
 
+/** Bump revision + emit without changing origin. Used by setters (wpm,
+ *  isPlaying) that shouldn't trigger origin-dependent effects. */
+function commitSilent(patch: Partial<PositionState>): void {
+  state = { ...state, ...patch, revision: state.revision + 1 }
+  emit()
+}
+
 /* ------------------------------------------------------------------ */
 /*  Public store API                                                   */
 /* ------------------------------------------------------------------ */
@@ -151,16 +158,12 @@ export const positionStore = {
 
   setWpm(wpm: number): void {
     if (state.wpm === wpm) return
-    // wpm change doesn't bump origin — preserve the prior origin so the
-    // saver/scroll effects don't false-trigger.
-    state = { ...state, wpm, revision: state.revision + 1 }
-    emit()
+    commitSilent({ wpm })
   },
 
   setPlaying(isPlaying: boolean): void {
     if (state.isPlaying === isPlaying) return
-    state = { ...state, isPlaying, revision: state.revision + 1 }
-    emit()
+    commitSilent({ isPlaying })
   },
 }
 
