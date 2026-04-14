@@ -41,7 +41,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Segment } from '../types'
 import type { GazeDirection } from '../lib/gazeProcessor'
-import type { VelocityProfile } from '../lib/velocityProfile'
+import {
+  createLookupCache,
+  getPxPerWeight,
+  type ProfileLookupCache,
+  type VelocityProfile,
+} from '../lib/velocityProfile'
 import { positionStore, usePositionSelector } from '../state/position/positionStore'
 import type { SegmentLoaderTranslators } from './useSegmentLoader'
 import { REFERENCE_LINE_RATIO, type FormattedViewHandle } from '../components/FormattedView'
@@ -207,6 +212,9 @@ export function usePlaybackController(
   const lastScrollCommitTimeRef = useRef(0)
   /** Scroll/track average speed cache (focus mode without velocity profile). */
   const pxPerSecPerWpmRef = useRef(0)
+  /** Adjacency cache for velocity-profile O(1) lookups across ticks. One
+   *  per controller; reset-by-construction on hook mount. */
+  const profileLookupCacheRef = useRef<ProfileLookupCache>(createLookupCache())
   /** Latch flipped true when tick discovers we ran out of loaded segments
    *  mid-play; cleared on pause(), seekToAbs(), or by the prefetch-arrival
    *  effect. While true, the prefetch-arrival effect is allowed to auto-resume. */
@@ -561,7 +569,36 @@ export function usePlaybackController(
           multiplier = speedMultiplierRef.current
         }
 
-        const basePxPerSec = pxPerSecPerWpmRef.current * wpm
+        // Per-tick px/sec. In formatted mode with a velocity profile,
+        // sample `pxPerWeight` at the reference line and derive px/sec
+        // from it — this slows the engine through code blocks, tables,
+        // images, and headings where readers actually need more dwell
+        // time. Outside those weighted blocks `pxPerWeight` equals the
+        // local paragraph's height-per-word, which matches the old
+        // constant-average model to within the blend window. Plain mode
+        // and any formatted path without a profile fall back to the
+        // chapter-average constant.
+        //
+        // pxPerWeight * (wpm / 60) follows from the derivation in
+        // velocityProfile.ts: an element of weight `w` and height `h`
+        // should occupy w / (wpm/60) seconds of scroll.
+        const displayMode = positionStore.getSnapshot().displayMode
+        const profile = velocityProfileRef.current
+        let basePxPerSec = 0
+        if (
+          displayMode === 'formatted' &&
+          profile &&
+          profile.entries.length > 0
+        ) {
+          const centerY =
+            container.scrollTop + container.clientHeight * REFERENCE_LINE_RATIO
+          const ppw = getPxPerWeight(profile, centerY, profileLookupCacheRef.current)
+          if (ppw > 0) basePxPerSec = ppw * (wpm / 60)
+        }
+        // Fallback / plain mode: chapter-average constant.
+        if (basePxPerSec === 0) {
+          basePxPerSec = pxPerSecPerWpmRef.current * wpm
+        }
 
         if (basePxPerSec > 0) {
           let effectivePxPerSec = basePxPerSec * multiplier
@@ -582,7 +619,6 @@ export function usePlaybackController(
           // updates don't touch layout/paint. Plain mode keeps the
           // original rounded-write behavior since its focus-scroll
           // container has a different DOM shape.
-          const displayMode = positionStore.getSnapshot().displayMode
           if (displayMode === 'formatted') {
             const intended = scrollPositionRef.current
             const intTop = Math.floor(intended)
