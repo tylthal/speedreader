@@ -1,18 +1,10 @@
-import { useState, useCallback } from 'react'
+import { useLocalStoragePreference, readStoredPreference } from './useLocalStoragePreference'
 
 export type ChapterFlow = 'continuous' | 'pause'
 
-const STORAGE_KEY = 'speedreader-chapter-flow'
-
-function readStored(): ChapterFlow {
-  try {
-    const v = localStorage.getItem(STORAGE_KEY)
-    if (v === 'continuous' || v === 'pause') return v
-  } catch {
-    /* localStorage unavailable */
-  }
-  return 'continuous'
-}
+const KEY = 'speedreader-chapter-flow'
+const validate = (v: string): ChapterFlow | undefined =>
+  v === 'continuous' || v === 'pause' ? v : undefined
 
 interface UseChapterFlowReturn {
   chapterFlow: ChapterFlow
@@ -21,21 +13,15 @@ interface UseChapterFlowReturn {
 }
 
 export function useChapterFlow(): UseChapterFlowReturn {
-  const [flow, setFlow] = useState<ChapterFlow>(readStored)
-
-  const setChapterFlow = useCallback((next: ChapterFlow) => {
-    setFlow(next)
-    try {
-      localStorage.setItem(STORAGE_KEY, next)
-    } catch {
-      /* localStorage unavailable */
-    }
-  }, [])
-
-  return { chapterFlow: flow, setChapterFlow, stopAtChapterEnd: flow === 'pause' }
+  const [chapterFlow, setChapterFlow] = useLocalStoragePreference<ChapterFlow>(
+    KEY,
+    validate,
+    'continuous',
+  )
+  return { chapterFlow, setChapterFlow, stopAtChapterEnd: chapterFlow === 'pause' }
 }
 
 /** Read chapter flow synchronously, outside of React. */
 export function readChapterFlow(): ChapterFlow {
-  return readStored()
+  return readStoredPreference(KEY, validate, 'continuous')
 }

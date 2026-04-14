@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { readStoredPreference } from './useLocalStoragePreference';
 
 export type Theme = 'light' | 'dark' | 'bedtime' | 'evening' | 'forest' | 'ocean' | 'system';
 export type ResolvedTheme = 'light' | 'dark' | 'bedtime' | 'evening' | 'forest' | 'ocean';
@@ -13,6 +14,9 @@ const STORAGE_KEY = 'speedreader-theme';
 const DARK_MQ = '(prefers-color-scheme: dark)';
 
 const ALL_THEMES: Theme[] = ['system', 'light', 'dark', 'evening', 'bedtime', 'forest', 'ocean'];
+
+const validateTheme = (v: string): Theme | undefined =>
+  ALL_THEMES.includes(v as Theme) ? (v as Theme) : undefined;
 
 function getSystemTheme(): ResolvedTheme {
   if (typeof window === 'undefined') return 'dark';
@@ -52,15 +56,7 @@ function applyTheme(resolved: ResolvedTheme) {
 }
 
 function readStoredTheme(): Theme {
-  try {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored && ALL_THEMES.includes(stored as Theme)) {
-      return stored as Theme;
-    }
-  } catch {
-    // localStorage unavailable
-  }
-  return 'system';
+  return readStoredPreference(STORAGE_KEY, validateTheme, 'system');
 }
 
 export function useTheme(): UseThemeReturn {
