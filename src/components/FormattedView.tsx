@@ -19,6 +19,8 @@ import {
   type RectInContainer,
 } from './formattedView/segmentRangeIndex'
 import { positionStore } from '../state/position/positionStore'
+import { createScrollDriver, type ScrollDriver, type ScrollSubscriber } from '../lib/scrollDriver'
+import type { FrameRectCache } from '../lib/frameRectCache'
 import {
   FormattedViewDiagnostics,
   type ImageDiag,
@@ -161,6 +163,21 @@ export interface FormattedViewHandle {
   endProgrammaticScroll: () => void
   /** True iff a programmatic scroll is currently in flight. */
   isProgrammaticScrollActive: () => boolean
+  /** Subscribe to the shared ScrollDriver — see src/lib/scrollDriver.ts.
+   *  One passive scroll listener per view is owned by the driver; named
+   *  subscribers ('pip', 'cursor-sync', 'diagnostics', ...) are fanned
+   *  out with a shared FrameRectCache per frame. Returns an unsubscribe. */
+  subscribeToScroll: (name: string, fn: ScrollSubscriber) => () => void
+  /** Access the driver's rect cache directly — for imperative call
+   *  sites outside a subscriber frame (e.g. detectAtViewportCenter
+   *  invoked synchronously from a React effect). */
+  getRectCache: () => FrameRectCache | null
+  /** Set/clear the ScrollSource tag. The playback engine calls
+   *  setSource('engine') across its tick loop; auto-scroll wraps its
+   *  scrollTo in withSource('programmatic', ...). Subscribers gate
+   *  behavior on frame.source instead of threading isPlaying. */
+  setScrollSource: (source: 'user' | 'engine' | 'programmatic' | 'restore') => void
+  clearScrollSource: () => void
 }
 
 const OPFS_SRC_RE = /<img\s[^>]*?src=["']opfs:([^"']+)["']/gi
@@ -384,6 +401,10 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
   visibleRef.current = visible
   const tapHandlers = useContentTap(onTap)
   const containerRef = useRef<HTMLDivElement>(null)
+  // Lazily-created ScrollDriver for this view. One passive scroll
+  // listener, one rAF throttle, one FrameRectCache, fan-out to named
+  // subscribers. Created on mount by the init effect below.
+  const scrollDriverRef = useRef<ScrollDriver | null>(null)
   const sectionRefs = useRef<Map<number, HTMLElement>>(new Map())
   // Multi-line highlight rects for the current segment. Each entry
   // represents one visual line of the segment, in scroll-container
@@ -741,8 +762,18 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
   useEffect(() => {
     const container = containerRef.current
     if (!container) return
+
+    // Create the shared ScrollDriver for this view. All scroll listeners
+    // below (pip, cursor-sync via the imperative handle, diagnostics) go
+    // through it. One passive listener, one rAF throttle, one FrameRectCache.
+    const driver = scrollDriverRef.current ?? createScrollDriver(container)
+    scrollDriverRef.current = driver
+
     const updatePipPosition = () => {
-      const containerRect = container.getBoundingClientRect()
+      // During engine-driven playback the pip freezes at its last paused
+      // position by design. Skip this work.
+      if (driver.currentSource() === 'engine') return
+      const containerRect = driver.rectCache().rectOf(container)
       const centerViewportY = containerRect.top + container.clientHeight * REFERENCE_LINE_RATIO
       const centerX = containerRect.left + containerRect.width / 2
       const el = container.ownerDocument.elementFromPoint(centerX, centerViewportY)
@@ -821,35 +852,24 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
     }
     updatePipPositionRef.current = updatePipPosition
 
-    // The listener is only useful while paused — during engine-driven
-    // playback the pip freezes at its last paused position (by design).
-    // Keeping the listener attached at 60 Hz during playback wastes a
-    // JS dispatch per scroll frame even though updatePipPosition early-
-    // returned inside. Attach on pause, detach on play, via a direct
-    // positionStore subscription so this doesn't bounce through React
-    // state.
-    let attached = false
-    const attach = () => {
-      if (attached) return
-      container.addEventListener('scroll', updatePipPosition, { passive: true })
-      attached = true
-    }
-    const detach = () => {
-      if (!attached) return
-      container.removeEventListener('scroll', updatePipPosition)
-      attached = false
-    }
-    const sync = () => {
-      if (positionStore.getSnapshot().isPlaying) detach()
-      else attach()
-    }
-    sync()
-    // Set initial position now that the container is laid out
+    // The PIP updater is a subscriber of the shared ScrollDriver. The
+    // driver owns the scroll listener and rAF throttle; this subscriber
+    // short-circuits when frame.source === 'engine', so there is
+    // effectively zero cost during playback. The positionStore.isPlaying
+    // mirror on the driver source is the responsibility of the playback
+    // controller (it wraps its scroll writes in withSource('engine')).
+    const unsubPip = driver.subscribe('pip', () => updatePipPosition())
+
+    // Set initial position now that the container is laid out.
     updatePipPosition()
-    const unsub = positionStore.subscribe(sync)
+
     return () => {
-      unsub()
-      detach()
+      unsubPip()
+      // Dispose the driver when the effect unmounts (container change).
+      // In practice this effect only runs once — containerRef doesn't
+      // swap elements — but be correct regardless.
+      driver.dispose()
+      scrollDriverRef.current = null
     }
   }, [])
 
@@ -957,11 +977,30 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
       },
       beginProgrammaticScroll: () => {
         isProgrammaticScrollRef.current = true
+        scrollDriverRef.current?.setSource('programmatic')
       },
       endProgrammaticScroll: () => {
         isProgrammaticScrollRef.current = false
+        // Restore 'engine' if playback is still active, otherwise 'user'.
+        const driver = scrollDriverRef.current
+        if (driver) {
+          if (positionStore.getSnapshot().isPlaying) driver.setSource('engine')
+          else driver.clearSource()
+        }
       },
       isProgrammaticScrollActive: () => isProgrammaticScrollRef.current,
+      subscribeToScroll: (name, fn) => {
+        const driver = scrollDriverRef.current
+        if (!driver) return () => {}
+        return driver.subscribe(name, fn)
+      },
+      getRectCache: () => scrollDriverRef.current?.rectCache() ?? null,
+      setScrollSource: (source) => {
+        scrollDriverRef.current?.setSource(source)
+      },
+      clearScrollSource: () => {
+        scrollDriverRef.current?.clearSource()
+      },
       detectAtViewportCenter: (currentSectionIdx, segments) => {
         // Read the line the pip scroll listener found on the last
         // scroll frame. pipViewportY is the exact text line the pip
@@ -1138,7 +1177,7 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
           // Word-accurate path: materialize per-line rects from the
           // live Range. The rects come from getClientRects() so they
           // reflect the current layout (font size, image decode).
-          const rects = materializeRangeRects(range, container)
+          const rects = materializeRangeRects(range, container, scrollDriverRef.current?.rectCache())
           if (rects.length > 0) {
             let topMin = Infinity
             let bottomMax = -Infinity
@@ -1214,10 +1253,11 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
 
         let bestArrIdx: number | null = null
         let bestDistance = Infinity
+        const cache = scrollDriverRef.current?.rectCache()
         for (let i = 0; i < index.length; i++) {
           const range = index[i]
           if (!range) continue
-          const rects = materializeRangeRects(range, container)
+          const rects = materializeRangeRects(range, container, cache)
           if (rects.length === 0) continue
           let topMin = Infinity
           let bottomMax = -Infinity
@@ -1249,12 +1289,13 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
   const uploadDiag = diagEnabled ? readUploadDiag(publicationId) : null
 
   // Mirror positionStore.isPlaying onto a `data-playing` attribute on the
-  // scroll container. CSS uses this to escalate will-change, disable
-  // pointer-events, and switch off scroll-behavior during engine-driven
-  // playback. Subscribing directly to the store (instead of through React
-  // state) keeps this out of the render path — play/pause transitions
-  // are rare but a React state bump would force a re-render of the whole
-  // formatted view tree.
+  // scroll container AND onto the ScrollDriver's source tag. CSS uses
+  // the attribute to escalate will-change, disable pointer-events, and
+  // switch off scroll-behavior during engine-driven playback. The
+  // driver's source tag is how all scroll subscribers gate their work
+  // (pip short-circuits, cursor-sync short-circuits, etc). Subscribing
+  // directly to the store (instead of through React state) keeps this
+  // out of the render path.
   useEffect(() => {
     const container = containerRef.current
     if (!container) return
@@ -1262,6 +1303,11 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
       const playing = positionStore.getSnapshot().isPlaying
       if (playing) container.setAttribute('data-playing', 'true')
       else container.removeAttribute('data-playing')
+      const driver = scrollDriverRef.current
+      if (driver) {
+        if (playing) driver.setSource('engine')
+        else driver.clearSource()
+      }
     }
     apply()
     return positionStore.subscribe(apply)

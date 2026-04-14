@@ -285,10 +285,15 @@ export interface RectInContainer {
 /** Materialize a SegmentRange into one or more rects in the
  *  container's scroll-coordinate system. Returns the per-line rects
  *  from `range.getClientRects()` (one per visual line) so the caller
- *  can render multi-line bands that hug the actual text. */
+ *  can render multi-line bands that hug the actual text.
+ *
+ *  `rectCache` (optional) lets callers share a single container-rect
+ *  read across multiple materializeRangeRects calls in the same frame
+ *  — see src/lib/frameRectCache.ts. */
 export function materializeRangeRects(
   range: SegmentRange,
   container: HTMLElement,
+  rectCache?: { rectOf(el: Element): DOMRect },
 ): RectInContainer[] {
   const r = container.ownerDocument!.createRange()
   try {
@@ -297,7 +302,9 @@ export function materializeRangeRects(
   } catch {
     return []
   }
-  const containerRect = container.getBoundingClientRect()
+  const containerRect = rectCache
+    ? rectCache.rectOf(container)
+    : container.getBoundingClientRect()
   const scrollTop = container.scrollTop
   const scrollLeft = container.scrollLeft
   const rects = r.getClientRects()
