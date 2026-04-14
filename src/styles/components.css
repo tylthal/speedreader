@@ -3221,11 +3221,11 @@ html[data-playing] .reader-header {
 .gaze-hud__camera {
   position: relative;
   width: 72px;
-  height: 54px;
-  border-radius: 8px;
+  height: 72px;
+  border-radius: 50%;
   overflow: hidden;
   background: #000;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.08);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.5), 0 0 0 1.5px rgba(120, 220, 255, 0.3);
 }
 
 .gaze-hud__video {
@@ -3268,7 +3268,7 @@ html[data-playing] .reader-header {
   display: flex;
   align-items: stretch;
   gap: 3px;
-  height: 54px;
+  height: 72px;
 }
 
 .gaze-hud__bar-track {

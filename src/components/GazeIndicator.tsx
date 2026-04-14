@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import type { GazeDirection } from '../lib/gazeProcessor';
 import type { GazeStatus } from '../hooks/useGazeTracker';
-import { syncCanvasSize, drawMirroredVideo, drawFaceLandmarks } from '../lib/drawFaceLandmarks';
+import { drawCroppedFaceVideo, drawFaceLandmarks, transformLandmarksToCrop } from '../lib/drawFaceLandmarks';
 import type { FaceLandmark } from '../hooks/useGazeTracker';
 
 interface GazeIndicatorProps {
@@ -42,23 +42,41 @@ export default function GazeIndicator({ direction, intensity, status, videoRef, 
       const video = videoRef!.current;
       const vc = videoCanvasRef.current;
       const lc = landmarkCanvasRef.current;
+      const landmarks = landmarksRef!.current;
+
+      // Use a fixed canvas size for the small preview (sharper than CSS scaling)
+      const canvasW = 144;
+      const canvasH = 144;
 
       if (video && vc && video.readyState >= 2) {
         const ctx = vc.getContext('2d');
         if (ctx) {
-          const { w, h } = syncCanvasSize(vc, 2);
-          drawMirroredVideo(ctx, video, w, h);
+          if (vc.width !== canvasW) vc.width = canvasW;
+          if (vc.height !== canvasH) vc.height = canvasH;
+          // Draw video cropped to the face region
+          drawCroppedFaceVideo(ctx, video, landmarks, canvasW, canvasH);
         }
       }
 
       if (lc) {
         const ctx = lc.getContext('2d');
         if (ctx) {
-          const { w, h } = syncCanvasSize(lc, 2);
-          ctx.clearRect(0, 0, w, h);
-          const landmarks = landmarksRef!.current;
-          if (landmarks && landmarks.length > 0) {
-            drawFaceLandmarks(ctx, landmarks, w, h);
+          if (lc.width !== canvasW) lc.width = canvasW;
+          if (lc.height !== canvasH) lc.height = canvasH;
+          ctx.clearRect(0, 0, canvasW, canvasH);
+          if (landmarks && landmarks.length > 0 && video) {
+            // Transform landmarks to match the cropped view
+            const result = transformLandmarksToCrop(landmarks, video.videoWidth || 320, video.videoHeight || 240);
+            if (result) {
+              drawFaceLandmarks(ctx, result.landmarks, canvasW, canvasH, {
+                ovalColor: 'rgba(120, 220, 255, 0.7)',
+                eyeColor: 'rgba(120, 220, 255, 0.85)',
+                noseColor: 'rgba(120, 220, 255, 1)',
+                ovalWidth: 2.5,
+                eyeWidth: 2,
+                noseRadius: 5,
+              });
+            }
           }
         }
       }

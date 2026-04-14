@@ -35,6 +35,121 @@ export function drawMirroredVideo(
   ctx.restore()
 }
 
+/**
+ * Compute a face bounding box from landmarks with padding, suitable for
+ * cropping the video to a face close-up.  Returns source rect in video-pixel
+ * coordinates (already mirror-flipped for selfie view) and keeps the crop
+ * square so the preview doesn't distort.
+ */
+export function computeFaceCropRect(
+  landmarks: FaceLandmark[],
+  videoWidth: number,
+  videoHeight: number,
+  padding = 0.35,
+): { sx: number; sy: number; sw: number; sh: number } | null {
+  if (!landmarks || landmarks.length === 0) return null
+
+  // Use face oval landmarks to find the bounding box
+  let minX = 1, maxX = 0, minY = 1, maxY = 0
+  for (const idx of FACE_OVAL) {
+    const lm = landmarks[idx]
+    if (!lm) continue
+    if (lm.x < minX) minX = lm.x
+    if (lm.x > maxX) maxX = lm.x
+    if (lm.y < minY) minY = lm.y
+    if (lm.y > maxY) maxY = lm.y
+  }
+
+  // Expand by padding factor
+  const faceW = maxX - minX
+  const faceH = maxY - minY
+  const padX = faceW * padding
+  const padY = faceH * padding
+
+  let x1 = minX - padX
+  let y1 = minY - padY
+  let x2 = maxX + padX
+  let y2 = maxY + padY
+
+  // Make it square (use the larger dimension)
+  const cropW = x2 - x1
+  const cropH = y2 - y1
+  if (cropW > cropH) {
+    const diff = (cropW - cropH) / 2
+    y1 -= diff
+    y2 += diff
+  } else {
+    const diff = (cropH - cropW) / 2
+    x1 -= diff
+    x2 += diff
+  }
+
+  // Clamp to [0, 1]
+  x1 = Math.max(0, x1)
+  y1 = Math.max(0, y1)
+  x2 = Math.min(1, x2)
+  y2 = Math.min(1, y2)
+
+  // Mirror x for selfie view (landmarks are in non-mirrored space)
+  const sx = (1 - x2) * videoWidth
+  const sy = y1 * videoHeight
+  const sw = (x2 - x1) * videoWidth
+  const sh = (y2 - y1) * videoHeight
+
+  return { sx, sy, sw, sh }
+}
+
+/**
+ * Draw a mirrored video frame cropped to the face region.
+ * Falls back to full-frame if no landmarks available.
+ */
+export function drawCroppedFaceVideo(
+  ctx: CanvasRenderingContext2D,
+  video: HTMLVideoElement,
+  landmarks: FaceLandmark[] | null,
+  w: number,
+  h: number,
+): void {
+  const crop = landmarks ? computeFaceCropRect(landmarks, video.videoWidth, video.videoHeight) : null
+
+  if (crop) {
+    // Draw the cropped region scaled to fill the canvas
+    ctx.drawImage(video, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, w, h)
+  } else {
+    // Fallback: full mirrored frame
+    drawMirroredVideo(ctx, video, w, h)
+  }
+}
+
+/**
+ * Transform landmark coordinates into cropped-face-relative coordinates.
+ * Returns adjusted landmarks array for drawing on a cropped canvas.
+ */
+export function transformLandmarksToCrop(
+  landmarks: FaceLandmark[],
+  videoWidth: number,
+  videoHeight: number,
+): { landmarks: FaceLandmark[]; cropRect: { sx: number; sy: number; sw: number; sh: number } } | null {
+  const crop = computeFaceCropRect(landmarks, videoWidth, videoHeight)
+  if (!crop) return null
+
+  // Convert each landmark to cropped coordinates
+  // Landmarks are in normalized [0,1] video space, mirrored x = (1 - lm.x)
+  const transformed = landmarks.map(lm => {
+    const mirroredX = (1 - lm.x) * videoWidth
+    const pixelY = lm.y * videoHeight
+    return {
+      // Convert back to normalized coords relative to the crop rect
+      // But we need to un-mirror since drawFaceLandmarks will re-mirror
+      x: 1 - ((mirroredX - crop.sx) / crop.sw),
+      y: (pixelY - crop.sy) / crop.sh,
+      z: lm.z,
+    }
+  })
+
+  return { landmarks: transformed, cropRect: crop }
+}
+
 interface DrawLandmarksOptions {
   ovalColor?: string
   eyeColor?: string
