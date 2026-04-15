@@ -445,6 +445,7 @@ export class LocalClient {
           publication_id: c.publication_id,
           chapter_index: c.chapter_index,
           title: c.title,
+          segment_count: c.segment_count,
           html: c.html ?? null,
           meta,
         }

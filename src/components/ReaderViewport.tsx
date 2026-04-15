@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useAnnounce } from '../hooks/useAnnounce';
 import { useHaptics } from '../hooks/useHaptics';
 import { useSegmentLoader } from '../hooks/useSegmentLoader';
+import { useAllChapterSegments } from '../hooks/useAllChapterSegments';
 import { usePlaybackController } from '../hooks/usePlaybackController';
 import { useGazeTracker } from '../hooks/useGazeTracker';
 import { useProgressSaver } from '../hooks/useProgressSaver';
@@ -242,11 +243,32 @@ function ActiveReader({
   const currentChapter = chapters[chapterIdx] ?? chapters[0] ?? null;
   const currentChapterId = currentChapter?.id ?? 0;
 
+  const isPdfBook =
+    !isImageBook &&
+    chapters.length > 0 &&
+    chapters[0].meta != null &&
+    typeof (chapters[0].meta as Record<string, unknown>).startPage === 'number';
+
   /* ---- Segment loader (with translators) ---- */
   const [loaderState, translators] = useSegmentLoader({
     publicationId,
     chapterId: currentChapterId,
   });
+
+  /* ---- All-chapter segments (plain mode, paused only) ----
+     Plain mode's paused scroll view renders the whole book so users can
+     scroll continuously across chapters, mirroring what FormattedView
+     does via chapters.map. We only load this when it'll actually be
+     used: displayMode === 'plain' && !isPlaying && !image/pdf. Playing
+     mode keeps its per-chapter loader — the engine auto-advances
+     chapters on its own. */
+  const allChaptersEnabled =
+    displayMode === 'plain' && !isPlaying && !isImageBook && !isPdfBook;
+  const allChaptersState = useAllChapterSegments(
+    publicationId,
+    chapters,
+    allChaptersEnabled,
+  );
 
   useEffect(() => {
     if (loaderState.segments.length > 0) {
@@ -618,22 +640,69 @@ function ActiveReader({
   const hasLastOpened = useBookmarkSelector((s) => s.lastOpened !== null);
   const hasFarthestRead = useBookmarkSelector((s) => s.farthestRead !== null);
 
+  /* ---- Book-wide progress: chapter offsets + totals ----
+     The progress bar, bookmark markers, and scrub-seek all operate on
+     whole-book fractions. We precompute a prefix-sum of segment_count
+     across chapters so bookmark-chapter-idx → book-absolute index is a
+     constant-time lookup, and book-fraction → (chapterIdx, inChapterAbs)
+     is a linear scan over the (small) chapters array. */
+  const { chapterOffsets, bookTotalSegments } = useMemo(() => {
+    const offsets: number[] = new Array(chapters.length);
+    let acc = 0;
+    for (let i = 0; i < chapters.length; i++) {
+      offsets[i] = acc;
+      acc += chapters[i].segment_count ?? 0;
+    }
+    return { chapterOffsets: offsets, bookTotalSegments: acc };
+  }, [chapters]);
+
+  const bookProgress = useMemo(() => {
+    if (bookTotalSegments <= 0) return 0;
+    const offset = chapterOffsets[chapterIdx] ?? 0;
+    const globalIdx = offset + absoluteSegmentIndex;
+    return Math.min(1, globalIdx / bookTotalSegments);
+  }, [chapterOffsets, bookTotalSegments, chapterIdx, absoluteSegmentIndex]);
+
   const lastOpenedProgress = useBookmarkSelector((s) => {
     const b = s.lastOpened;
-    if (!b || loaderState.totalSegments <= 0) return undefined;
-    return b.absolute_segment_index / loaderState.totalSegments;
+    if (!b || bookTotalSegments <= 0) return undefined;
+    const offset = chapterOffsets[b.chapter_idx] ?? 0;
+    return Math.min(1, (offset + b.absolute_segment_index) / bookTotalSegments);
   });
   const farthestReadProgress = useBookmarkSelector((s) => {
     const b = s.farthestRead;
-    if (!b || loaderState.totalSegments <= 0) return undefined;
-    return b.absolute_segment_index / loaderState.totalSegments;
+    if (!b || bookTotalSegments <= 0) return undefined;
+    const offset = chapterOffsets[b.chapter_idx] ?? 0;
+    return Math.min(1, (offset + b.absolute_segment_index) / bookTotalSegments);
   });
 
   const handleProgressSeek = useCallback((fraction: number) => {
-    const total = loaderState.totalSegments > 0 ? loaderState.totalSegments : loaderState.segments.length;
-    const targetAbs = Math.round(fraction * total);
-    controller.seekToAbs(targetAbs);
-  }, [loaderState.totalSegments, loaderState.segments.length, controller]);
+    if (bookTotalSegments <= 0) return;
+    const target = Math.min(
+      bookTotalSegments - 1,
+      Math.max(0, Math.round(fraction * bookTotalSegments)),
+    );
+    // Find the chapter whose offset range contains `target`.
+    let targetChapterIdx = 0;
+    for (let i = chapters.length - 1; i >= 0; i--) {
+      if (chapterOffsets[i] <= target) { targetChapterIdx = i; break; }
+    }
+    const inChapter = target - chapterOffsets[targetChapterIdx];
+    if (targetChapterIdx === chapterIdx) {
+      controller.seekToAbs(inChapter);
+      return;
+    }
+    controller.pause();
+    positionStore.setPosition(
+      {
+        chapterId: chapters[targetChapterIdx].id,
+        chapterIdx: targetChapterIdx,
+        absoluteSegmentIndex: inChapter,
+        wordIndex: 0,
+      },
+      'toc',
+    );
+  }, [chapters, chapterOffsets, bookTotalSegments, chapterIdx, controller]);
 
   const handleJumpLastOpened = useCallback(() => {
     const b = bookmarkStore.getSnapshot().lastOpened;
@@ -834,6 +903,32 @@ function ActiveReader({
     [controller, translators],
   );
 
+  /* ---- Cross-chapter seek (plain-mode paused scroll) ----
+     When the user taps or scroll-lands on a segment in a different
+     chapter, switch chapters and set the absolute segment index in one
+     positionStore commit. Mirrors useTocNavigation's navigateToSection
+     but targets a specific segment rather than the chapter start. */
+  const seekToChapterAndAbs = useCallback(
+    (targetChapterIdx: number, absoluteSegmentIndex: number) => {
+      if (targetChapterIdx < 0 || targetChapterIdx >= chapters.length) return;
+      if (targetChapterIdx === chapterIdx) {
+        controller.seekToAbs(absoluteSegmentIndex);
+        return;
+      }
+      controller.pause();
+      positionStore.setPosition(
+        {
+          chapterId: chapters[targetChapterIdx].id,
+          chapterIdx: targetChapterIdx,
+          absoluteSegmentIndex,
+          wordIndex: 0,
+        },
+        'toc',
+      );
+    },
+    [chapters, chapterIdx, controller],
+  );
+
   useKeyboardHandling({
     onTogglePlay: userTogglePlayPause,
     onSpeedUp: useCallback(() => controller.adjustWpm(1), [controller]),
@@ -854,21 +949,21 @@ function ActiveReader({
   }, [isPlaying]);
 
   /* ---- Render ---- */
-  const isPdfBook =
-    !isImageBook &&
-    chapters.length > 0 &&
-    chapters[0].meta != null &&
-    typeof (chapters[0].meta as Record<string, unknown>).startPage === 'number';
 
   // RSVP display values come from the controller (live word ticks at
   // 4-12 Hz, isolated re-render).
   const rsvpWord = controller.rsvpWord;
   const rsvpOrpIndex = controller.rsvpOrpIndex;
-  const progress = useDerivedProgress(
+  // Book-wide progress fraction. `bookProgress` is computed above from the
+  // chapter-offset prefix sum; fall back to chapter-local derivation when
+  // chapters haven't reported segment_count (shouldn't happen post-upload,
+  // but keeps the bar sensible if the field is 0).
+  const chapterLocalProgress = useDerivedProgress(
     activeArrayIdx,
     loaderState.segments,
     loaderState.totalSegments,
   );
+  const progress = bookTotalSegments > 0 ? bookProgress : chapterLocalProgress;
 
   // Derive the header subtitle from the active TOC key so it always
   // matches the TOC highlight. Falls back to the chapter title when
@@ -1026,6 +1121,10 @@ function ActiveReader({
               onSeek={seekToArr}
               scrollContainerRef={focusContainerRef}
               scrollItemRefs={focusItemRefsMap}
+              allChapters={allChaptersState.chapters}
+              currentChapterIdx={chapterIdx}
+              currentAbsoluteIndex={absoluteSegmentIndex}
+              onCrossChapterSeek={seekToChapterAndAbs}
             />
           </GestureLayer>
           )}
@@ -1112,7 +1211,7 @@ function ActiveReader({
         lastOpenedProgress={lastOpenedProgress}
         farthestReadProgress={farthestReadProgress}
         onSeek={handleProgressSeek}
-        totalSegments={loaderState.totalSegments}
+        totalSegments={bookTotalSegments > 0 ? bookTotalSegments : loaderState.totalSegments}
         gazeDirection={gazeState.direction}
         gazeIntensity={gazeState.intensity}
         gazeStatus={readingMode === 'track' ? gazeState.status : undefined}

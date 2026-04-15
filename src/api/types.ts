@@ -51,6 +51,9 @@ export interface Chapter {
   publication_id: number
   chapter_index: number
   title: string
+  /** Number of segments/pages in this chapter — used to compute book-wide
+   *  progress offsets. Matches DBChapter.segment_count. */
+  segment_count: number
   /** Sanitized HTML for the formatted view (PRD §4.3). Empty for PDF/CBZ. */
   html?: string | null
   /** Format-specific metadata (e.g. PDF page range). */
