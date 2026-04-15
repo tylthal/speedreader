@@ -126,6 +126,20 @@ export interface FormattedViewHandle {
   getSectionEl: (idx: number) => HTMLElement | null
   isSectionReady: (idx: number) => boolean
   rebuildProfile: () => void
+  /** Programmatic navigation seam. Call before committing a
+   *  programmatic position change (TOC click, chapter-nav, bookmark,
+   *  user-seek, restore). Bumps the navigation generation counter and
+   *  nulls pipBlockRef so any in-flight "detect on mount" rAF in Effect 3
+   *  either aborts (nav-gen check) or refuses to match (null pip block).
+   *  Without this, the rAF could feed a stale pre-navigation chapter
+   *  through onPipSectionChange and revert the commit. */
+  beginProgrammaticNavigation: () => void
+  /** Monotonic counter bumped by beginProgrammaticNavigation and by any
+   *  out-of-band currentSectionIndex change. Effect 3 captures this at
+   *  effect-mount time and re-reads it in the rAF; mismatch means
+   *  navigation happened between mount and rAF and the on-mount detect
+   *  must be skipped. */
+  getNavigationGeneration: () => number
   settleImages: (sectionIdx: number) => Promise<void>
   /** Highlight a single segment. See setHighlightForSegment docstring. */
   setHighlightForSegment: (
@@ -419,6 +433,14 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
   // yielding smooth motion. See M1 in docs.
   const columnRef = useRef<HTMLDivElement>(null)
   const subpixelOffsetRef = useRef(0)
+  // Monotonic navigation generation counter. Bumped by
+  // beginProgrammaticNavigation() and by an effect watching
+  // currentSectionIndex. Effect 3 in useFormattedViewCursorSync reads
+  // this at mount-time and re-reads it inside its rAF to detect that
+  // navigation has happened in between (in which case the on-mount
+  // detect must abort, or it would feed a stale pre-nav chapter back
+  // through onPipSectionChange).
+  const navGenRef = useRef(0)
   // Lazily-created ScrollDriver for this view. One passive scroll
   // listener, one rAF throttle, one FrameRectCache, fan-out to named
   // subscribers. Created on mount by the init effect below.
@@ -763,6 +785,16 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
   // local short-circuit avoids the dispatch entirely.
   const lastReportedIdxRef = useRef<number>(currentSectionIndex)
 
+  // Out-of-band chapter changes (cold-start restore, engine-driven chapter
+  // advance) also need to invalidate the stale pip block and bump nav-gen
+  // so Effect 3's on-mount detect doesn't read yesterday's data. The
+  // beginProgrammaticNavigation() seam covers the six deliberate call
+  // sites; this covers everything else.
+  useEffect(() => {
+    navGenRef.current++
+    pipBlockRef.current = null
+  }, [currentSectionIndex])
+
   // Stabilize the parent's onVisibleSectionChange callback in a ref so the
   // IntersectionObserver effect below doesn't re-create the observer every
   // time the parent re-renders (which happens on every scroll because
@@ -1034,6 +1066,11 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
       rebuildProfile: () => {
         rebuildProfileNow()
       },
+      beginProgrammaticNavigation: () => {
+        navGenRef.current++
+        pipBlockRef.current = null
+      },
+      getNavigationGeneration: () => navGenRef.current,
       refreshPipPosition: () => {
         updatePipPositionRef.current()
       },

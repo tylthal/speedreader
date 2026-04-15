@@ -13,6 +13,7 @@ import { useChapterFlow } from '../hooks/useChapterFlow';
 import {
   useTocNavigation,
 } from '../hooks/useTocNavigation';
+import { useNavigateToPosition } from '../hooks/useNavigateToPosition';
 import { useFormattedViewCursorSync } from '../hooks/useFormattedViewCursorSync';
 import { useReaderInitialization } from '../hooks/useReaderInitialization';
 import { Link, useNavigate } from 'react-router-dom';
@@ -688,45 +689,34 @@ function ActiveReader({
       if (chapterOffsets[i] <= target) { targetChapterIdx = i; break; }
     }
     const inChapter = target - chapterOffsets[targetChapterIdx];
-    if (targetChapterIdx === chapterIdx) {
-      controller.seekToAbs(inChapter);
-      return;
-    }
-    controller.pause();
-    positionStore.setPosition(
-      {
-        chapterId: chapters[targetChapterIdx].id,
-        chapterIdx: targetChapterIdx,
-        absoluteSegmentIndex: inChapter,
-        wordIndex: 0,
-      },
-      'toc',
-    );
-  }, [chapters, chapterOffsets, bookTotalSegments, chapterIdx, controller]);
+    navigateToPosition({
+      chapterIdx: targetChapterIdx,
+      absoluteSegmentIndex: inChapter,
+      origin: 'user-seek',
+    });
+  }, [chapters.length, chapterOffsets, bookTotalSegments, navigateToPosition]);
 
   const handleJumpLastOpened = useCallback(() => {
     const b = bookmarkStore.getSnapshot().lastOpened;
     if (!b) return;
-    controller.pause();
-    positionStore.setPosition({
-      chapterId: b.chapter_id,
+    navigateToPosition({
       chapterIdx: b.chapter_idx,
       absoluteSegmentIndex: b.absolute_segment_index,
       wordIndex: b.word_index,
-    }, 'bookmark');
-  }, [controller]);
+      origin: 'bookmark',
+    });
+  }, [navigateToPosition]);
 
   const handleJumpFarthestRead = useCallback(() => {
     const b = bookmarkStore.getSnapshot().farthestRead;
     if (!b) return;
-    controller.pause();
-    positionStore.setPosition({
-      chapterId: b.chapter_id,
+    navigateToPosition({
       chapterIdx: b.chapter_idx,
       absoluteSegmentIndex: b.absolute_segment_index,
       wordIndex: b.word_index,
-    }, 'bookmark');
-  }, [controller]);
+      origin: 'bookmark',
+    });
+  }, [navigateToPosition]);
 
   /* ---- PIP tap → bookmark menu ---- */
   const [pipMenuOpen, setPipMenuOpen] = useState(false);
@@ -779,14 +769,13 @@ function ActiveReader({
     absoluteSegmentIndex: number
     wordIndex: number
   }) => {
-    controller.pause();
-    positionStore.setPosition({
-      chapterId: position.chapterId,
+    navigateToPosition({
       chapterIdx: position.chapterIdx,
       absoluteSegmentIndex: position.absoluteSegmentIndex,
       wordIndex: position.wordIndex,
-    }, 'bookmark');
-  }, [controller]);
+      origin: 'bookmark',
+    });
+  }, [navigateToPosition]);
 
   /* ---- Chapter announcements ---- */
   useEffect(() => {
@@ -797,19 +786,18 @@ function ActiveReader({
 
   /* ---- Chapter navigation (TOC, prev/next) ---- */
   const {
-    navigateToSection,
     pendingTocTargetRef,
     clearPendingTocTarget,
     navigationRevision,
-  } = useTocNavigation({
+    bumpNavigationRevision,
+  } = useTocNavigation();
+
+  const { navigateToPosition } = useNavigateToPosition({
     chapters,
     controller,
-    chapterIdx,
-    absoluteSegmentIndex,
-    layoutVersion,
-    segments: loaderState.segments,
-    translators,
     formattedViewRef,
+    pendingTocTargetRef,
+    bumpNavigationRevision,
   });
 
   // NOTE: there used to be a separate "scroll-section-into-view on
@@ -883,12 +871,16 @@ function ActiveReader({
   });
 
   const handlePrevChapter = useCallback(() => {
-    if (chapterIdx > 0) navigateToSection(chapterIdx - 1);
-  }, [chapterIdx, navigateToSection]);
+    if (chapterIdx > 0) {
+      navigateToPosition({ chapterIdx: chapterIdx - 1, origin: 'chapter-nav' });
+    }
+  }, [chapterIdx, navigateToPosition]);
 
   const handleNextChapter = useCallback(() => {
-    if (chapterIdx < chapters.length - 1) navigateToSection(chapterIdx + 1);
-  }, [chapterIdx, chapters.length, navigateToSection]);
+    if (chapterIdx < chapters.length - 1) {
+      navigateToPosition({ chapterIdx: chapterIdx + 1, origin: 'chapter-nav' });
+    }
+  }, [chapterIdx, chapters.length, navigateToPosition]);
 
   /* ---- Orientation resilience ---- */
   useOrientationResilience();
@@ -901,32 +893,6 @@ function ActiveReader({
       controller.seekToAbs(abs);
     },
     [controller, translators],
-  );
-
-  /* ---- Cross-chapter seek (plain-mode paused scroll) ----
-     When the user taps or scroll-lands on a segment in a different
-     chapter, switch chapters and set the absolute segment index in one
-     positionStore commit. Mirrors useTocNavigation's navigateToSection
-     but targets a specific segment rather than the chapter start. */
-  const seekToChapterAndAbs = useCallback(
-    (targetChapterIdx: number, absoluteSegmentIndex: number) => {
-      if (targetChapterIdx < 0 || targetChapterIdx >= chapters.length) return;
-      if (targetChapterIdx === chapterIdx) {
-        controller.seekToAbs(absoluteSegmentIndex);
-        return;
-      }
-      controller.pause();
-      positionStore.setPosition(
-        {
-          chapterId: chapters[targetChapterIdx].id,
-          chapterIdx: targetChapterIdx,
-          absoluteSegmentIndex,
-          wordIndex: 0,
-        },
-        'toc',
-      );
-    },
-    [chapters, chapterIdx, controller],
   );
 
   useKeyboardHandling({
@@ -1013,7 +979,7 @@ function ActiveReader({
             sectionIndex: idx,
             htmlAnchor: htmlAnchor ?? null,
           });
-          navigateToSection(idx, htmlAnchor);
+          navigateToPosition({ chapterIdx: idx, htmlAnchor, origin: 'toc' });
         }}
         onClose={() => setTocOpen(false)}
       />
@@ -1124,7 +1090,13 @@ function ActiveReader({
               allChapters={allChaptersState.chapters}
               currentChapterIdx={chapterIdx}
               currentAbsoluteIndex={absoluteSegmentIndex}
-              onCrossChapterSeek={seekToChapterAndAbs}
+              onCrossChapterSeek={(targetChapterIdx, absoluteSegmentIndex) =>
+                navigateToPosition({
+                  chapterIdx: targetChapterIdx,
+                  absoluteSegmentIndex,
+                  origin: 'user-seek',
+                })
+              }
             />
           </GestureLayer>
           )}
@@ -1211,7 +1183,6 @@ function ActiveReader({
         lastOpenedProgress={lastOpenedProgress}
         farthestReadProgress={farthestReadProgress}
         onSeek={handleProgressSeek}
-        totalSegments={bookTotalSegments > 0 ? bookTotalSegments : loaderState.totalSegments}
         gazeDirection={gazeState.direction}
         gazeIntensity={gazeState.intensity}
         gazeStatus={readingMode === 'track' ? gazeState.status : undefined}

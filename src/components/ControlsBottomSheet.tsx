@@ -27,8 +27,6 @@ interface ControlsBottomSheetProps {
   farthestReadProgress?: number;
   /** Callback when the user scrubs the progress bar. Receives 0-1 fraction. */
   onSeek?: (progress: number) => void;
-  /** Total segment count across all chapters — used for "~N min left". */
-  totalSegments?: number;
   // Legacy boolean props (kept for backwards compat, ignored if progress fractions provided)
   hasLastOpened?: boolean;
   hasFarthestRead?: boolean;
@@ -66,7 +64,6 @@ export default function ControlsBottomSheet({
   lastOpenedProgress,
   farthestReadProgress,
   onSeek,
-  totalSegments,
   gazeDirection,
   gazeIntensity,
   gazeStatus,
@@ -193,16 +190,6 @@ export default function ControlsBottomSheet({
     speedCountRef.current = 0;
   }, []);
 
-  // ── Time remaining ──
-  const timeRemaining = totalSegments && totalSegments > 0
-    ? Math.round(((1 - progress) * totalSegments) / (wpm / 60))
-    : null;
-  const timeLabel = timeRemaining !== null
-    ? timeRemaining >= 60
-      ? `~${Math.round(timeRemaining / 60)} min left`
-      : `~${timeRemaining}s left`
-    : null;
-
   // ── Strip expand ──
   const handleStripTap = useCallback((e: React.MouseEvent) => {
     // Don't expand if tapping the pause button
@@ -266,7 +253,7 @@ export default function ControlsBottomSheet({
         <span className="controls__progress-label">
           {isScrubbing
             ? `${Math.round(scrubProgress * 100)}%`
-            : timeLabel ?? `${Math.round(progress * 100)}%`}
+            : `${Math.round(progress * 100)}%`}
         </span>
       </div>
 

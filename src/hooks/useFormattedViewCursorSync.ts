@@ -149,6 +149,14 @@ export function useFormattedViewCursorSync({
 
         if (resolvedTocTarget) {
           if (resolvedTocTarget.absoluteSegmentIndex != null) {
+            // Intentionally bypasses the useNavigateToPosition seam:
+            // routing this through navigateToPosition would call
+            // beginProgrammaticNavigation() again, bumping nav-gen and
+            // creating a feedback loop where this effect would re-run,
+            // its own tryScroll rAF would see the fresh nav-gen and the
+            // scroll about to be issued below would be cancelled. We're
+            // already inside the scroll path for this nav — just refine
+            // the committed position in place.
             positionStore.setPosition(
               {
                 absoluteSegmentIndex: resolvedTocTarget.absoluteSegmentIndex,
@@ -361,14 +369,21 @@ export function useFormattedViewCursorSync({
     // scroll — by the time this effect re-runs with the new chapterIdx,
     // no further scroll events fire, so we must detect once now.
     //
-    // SKIP during restore: the position in the store is authoritative.
-    // Effect 2 will scroll to it. Running detection now would detect
-    // whatever segment is visible BEFORE Effect 2 scrolls, overwrite the
-    // restored position, and bump revision — enabling the saver to write
-    // the wrong position. Only detect on actual user scroll events.
-    if (positionStore.getSnapshot().origin !== 'restore') {
-      requestAnimationFrame(detectAndUpdate)
-    }
+    // Structural guard: capture the navigation generation at mount time
+    // and re-check inside the rAF. If anything bumped nav-gen in between
+    // (TOC click, chapter-nav, bookmark jump, user-seek, restore, or an
+    // out-of-band currentSectionIndex change), the committed position is
+    // already authoritative and Effect 2 is about to scroll to it —
+    // running detection now would read the stale pipBlockRef (which is
+    // only refreshed by scroll events) and feed the OLD chapter back
+    // through onPipSectionChange, reverting the navigation via a
+    // 'user-scroll' commit. Bail in that case.
+    const navGenAtMount = formattedViewRef.current?.getNavigationGeneration() ?? 0
+    requestAnimationFrame(() => {
+      if (formattedViewRef.current?.getNavigationGeneration() !== navGenAtMount) return
+      if (handle.isProgrammaticScrollActive()) return
+      detectAndUpdate()
+    })
 
     return () => {
       unsubDriver()
