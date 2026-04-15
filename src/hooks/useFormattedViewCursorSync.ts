@@ -369,21 +369,28 @@ export function useFormattedViewCursorSync({
     // scroll — by the time this effect re-runs with the new chapterIdx,
     // no further scroll events fire, so we must detect once now.
     //
-    // Structural guard: capture the navigation generation at mount time
-    // and re-check inside the rAF. If anything bumped nav-gen in between
-    // (TOC click, chapter-nav, bookmark jump, user-seek, restore, or an
-    // out-of-band currentSectionIndex change), the committed position is
-    // already authoritative and Effect 2 is about to scroll to it —
-    // running detection now would read the stale pipBlockRef (which is
-    // only refreshed by scroll events) and feed the OLD chapter back
-    // through onPipSectionChange, reverting the navigation via a
-    // 'user-scroll' commit. Bail in that case.
-    const navGenAtMount = formattedViewRef.current?.getNavigationGeneration() ?? 0
-    requestAnimationFrame(() => {
-      if (formattedViewRef.current?.getNavigationGeneration() !== navGenAtMount) return
-      if (handle.isProgrammaticScrollActive()) return
-      detectAndUpdate()
-    })
+    // Two guards:
+    //   (a) origin === 'restore' — Effect 2 is about to scroll to the
+    //       saved position, but the init-effect's updatePipPosition()
+    //       already populated pipBlockRef from scrollTop=0 (pointing at
+    //       chapter 0). Detecting now would see sectionIdx=0 != the
+    //       restored chapterIdx and call onPipSectionChange(0), which
+    //       commits chapter 0 via 'user-scroll' and silently reverts the
+    //       restore. Nav-gen guard (below) does NOT cover this because
+    //       restore never calls beginProgrammaticNavigation().
+    //   (b) nav-gen changed between effect mount and rAF firing — covers
+    //       deliberate programmatic navigation (TOC, chapter-nav,
+    //       bookmark, user-seek, or an out-of-band currentSectionIndex
+    //       change) where Effect 2 is authoritative for where we're
+    //       going.
+    if (positionStore.getSnapshot().origin !== 'restore') {
+      const navGenAtMount = formattedViewRef.current?.getNavigationGeneration() ?? 0
+      requestAnimationFrame(() => {
+        if (formattedViewRef.current?.getNavigationGeneration() !== navGenAtMount) return
+        if (handle.isProgrammaticScrollActive()) return
+        detectAndUpdate()
+      })
+    }
 
     return () => {
       unsubDriver()
