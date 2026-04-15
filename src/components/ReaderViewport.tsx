@@ -677,6 +677,24 @@ function ActiveReader({
     return Math.min(1, (offset + b.absolute_segment_index) / bookTotalSegments);
   });
 
+  /* ---- Navigation seam (TOC, bookmark, prev/next, progress scrub) ----
+     Declared up here because the progress / bookmark / jump handlers
+     below close over `navigateToPosition`. */
+  const {
+    pendingTocTargetRef,
+    clearPendingTocTarget,
+    navigationRevision,
+    bumpNavigationRevision,
+  } = useTocNavigation();
+
+  const { navigateToPosition } = useNavigateToPosition({
+    chapters,
+    controller,
+    formattedViewRef,
+    pendingTocTargetRef,
+    bumpNavigationRevision,
+  });
+
   const handleProgressSeek = useCallback((fraction: number) => {
     if (bookTotalSegments <= 0) return;
     const target = Math.min(
@@ -785,21 +803,6 @@ function ActiveReader({
   }, [currentChapter, announce]);
 
   /* ---- Chapter navigation (TOC, prev/next) ---- */
-  const {
-    pendingTocTargetRef,
-    clearPendingTocTarget,
-    navigationRevision,
-    bumpNavigationRevision,
-  } = useTocNavigation();
-
-  const { navigateToPosition } = useNavigateToPosition({
-    chapters,
-    controller,
-    formattedViewRef,
-    pendingTocTargetRef,
-    bumpNavigationRevision,
-  });
-
   // NOTE: there used to be a separate "scroll-section-into-view on
   // chapter change" effect here. It fought with the auto-scroll effect
   // below — both fired on TOC clicks, both targeted the same container,
