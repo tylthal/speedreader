@@ -673,7 +673,7 @@ function ActiveReader({
     return Math.min(1, globalIdx / bookTotalSegments);
   }, [chapterOffsets, bookTotalSegments, chapterIdx, absoluteSegmentIndex]);
 
-  const lastOpenedProgress = useBookmarkSelector((s) => {
+  const lastOpenedProgressRaw = useBookmarkSelector((s) => {
     const b = s.lastOpened;
     if (!b || bookTotalSegments <= 0) return undefined;
     const offset = chapterOffsets[b.chapter_idx] ?? 0;
@@ -685,6 +685,17 @@ function ActiveReader({
     const offset = chapterOffsets[b.chapter_idx] ?? 0;
     return Math.min(1, (offset + b.absolute_segment_index) / bookTotalSegments);
   });
+  // Hide the Last Opened marker when it coincides with Farthest Read (within
+  // 0.5% of the bar width) — they render at the same spot and the Farthest
+  // Read marker is the semantically meaningful one. 0.5% ≈ 2px on a 400px
+  // bar, which comfortably exceeds any single-segment rounding gap but is
+  // small enough that visibly-distinct positions remain distinct.
+  const lastOpenedProgress =
+    lastOpenedProgressRaw != null &&
+    farthestReadProgress != null &&
+    Math.abs(lastOpenedProgressRaw - farthestReadProgress) < 0.005
+      ? undefined
+      : lastOpenedProgressRaw;
 
   /* ---- Navigation seam (TOC, bookmark, prev/next, progress scrub) ----
      Declared up here because the progress / bookmark / jump handlers
@@ -747,33 +758,76 @@ function ActiveReader({
 
   /* ---- PIP tap → bookmark menu ---- */
   const [pipMenuOpen, setPipMenuOpen] = useState(false);
+  // Captured PIP-resolved position at the moment of the tap. The menu
+  // overlay covers the viewport center, so by the time the action is
+  // chosen the pip block ref has been nulled out; we must resolve
+  // authoritative coordinates BEFORE opening the menu. Cross-chapter
+  // user-scroll also commits a placeholder absoluteSegmentIndex=0 that
+  // Effect 3's rAF-deferred detector only refines on its next frame,
+  // so reading snap.absoluteSegmentIndex here would save abs=0 instead
+  // of the visual PIP position.
+  const pipTapPositionRef = useRef<{
+    chapterId: number
+    chapterIdx: number
+    absoluteSegmentIndex: number
+    wordIndex: number
+  } | null>(null);
 
   const handlePipTap = useCallback(() => {
     const snap = positionStore.getSnapshot();
     if (snap.isPlaying) return;
     if (snap.chapterId === 0) return;
+
+    let abs = snap.absoluteSegmentIndex;
+    let word = snap.wordIndex;
+    if (snap.displayMode === 'formatted') {
+      const handle = formattedViewRef.current;
+      if (handle) {
+        handle.refreshPipPosition();
+        const detected = handle.detectAtViewportCenter(snap.chapterIdx, loaderState.segments);
+        if (detected?.arrIdx != null) {
+          const resolved = translators.arrayToAbsolute(detected.arrIdx);
+          if (resolved != null) {
+            abs = resolved;
+            word = 0;
+          }
+        }
+      }
+    }
+    pipTapPositionRef.current = {
+      chapterId: snap.chapterId,
+      chapterIdx: snap.chapterIdx,
+      absoluteSegmentIndex: abs,
+      wordIndex: word,
+    };
     setPipMenuOpen(true);
-  }, []);
+  }, [loaderState.segments, translators]);
 
   const handlePipAddBookmark = useCallback(() => {
+    const captured = pipTapPositionRef.current;
     const snap = positionStore.getSnapshot();
     if (snap.chapterId === 0) return;
+    const chapterId = captured?.chapterId ?? snap.chapterId;
+    const chapterIdx = captured?.chapterIdx ?? snap.chapterIdx;
+    const abs = captured?.absoluteSegmentIndex ?? snap.absoluteSegmentIndex;
+    const word = captured?.wordIndex ?? snap.wordIndex;
 
     const snippet = extractSnippet(
       loaderState.segments,
-      snap.absoluteSegmentIndex,
-      snap.wordIndex,
+      abs,
+      word,
     );
 
     setBookmarkNaming({
-      chapterId: snap.chapterId,
-      chapterIdx: snap.chapterIdx,
-      absoluteSegmentIndex: snap.absoluteSegmentIndex,
-      wordIndex: snap.wordIndex,
+      chapterId,
+      chapterIdx,
+      absoluteSegmentIndex: abs,
+      wordIndex: word,
       snippet,
     });
     haptics.success();
     setPipMenuOpen(false);
+    pipTapPositionRef.current = null;
   }, [loaderState.segments, haptics]);
 
   const handleBookmarkConfirm = useCallback((name: string) => {
@@ -1014,7 +1068,10 @@ function ActiveReader({
           options={[
             { label: 'Add Bookmark', onSelect: handlePipAddBookmark },
           ]}
-          onClose={() => setPipMenuOpen(false)}
+          onClose={() => {
+          setPipMenuOpen(false);
+          pipTapPositionRef.current = null;
+        }}
         />
       )}
       {bookmarkNaming && (

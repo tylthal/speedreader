@@ -193,6 +193,41 @@ async function getMaxScroll(page: Page): Promise<number> {
   })
 }
 
+/**
+ * Per-iteration watchdog. `Promise.race` does NOT cancel the losing promise,
+ * so a wedged iteration continues running in the background; subsequent
+ * iterations may see stale state. Callers should attempt best-effort recovery
+ * (e.g. `page.goto('/')`) on timeout, and bail after too many consecutive
+ * timeouts indicate a dead environment.
+ */
+const ITERATION_TIMEOUT_MS = 15_000
+const TIMED_OUT = Symbol('iterationTimedOut')
+
+async function withIterationTimeout<T>(
+  fn: () => Promise<T>,
+  ms: number,
+): Promise<T | typeof TIMED_OUT> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<typeof TIMED_OUT>((resolve) => {
+    timer = setTimeout(() => resolve(TIMED_OUT), ms)
+  })
+  try {
+    return await Promise.race([fn(), timeout])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
+/** Best-effort page reset after a hung iteration. Returns true on success. */
+async function recoverAfterTimeout(page: Page): Promise<boolean> {
+  try {
+    await page.goto('/', { timeout: 10_000 })
+    return true
+  } catch {
+    return false
+  }
+}
+
 /** Seeded PRNG (mulberry32) for reproducible random scroll positions. */
 function mulberry32(seed: number) {
   return () => {
@@ -251,11 +286,13 @@ test.describe('PIP restore stress — 100 cycles, random scroll, text validation
       reason: string
     }> = []
 
+    let consecutiveTimeouts = 0
     for (let trial = 0; trial < TOTAL_TRIALS; trial++) {
       // Generate a random scroll target
       const scrollTarget =
         scrollMin + Math.round(rng() * (scrollMax - scrollMin))
 
+      const result = await withIterationTimeout(async () => {
       // ── 1. Scroll to the random position via programmatic set + user gesture ──
       // First jump close to the target, then do a small user-scroll to trigger
       // the real scroll event pipeline (Effect 3 detection + positionStore commit).
@@ -277,7 +314,7 @@ test.describe('PIP restore stress — 100 cycles, random scroll, text validation
         console.log(
           `[skip] Trial ${trial}: no text at pip line (scrollTarget=${scrollTarget}). Skipping.`,
         )
-        continue
+        return
       }
 
       // ── 3. Verify localStorage was actually written ──
@@ -316,7 +353,7 @@ test.describe('PIP restore stress — 100 cycles, random scroll, text validation
           reason: 'no snapshot after restore',
         })
         failed++
-        continue
+        return
       }
 
       // ── 8. Compare: the primary criterion is TEXT match ──
@@ -371,6 +408,31 @@ test.describe('PIP restore stress — 100 cycles, random scroll, text validation
           `  LS after exit: ch_idx=${lsAfterExit?.chapter_idx} seg=${lsAfterExit?.absolute_segment_index} scroll_top=${lsAfterExit?.scroll_top}`,
         )
       }
+      }, ITERATION_TIMEOUT_MS)
+
+      if (result === TIMED_OUT) {
+        failed++
+        consecutiveTimeouts++
+        failures.push({
+          trial,
+          scrollTarget,
+          before: null,
+          after: null,
+          reason: `TIMED OUT after ${ITERATION_TIMEOUT_MS / 1000}s`,
+        })
+        console.log(
+          `[trial ${trial}] TIMED OUT after ${ITERATION_TIMEOUT_MS / 1000}s`,
+        )
+        const recovered = await recoverAfterTimeout(page)
+        if (!recovered) {
+          console.log(
+            `[trial ${trial}] recovery goto('/') failed — aborting loop`,
+          )
+          break
+        }
+      } else {
+        consecutiveTimeouts = 0
+      }
 
       // Progress logging every 10 trials
       if ((trial + 1) % 10 === 0) {
@@ -378,7 +440,19 @@ test.describe('PIP restore stress — 100 cycles, random scroll, text validation
           `[progress] ${trial + 1}/${TOTAL_TRIALS} — ${passed} passed, ${failed} failed`,
         )
       }
+
+      if (consecutiveTimeouts >= 5) {
+        console.log(
+          `[trial ${trial}] ${consecutiveTimeouts} consecutive timeouts — environment appears dead, aborting`,
+        )
+        break
+      }
     }
+
+    expect(
+      consecutiveTimeouts,
+      `Stress loop aborted after ${consecutiveTimeouts} consecutive per-iteration timeouts (environment wedged).`,
+    ).toBeLessThan(5)
 
     // ── Final report ──
     console.log(`\n${'='.repeat(60)}`)
@@ -447,10 +521,12 @@ test.describe('PIP restore stress — 100 cycles, random scroll, text validation
     let failed = 0
     const failures: Array<{ trial: number; reason: string }> = []
 
+    let consecutiveTimeouts = 0
     for (let trial = 0; trial < TOTAL_TRIALS; trial++) {
       const scrollTarget =
         scrollMin + Math.round(rng() * (scrollMax - scrollMin))
 
+      const result = await withIterationTimeout(async () => {
       // Jump near the target
       await page.evaluate((target) => {
         const c = document.querySelector('.formatted-view') as HTMLElement
@@ -462,7 +538,7 @@ test.describe('PIP restore stress — 100 cycles, random scroll, text validation
       // This mimics iOS inertial scrolling after a touch flick
       const fv = page.locator('.formatted-view')
       const box = await fv.boundingBox()
-      if (!box) continue
+      if (!box) return
       await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
 
       const momentumDeltas = [120, 100, 80, 60, 40, 30, 20, 15, 10, 5, 3, 1]
@@ -478,7 +554,7 @@ test.describe('PIP restore stress — 100 cycles, random scroll, text validation
       // Capture before-exit state
       const before = await getPipSnapshot(page)
       if (!before || !before.blockText) {
-        continue
+        return
       }
       // Skip if we landed on a chapter-transition placeholder (seg=0).
       // The saver intentionally skips persisting these transient states,
@@ -488,7 +564,7 @@ test.describe('PIP restore stress — 100 cycles, random scroll, text validation
         console.log(
           `[skip] Trial ${trial}: at chapter-transition placeholder (ch=${before.store.chapterIdx}, seg=0). Skipping.`,
         )
-        continue
+        return
       }
 
       // Exit — with a SHORT wait to simulate quick exit
@@ -504,7 +580,7 @@ test.describe('PIP restore stress — 100 cycles, random scroll, text validation
       if (!after) {
         failures.push({ trial, reason: 'no snapshot after restore' })
         failed++
-        continue
+        return
       }
 
       const beforeText = before.blockText.substring(0, 80)
@@ -524,13 +600,47 @@ test.describe('PIP restore stress — 100 cycles, random scroll, text validation
         console.log(`  BEFORE: "${beforeText}"`)
         console.log(`  AFTER:  "${afterText}"`)
       }
+      }, ITERATION_TIMEOUT_MS)
+
+      if (result === TIMED_OUT) {
+        failed++
+        consecutiveTimeouts++
+        failures.push({
+          trial,
+          reason: `TIMED OUT after ${ITERATION_TIMEOUT_MS / 1000}s`,
+        })
+        console.log(
+          `[trial ${trial}] TIMED OUT after ${ITERATION_TIMEOUT_MS / 1000}s`,
+        )
+        const recovered = await recoverAfterTimeout(page)
+        if (!recovered) {
+          console.log(
+            `[trial ${trial}] recovery goto('/') failed — aborting loop`,
+          )
+          break
+        }
+      } else {
+        consecutiveTimeouts = 0
+      }
 
       if ((trial + 1) % 10 === 0) {
         console.log(
           `[progress-momentum] ${trial + 1}/${TOTAL_TRIALS} — ${passed} passed, ${failed} failed`,
         )
       }
+
+      if (consecutiveTimeouts >= 5) {
+        console.log(
+          `[trial ${trial}] ${consecutiveTimeouts} consecutive timeouts — environment appears dead, aborting`,
+        )
+        break
+      }
     }
+
+    expect(
+      consecutiveTimeouts,
+      `Momentum loop aborted after ${consecutiveTimeouts} consecutive per-iteration timeouts.`,
+    ).toBeLessThan(5)
 
     console.log(
       `\nMOMENTUM RESULTS: ${passed} passed, ${failed} failed out of ${passed + failed}`,
@@ -568,10 +678,12 @@ test.describe('PIP restore stress — 100 cycles, random scroll, text validation
     let failed = 0
     const failures: Array<{ trial: number; reason: string }> = []
 
+    let consecutiveTimeouts = 0
     for (let trial = 0; trial < TOTAL_TRIALS; trial++) {
       const scrollTarget =
         scrollMin + Math.round(rng() * (scrollMax - scrollMin))
 
+      const result = await withIterationTimeout(async () => {
       // Jump to a settled position first
       await page.evaluate((target) => {
         const c = document.querySelector('.formatted-view') as HTMLElement
@@ -586,7 +698,7 @@ test.describe('PIP restore stress — 100 cycles, random scroll, text validation
       // Capture the SETTLED state — this is what we expect after restore
       const settled = await getPipSnapshot(page)
       if (!settled || !settled.blockText) {
-        continue
+        return
       }
 
       // Now do ANOTHER scroll and exit IMMEDIATELY (before settle)
@@ -595,7 +707,7 @@ test.describe('PIP restore stress — 100 cycles, random scroll, text validation
       const smallScroll = 50 + Math.round(rng() * 150)
       const fv = page.locator('.formatted-view')
       const box = await fv.boundingBox()
-      if (!box) continue
+      if (!box) return
       await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
       await page.mouse.wheel(0, smallScroll)
 
@@ -603,6 +715,7 @@ test.describe('PIP restore stress — 100 cycles, random scroll, text validation
       // Wait just enough for one rAF cycle
       await page.waitForTimeout(50)
       const midScroll = await getPipSnapshot(page)
+      void midScroll
 
       // Wait for scroll settle + positionStore commit
       await page.waitForTimeout(1200)
@@ -610,7 +723,7 @@ test.describe('PIP restore stress — 100 cycles, random scroll, text validation
       // Capture the post-settle state — THIS is what should be saved
       const afterSmallScroll = await getPipSnapshot(page)
       if (!afterSmallScroll || !afterSmallScroll.blockText) {
-        continue
+        return
       }
 
       // Exit and re-enter
@@ -623,7 +736,7 @@ test.describe('PIP restore stress — 100 cycles, random scroll, text validation
       if (!restored) {
         failures.push({ trial, reason: 'no snapshot after restore' })
         failed++
-        continue
+        return
       }
 
       // The restored text should match the post-settle text
@@ -644,13 +757,47 @@ test.describe('PIP restore stress — 100 cycles, random scroll, text validation
         failures.push({ trial, reason })
         console.log(`[FAIL] Trial ${trial}: ${reason}`)
       }
+      }, ITERATION_TIMEOUT_MS)
+
+      if (result === TIMED_OUT) {
+        failed++
+        consecutiveTimeouts++
+        failures.push({
+          trial,
+          reason: `TIMED OUT after ${ITERATION_TIMEOUT_MS / 1000}s`,
+        })
+        console.log(
+          `[trial ${trial}] TIMED OUT after ${ITERATION_TIMEOUT_MS / 1000}s`,
+        )
+        const recovered = await recoverAfterTimeout(page)
+        if (!recovered) {
+          console.log(
+            `[trial ${trial}] recovery goto('/') failed — aborting loop`,
+          )
+          break
+        }
+      } else {
+        consecutiveTimeouts = 0
+      }
 
       if ((trial + 1) % 10 === 0) {
         console.log(
           `[progress-midscroll] ${trial + 1}/${TOTAL_TRIALS} — ${passed} passed, ${failed} failed`,
         )
       }
+
+      if (consecutiveTimeouts >= 5) {
+        console.log(
+          `[trial ${trial}] ${consecutiveTimeouts} consecutive timeouts — environment appears dead, aborting`,
+        )
+        break
+      }
     }
+
+    expect(
+      consecutiveTimeouts,
+      `Mid-scroll loop aborted after ${consecutiveTimeouts} consecutive per-iteration timeouts.`,
+    ).toBeLessThan(5)
 
     console.log(
       `\nMID-SCROLL EXIT RESULTS: ${passed} passed, ${failed} failed out of ${passed + failed}`,
