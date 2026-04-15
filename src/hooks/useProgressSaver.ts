@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback } from 'react';
-import { upsertAutoBookmark } from '../api/client';
+import { bookmarkStore } from '../state/bookmarkStore';
 import { positionStore } from '../state/position/positionStore';
 import { readStoredPrefs, writeStoredPosition, writeStoredPrefs } from '../lib/readerProgress';
 import type { ReadingMode } from '../types';
@@ -131,7 +131,7 @@ export function useProgressSaver({ publicationId, scrollContainerRef, formattedV
       wpmByMode: wpmByModeRef.current,
     });
 
-    upsertAutoBookmark(publicationId, 'last_opened', location).catch((err) => {
+    bookmarkStore.updateLastOpened(location).catch((err) => {
       if (import.meta.env.DEV) console.warn('[ProgressSaver] auto-bookmark save failed:', err);
     });
   }, [publicationId]);
@@ -230,5 +230,27 @@ export function useProgressSaver({ publicationId, scrollContainerRef, formattedV
       if (apiTimerRef.current) clearTimeout(apiTimerRef.current);
       doSave();
     };
+  }, [doSave]);
+
+  // Flush on the isPlaying true→false transition. The 2s API debounce is the
+  // right default for continuous playback (avoids hammering IndexedDB on every
+  // segment boundary), but a user who pauses expects their position — and the
+  // auto-bookmark markers on the progress bar — to reflect where they just
+  // stopped. Without this flush, lastOpened/farthestRead markers can take up
+  // to 2s of additional idle time to appear after the pause click.
+  const wasPlayingRef = useRef(false);
+  useEffect(() => {
+    const unsub = positionStore.subscribe(() => {
+      const snap = positionStore.getSnapshot();
+      if (wasPlayingRef.current && !snap.isPlaying) {
+        if (apiTimerRef.current) {
+          clearTimeout(apiTimerRef.current);
+          apiTimerRef.current = null;
+        }
+        doSave();
+      }
+      wasPlayingRef.current = snap.isPlaying;
+    });
+    return unsub;
   }, [doSave]);
 }

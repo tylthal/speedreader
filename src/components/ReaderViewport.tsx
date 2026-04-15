@@ -17,7 +17,7 @@ import { useNavigateToPosition } from '../hooks/useNavigateToPosition';
 import { useFormattedViewCursorSync } from '../hooks/useFormattedViewCursorSync';
 import { useReaderInitialization } from '../hooks/useReaderInitialization';
 import { Link, useNavigate } from 'react-router-dom';
-import { setDisplayModePref, upsertAutoBookmark } from '../api/client';
+import { setDisplayModePref } from '../api/client';
 import { markFirstChunkRendered } from '../lib/ttfcMetric';
 import { extractSnippet } from '../lib/bookmarkSnippet';
 import { readStoredPrefs, resolveWpmForMode, writeStoredPrefs } from '../lib/readerProgress';
@@ -637,12 +637,12 @@ function ActiveReader({
       if (globalIndex <= farthestGlobalRef.current) return;
       farthestGlobalRef.current = globalIndex;
 
-      upsertAutoBookmark(publicationId, 'farthest_read', {
+      bookmarkStore.updateFarthestRead({
         chapter_id: snap.chapterId,
         chapter_idx: snap.chapterIdx,
         absolute_segment_index: snap.absoluteSegmentIndex,
         word_index: snap.wordIndex,
-      }).catch(() => {});
+      }, globalIndex).catch(() => {});
     });
   }, [publicationId]);
 

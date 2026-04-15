@@ -37,6 +37,13 @@ const initial: BookmarkStoreState = {
 
 let state: BookmarkStoreState = initial
 
+// Diagnostic: expose the store on window so headless tests can read state.
+/* eslint-disable @typescript-eslint/no-explicit-any */
+if (typeof window !== 'undefined') {
+  ;(window as any).__bookmarkStore = { snapshot: () => state }
+}
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
 type Listener = () => void
 const listeners = new Set<Listener>()
 
@@ -120,6 +127,7 @@ export const bookmarkStore = {
 
   /** Update the "last opened" auto bookmark. */
   async updateLastOpened(location: AutoBookmarkLocation): Promise<void> {
+    if (state.publicationId === 0) return
     const bookmark = await apiUpsertAutoBookmark(state.publicationId, 'last_opened', location)
     state = { ...state, lastOpened: bookmark, revision: state.revision + 1 }
     emit()
@@ -130,6 +138,7 @@ export const bookmarkStore = {
     location: AutoBookmarkLocation,
     globalIndex: number,
   ): Promise<boolean> {
+    if (state.publicationId === 0) return false
     // Compare against stored farthest
     const current = state.farthestRead
     if (current) {

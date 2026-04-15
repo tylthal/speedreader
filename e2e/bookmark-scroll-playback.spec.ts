@@ -36,22 +36,23 @@ async function selectMode(page: Page, modeName: string): Promise<void> {
 }
 
 /**
- * Simulate a long-press gesture on the formatted view.
- * The app uses a 500ms threshold with 15px move tolerance.
+ * Open the bookmark-name dialog via the real UX: pause → tap PIP →
+ * tap "Add Bookmark" in the action sheet.
  */
-async function longPressOnFormattedView(page: Page): Promise<void> {
-  const view = page.locator('.formatted-view')
-  const box = await view.boundingBox()
-  if (!box) throw new Error('formatted-view has no bounding box')
-
-  const x = box.x + box.width / 2
-  const y = box.y + box.height / 2
-
-  // Pointer down, hold for 700ms, then pointer up
-  await page.mouse.move(x, y)
-  await page.mouse.down()
-  await page.waitForTimeout(700)
-  await page.mouse.up()
+async function openBookmarkDialogViaPip(page: Page): Promise<void> {
+  // The PIP is only visible while paused. Ensure we're paused.
+  const playBtn = page.locator('.controls__play-bar[aria-label="Play reading"]')
+  if (!(await playBtn.isVisible().catch(() => false))) {
+    await page.locator('.controls__strip-pause').click({ trial: true }).catch(() => {})
+    await page.locator('.controls__strip-pause').click()
+    await page.waitForTimeout(200)
+  }
+  const pip = page.locator('.formatted-view__pip')
+  await expect(pip).toBeVisible({ timeout: 5000 })
+  await pip.click()
+  const addBookmark = page.getByRole('button', { name: /add bookmark/i })
+  await expect(addBookmark).toBeVisible({ timeout: 3000 })
+  await addBookmark.click()
 }
 
 /* ================================================================== */
@@ -66,15 +67,15 @@ test.describe('Bookmark creation and management', () => {
     await ensureFormattedView(page)
   })
 
-  test('long-press while paused opens bookmark dialog and saves bookmark', async ({ page }) => {
+  test('PIP tap opens bookmark dialog and saves bookmark', async ({ page }) => {
     // Ensure we are paused
     await expect(page.getByLabel('Play reading')).toBeVisible()
 
     // Wait for content to render
     await page.waitForTimeout(1000)
 
-    // Long-press on the formatted view
-    await longPressOnFormattedView(page)
+    // Open dialog via PIP tap
+    await openBookmarkDialogViaPip(page)
 
     // Bookmark dialog should appear
     const dialog = page.locator('[aria-label="Name this bookmark"]')
@@ -106,7 +107,7 @@ test.describe('Bookmark creation and management', () => {
 
   test('bookmark dialog can be cancelled', async ({ page }) => {
     await page.waitForTimeout(1000)
-    await longPressOnFormattedView(page)
+    await openBookmarkDialogViaPip(page)
 
     const dialog = page.locator('[aria-label="Name this bookmark"]')
     await expect(dialog).toBeVisible({ timeout: 3000 })
@@ -123,7 +124,7 @@ test.describe('Bookmark creation and management', () => {
   test('bookmark can be deleted from the panel', async ({ page }) => {
     // Create a bookmark first
     await page.waitForTimeout(1000)
-    await longPressOnFormattedView(page)
+    await openBookmarkDialogViaPip(page)
     await expect(page.locator('[aria-label="Name this bookmark"]')).toBeVisible({ timeout: 3000 })
     await page.locator('[aria-label="Bookmark name"]').fill('Delete Me')
     await page.locator('.bookmark-dialog__btn--save').click()
@@ -141,7 +142,7 @@ test.describe('Bookmark creation and management', () => {
   test('bookmark can be renamed via double-click', async ({ page }) => {
     // Create a bookmark
     await page.waitForTimeout(1000)
-    await longPressOnFormattedView(page)
+    await openBookmarkDialogViaPip(page)
     await expect(page.locator('[aria-label="Name this bookmark"]')).toBeVisible({ timeout: 3000 })
     await page.locator('[aria-label="Bookmark name"]').fill('Original Name')
     await page.locator('.bookmark-dialog__btn--save').click()
@@ -171,7 +172,7 @@ test.describe('Bookmark creation and management', () => {
     await page.waitForTimeout(500)
 
     // Create bookmark at current position
-    await longPressOnFormattedView(page)
+    await openBookmarkDialogViaPip(page)
     await expect(page.locator('[aria-label="Name this bookmark"]')).toBeVisible({ timeout: 3000 })
     await page.locator('[aria-label="Bookmark name"]').fill('Jump Target')
     await page.locator('.bookmark-dialog__btn--save').click()
@@ -379,13 +380,13 @@ test.describe('Scrolling behavior', () => {
     const markerCount = await markers.count()
     expect(markerCount).toBeGreaterThanOrEqual(1)
 
-    // Click a marker to jump
-    if (markerCount > 0) {
-      await markers.first().click()
-      await page.waitForTimeout(1000)
-      // Reader should still be functional after jump
-      await expect(page.locator('.reader-viewport')).toBeVisible()
-    }
+    // Click the Farthest Read marker specifically — it's rendered on top of
+    // Last Opened when they coincide (same segment after 5s playback), so
+    // force:true avoids pointer-interception flakes from overlapping markers.
+    await page.locator('.controls__progress-marker--farthest').click({ force: true })
+    await page.waitForTimeout(1000)
+    // Reader should still be functional after jump
+    await expect(page.locator('.reader-viewport')).toBeVisible()
   })
 })
 
@@ -414,7 +415,7 @@ test.describe('Bookmark-scroll-playback integration', () => {
     )
 
     // Create bookmark at this position
-    await longPressOnFormattedView(page)
+    await openBookmarkDialogViaPip(page)
     const dialog = page.locator('[aria-label="Name this bookmark"]')
     // If dialog doesn't appear (e.g., gesture not recognized), skip gracefully
     if (await dialog.isVisible({ timeout: 3000 }).catch(() => false)) {
@@ -455,7 +456,7 @@ test.describe('Bookmark-scroll-playback integration', () => {
     await page.waitForTimeout(1000)
 
     // Create a bookmark at the start
-    await longPressOnFormattedView(page)
+    await openBookmarkDialogViaPip(page)
     const dialog = page.locator('[aria-label="Name this bookmark"]')
     if (await dialog.isVisible({ timeout: 3000 }).catch(() => false)) {
       await page.locator('.bookmark-dialog__btn--save').click()
