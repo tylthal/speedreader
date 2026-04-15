@@ -33,7 +33,10 @@ async function selectMode(page: Page, modeName: string): Promise<void> {
     'word-by-word': 'Word-by-word',
   }
   const segmentName = segmentMap[modeName.toLowerCase()] ?? modeName
-  const segment = page.locator(`.controls__segment[aria-label*="${segmentName}"]`)
+  // Prefix match on "Label:" — the aria-label format is "Label: Description".
+  // A plain substring match like `*="Scroll"` collides with the Hands-free
+  // option whose description contains "Scroll with head tracking".
+  const segment = page.locator(`.controls__segment[aria-label^="${segmentName}:"]`)
   await expect(segment).toBeVisible()
   const isActive = await segment.getAttribute('aria-checked')
   if (isActive === 'true') return
@@ -209,7 +212,7 @@ test.describe('PIP position consistency across modes', () => {
       `isPlaying=${stateAfterPlay.isPlaying}`)
 
     // 5. Pause and check
-    await page.locator('[aria-label="Pause reading"]').click()
+    await page.locator('.controls__strip-pause').click()
     await page.waitForTimeout(300)
 
     // Position after play should be close to position before play
@@ -290,7 +293,7 @@ test.describe('PIP position consistency across modes', () => {
 
     await page.locator('[aria-label="Play reading"]').click()
     await page.waitForTimeout(1000)
-    await page.locator('[aria-label="Pause reading"]').click()
+    await page.locator('.controls__strip-pause').click()
     await page.waitForTimeout(300)
 
     const afterPlay = await getPositionState(page)
@@ -330,7 +333,7 @@ test.describe('PIP position consistency across modes', () => {
 
     await page.locator('[aria-label="Play reading"]').click()
     await page.waitForTimeout(600)
-    await page.locator('[aria-label="Pause reading"]').click()
+    await page.locator('.controls__strip-pause').click()
     await page.waitForTimeout(300)
 
     const afterPlay = await getPositionState(page)
@@ -422,7 +425,7 @@ test.describe('PIP position consistency across modes', () => {
       // Play and verify
       await page.locator('[aria-label="Play reading"]').click()
       await page.waitForTimeout(600)
-      await page.locator('[aria-label="Pause reading"]').click()
+      await page.locator('.controls__strip-pause').click()
       await page.waitForTimeout(300)
 
       const afterPlay = await getPositionState(page)
@@ -672,7 +675,7 @@ test.describe('PIP position consistency across modes', () => {
       const duringPlay = await getPositionState(page)
       console.log(`[stability] During play ${i + 1}: segment=${duringPlay.absoluteSegmentIndex}, isPlaying=${duringPlay.isPlaying}`)
 
-      await page.locator('[aria-label="Pause reading"]').click()
+      await page.locator('.controls__strip-pause').click()
       await page.waitForTimeout(500)
 
       const state = await getPositionState(page)

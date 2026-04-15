@@ -25,7 +25,9 @@ const MODE_SEGMENT_MAP: Record<string, string> = {
 
 async function selectMode(page: Page, modeName: string): Promise<void> {
   const segmentName = MODE_SEGMENT_MAP[modeName] ?? modeName
-  const segment = page.locator(`.controls__segment[aria-label*="${segmentName}"]`)
+  // Prefix match on "Label:" — the aria-label format is "Label: Description".
+  // A plain substring would collide with Hands-free ("Scroll with head...").
+  const segment = page.locator(`.controls__segment[aria-label^="${segmentName}:"]`)
   await expect(segment).toBeVisible()
   const isActive = await segment.getAttribute('aria-checked')
   if (isActive === 'true') return
@@ -165,7 +167,7 @@ test.describe('Bookmark creation and management', () => {
     // Play for a bit to advance position, then pause
     await page.getByLabel('Play reading').click()
     await page.waitForTimeout(3000)
-    await page.getByLabel('Pause reading').click()
+    await page.locator('.controls__strip-pause').click()
     await page.waitForTimeout(500)
 
     // Create bookmark at current position
@@ -226,7 +228,7 @@ test.describe('Playback controls', () => {
 
     // Switch to Scroll
     await selectMode(page, 'Scroll')
-    await expect(page.locator('.controls__segment[aria-label*="Scroll"]')).toHaveAttribute('aria-checked', 'true')
+    await expect(page.locator('.controls__segment[aria-label^="Scroll:"]')).toHaveAttribute('aria-checked', 'true')
 
     // Switch to Word-by-word (RSVP)
     await selectMode(page, 'Word-by-word')
@@ -251,7 +253,7 @@ test.describe('Playback controls', () => {
     // Play for a few seconds
     await page.getByLabel('Play reading').click()
     await page.waitForTimeout(4000)
-    await page.getByLabel('Pause reading').click()
+    await page.locator('.controls__strip-pause').click()
 
     // Progress should have advanced
     const afterWidth = await page.evaluate(() => {
@@ -272,7 +274,7 @@ test.describe('Playback controls', () => {
     await expect(page.locator('.focus-overlay')).toBeVisible()
 
     // Pause
-    await page.getByLabel('Pause reading').click()
+    await page.locator('.controls__strip-pause').click()
     await page.waitForTimeout(500)
 
     // After pause, formatted view should be shown (if in formatted display mode)
@@ -369,7 +371,7 @@ test.describe('Scrolling behavior', () => {
     // Play briefly so auto-bookmarks get set
     await page.getByLabel('Play reading').click()
     await page.waitForTimeout(5000)
-    await page.getByLabel('Pause reading').click()
+    await page.locator('.controls__strip-pause').click()
     await page.waitForTimeout(1000)
 
     // Bookmark markers should appear on the progress bar
@@ -403,7 +405,7 @@ test.describe('Bookmark-scroll-playback integration', () => {
     // Play to advance, then pause
     await page.getByLabel('Play reading').click()
     await page.waitForTimeout(4000)
-    await page.getByLabel('Pause reading').click()
+    await page.locator('.controls__strip-pause').click()
     await page.waitForTimeout(500)
 
     // Record position
@@ -462,7 +464,7 @@ test.describe('Bookmark-scroll-playback integration', () => {
       // Play to advance
       await page.getByLabel('Play reading').click()
       await page.waitForTimeout(3000)
-      await page.getByLabel('Pause reading').click()
+      await page.locator('.controls__strip-pause').click()
       await page.waitForTimeout(500)
 
       // Jump to bookmark
@@ -475,10 +477,10 @@ test.describe('Bookmark-scroll-playback integration', () => {
       await page.waitForTimeout(1500)
 
       // Verify still playing
-      await expect(page.getByLabel('Pause reading')).toBeVisible()
+      await expect(page.locator('.controls__strip-pause')).toBeVisible()
 
       // Pause cleanly
-      await page.getByLabel('Pause reading').click()
+      await page.locator('.controls__strip-pause').click()
       await expect(page.getByLabel('Play reading')).toBeVisible()
     }
   })

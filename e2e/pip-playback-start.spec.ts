@@ -33,22 +33,21 @@ async function ensureFormattedView(page: Page): Promise<void> {
 }
 
 async function selectMode(page: Page, modeName: string): Promise<void> {
-  const modeBtn = page.locator('[aria-label^="Reading mode:"]')
-  await expect(modeBtn).toBeVisible()
-  const label = await modeBtn.getAttribute('aria-label')
-  if (label && label.toLowerCase().includes(modeName.toLowerCase())) return
-  await modeBtn.click()
-  const listbox = page.locator(
-    '[role="listbox"][aria-label="Select reading mode"]',
-  )
-  await expect(listbox).toBeVisible()
-  const optionNames: Record<string, string> = {
-    scroll: 'Scroll Continuous',
-    focus: 'Focus One phrase',
-    'word-by-word': 'Word-by-word Single',
+  // New UI is a segmented radiogroup, not the old toggle+listbox. Labels
+  // are "Label: Description" — match on the prefix to avoid colliding
+  // with "Hands-free: Scroll with head tracking".
+  const segmentMap: Record<string, string> = {
+    scroll: 'Scroll',
+    focus: 'Focus',
+    'word-by-word': 'Word-by-word',
   }
-  const exactName = optionNames[modeName.toLowerCase()] ?? modeName
-  await listbox.getByRole('option', { name: exactName }).click()
+  const segmentName = segmentMap[modeName.toLowerCase()] ?? modeName
+  const segment = page.locator(`.controls__segment[aria-label^="${segmentName}:"]`)
+  await expect(segment).toBeVisible()
+  const isActive = await segment.getAttribute('aria-checked')
+  if (isActive === 'true') return
+  await segment.click()
+  await expect(segment).toHaveAttribute('aria-checked', 'true')
 }
 
 /**
@@ -135,7 +134,7 @@ async function playAndCaptureFocusText(page: Page): Promise<string> {
     return phrase?.textContent?.trim() || ''
   })
 
-  await page.locator('[aria-label="Pause reading"]').click()
+  await page.locator('.controls__strip-pause').click()
   await page.waitForTimeout(300)
   return text
 }

@@ -12,12 +12,14 @@ test.describe('App smoke', () => {
 
     await page.waitForURL(/\/read\/\d+/, { timeout: 20000 });
     await expect(page.locator('.reader-viewport')).toBeVisible();
-    await expect(
-      page.getByLabel('Play reading').or(page.getByLabel('Pause reading')),
-    ).toBeVisible();
-
-    await page.getByLabel('Play reading').click({ force: true });
-    await expect(page.getByLabel('Pause reading')).toBeVisible();
+    // While paused, only `.controls__play-bar` is shown (aria-label="Play
+    // reading"). While playing, the bar is CSS-hidden and `.controls__strip-
+    // pause` takes over. Scope assertions to each element explicitly — a
+    // bare getByLabel('Pause reading') matches both and fails strict-mode.
+    const playBar = page.locator('.controls__play-bar');
+    await expect(playBar).toBeVisible();
+    await playBar.click({ force: true });
+    await expect(page.locator('.controls__strip-pause')).toBeVisible();
 
     await page.goto('/');
     await expect(page.getByRole('heading', { name: 'Library', exact: true })).toBeVisible();
