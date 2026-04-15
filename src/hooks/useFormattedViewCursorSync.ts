@@ -33,6 +33,13 @@ interface UseFormattedViewCursorSyncArgs {
    *  chapter the user is reading, rather than the IntersectionObserver
    *  (which uses the top of the viewport, not the reading position). */
   onPipSectionChange: (sectionIdx: number) => void
+  /** Fired when the restore-direct scroll path enters/leaves its
+   *  waiting state. Parents can surface this via a data-attribute for
+   *  playwright assertions. 'pending' when tryScroll starts on a
+   *  restore with a saved scrollTop; 'done' when the restore scroll
+   *  has been committed; 'degraded' when the prior-sections-ready
+   *  budget is exhausted and the code falls back to segment-center. */
+  onRestoreStateChange?: (state: 'pending' | 'done' | 'degraded') => void
 }
 
 export function useFormattedViewCursorSync({
@@ -49,12 +56,15 @@ export function useFormattedViewCursorSync({
   pendingTocTargetRef,
   clearPendingTocTarget,
   onPipSectionChange,
+  onRestoreStateChange,
 }: UseFormattedViewCursorSyncArgs): void {
   const pendingScrollRef = useRef(false)
   const wasFormattedRef = useRef(false)
   const lastAutoScrolledChapterRef = useRef(-1)
   const onPipSectionChangeRef = useRef(onPipSectionChange)
   onPipSectionChangeRef.current = onPipSectionChange
+  const onRestoreStateChangeRef = useRef(onRestoreStateChange)
+  onRestoreStateChangeRef.current = onRestoreStateChange
 
   // ---- Effect 2: Auto-scroll to segment ------------------------------------
   //
@@ -99,6 +109,29 @@ export function useFormattedViewCursorSync({
     let rafHandle = 0
     let attempts = 0
     const maxAttempts = 120
+    // Wider budget for the restore-direct path: priors-ready can take
+    // up to several seconds on a large book when the deferred innerHTML
+    // writes flush four sections per 16 ms tick, plus image decode time
+    // for illustrated books (Alice etc).
+    const restoreMaxAttempts = 240
+    const isRestoreDirect =
+      cursorOrigin === 'restore' && positionStore.getSnapshot().scrollTop > 0
+    const effectiveMaxAttempts = isRestoreDirect ? restoreMaxAttempts : maxAttempts
+    let restoreFallback = false
+    let didAnnouncePending = false
+    // For restore-direct: once all prior sections are ready (innerHTML
+    // written), we kick off an async settle of every prior's images so
+    // their decoded heights land before we read sectionEl.offsetTop.
+    // The flag prevents re-kicking on subsequent rAFs.
+    let restorePriorsSettling = false
+    let restorePriorsSettled = false
+    // Guard: sectionEl.offsetTop must be stable for N consecutive frames
+    // before we commit the scroll. Images decode over several rAFs and
+    // the write-effect's deferred batches touch later sections mid-flight,
+    // so a single "ready" frame isn't enough.
+    let lastObservedOffsetTop = -1
+    let offsetStableFrames = 0
+    const OFFSET_STABLE_THRESHOLD = 4
 
     const tryScroll = () => {
       if (cancelled) return
@@ -108,13 +141,13 @@ export function useFormattedViewCursorSync({
       const container = handle.getScrollContainer()
       const sectionEl = handle.getSectionEl(chapterIdx)
       if (!container || !sectionEl) {
-        if (attempts < maxAttempts) {
+        if (attempts < effectiveMaxAttempts) {
           rafHandle = requestAnimationFrame(tryScroll)
         }
         return
       }
       if (!handle.isSectionReady(chapterIdx)) {
-        if (attempts < maxAttempts) {
+        if (attempts < effectiveMaxAttempts) {
           rafHandle = requestAnimationFrame(tryScroll)
         }
         return
@@ -127,10 +160,98 @@ export function useFormattedViewCursorSync({
       const snapForCheck = positionStore.getSnapshot()
       const canRestoreDirect = cursorOrigin === 'restore' && snapForCheck.scrollTop > 0
       if (!canRestoreDirect && (segments.length === 0 || arrIdx == null)) {
-        if (attempts < maxAttempts) {
+        if (attempts < effectiveMaxAttempts) {
           rafHandle = requestAnimationFrame(tryScroll)
         }
         return
+      }
+
+      // Announce 'pending' once we've cleared the cheap gates. Doing
+      // it here (instead of at rAF-0) keeps the data-attribute stable
+      // across very-early aborts where nothing useful happened.
+      if (canRestoreDirect && !didAnnouncePending) {
+        didAnnouncePending = true
+        onRestoreStateChangeRef.current?.('pending')
+      }
+
+      // Restore-direct requires all prior sections to have been written
+      // AND their images to have decoded so `sectionEl.offsetTop`
+      // matches its save-time value. Without this, deferred batches
+      // leave the target section with a too-small offsetTop and the
+      // viewport lands 1500+ pixels short.
+      if (canRestoreDirect && !restoreFallback) {
+        const priorsReady = handle.areSectionsReadyThrough(chapterIdx - 1)
+        if (!priorsReady) {
+          if (attempts < effectiveMaxAttempts) {
+            rafHandle = requestAnimationFrame(tryScroll)
+            return
+          }
+          restoreFallback = true
+          console.warn(
+            '[cursorSync] restore-direct priors-ready budget exhausted; falling back to segment-center',
+            {
+              chapterIdx,
+              attempts,
+              scrollTop: positionStore.getSnapshot().scrollTop,
+            },
+          )
+          onRestoreStateChangeRef.current?.('degraded')
+        } else {
+          // Kick off the async image-decode settle for every prior
+          // section, exactly once. While it runs we keep polling
+          // offsetTop stability — many images will have already been
+          // `complete` so this settles fast in practice.
+          if (!restorePriorsSettling) {
+            restorePriorsSettling = true
+            void (async () => {
+              for (let i = 0; i <= chapterIdx; i += 1) {
+                try {
+                  await handle.settleImages(i)
+                } catch {
+                  /* swallow */
+                }
+              }
+              restorePriorsSettled = true
+            })()
+          }
+          // Require offsetTop to be stable for several consecutive
+          // frames — this catches the tail end of image-decode reflow
+          // even when areSectionsReadyThrough already returns true.
+          const currentOffsetTop = sectionEl.offsetTop
+          if (currentOffsetTop === lastObservedOffsetTop) {
+            offsetStableFrames += 1
+          } else {
+            lastObservedOffsetTop = currentOffsetTop
+            offsetStableFrames = 0
+          }
+          const readyToCommit = restorePriorsSettled && offsetStableFrames >= OFFSET_STABLE_THRESHOLD
+          if (!readyToCommit) {
+            if (attempts < effectiveMaxAttempts) {
+              rafHandle = requestAnimationFrame(tryScroll)
+              return
+            }
+            restoreFallback = true
+            console.warn(
+              '[cursorSync] restore-direct stability budget exhausted; falling back to segment-center',
+              {
+                chapterIdx,
+                attempts,
+                offsetTop: currentOffsetTop,
+                settled: restorePriorsSettled,
+                scrollTop: positionStore.getSnapshot().scrollTop,
+              },
+            )
+            onRestoreStateChangeRef.current?.('degraded')
+          }
+        }
+        // If we just fell through to fallback, ensure the segment-
+        // center branch has segments; otherwise keep retrying.
+        if (restoreFallback && (segments.length === 0 || arrIdx == null)) {
+          if (attempts < effectiveMaxAttempts + 60) {
+            rafHandle = requestAnimationFrame(tryScroll)
+          }
+          return
+        }
       }
 
       const pendingTocTarget = pendingTocTargetRef.current
@@ -200,7 +321,7 @@ export function useFormattedViewCursorSync({
       const snap = positionStore.getSnapshot()
       let clamped: number
 
-      if (cursorOrigin === 'restore' && snap.scrollTop > 0) {
+      if (cursorOrigin === 'restore' && snap.scrollTop > 0 && !restoreFallback) {
         // scrollTop is saved as an offset relative to the section's top
         // so it's immune to layout changes in other sections. Convert
         // back to an absolute scrollTop by adding the section's current
@@ -214,7 +335,7 @@ export function useFormattedViewCursorSync({
           ? handle.setHighlightForSegment(chapterIdx, arrIdx, segments)
           : null
         if (!info) {
-          if (attempts < maxAttempts) {
+          if (attempts < effectiveMaxAttempts) {
             rafHandle = requestAnimationFrame(tryScroll)
           }
           return
@@ -255,6 +376,14 @@ export function useFormattedViewCursorSync({
       container.scrollTo({ top: clamped, behavior })
       pendingScrollRef.current = false
       lastAutoScrolledChapterRef.current = chapterIdx
+      if (cursorOrigin === 'restore') {
+        // 'done' covers both the restore-direct path and the segment-
+        // center fallback once it actually scrolls. 'degraded' is
+        // announced above at the moment the fallback is chosen; the
+        // terminal state after a degraded commit is still 'done'
+        // (the restore finished, just with reduced fidelity).
+        onRestoreStateChangeRef.current?.(restoreFallback ? 'degraded' : 'done')
+      }
     }
 
     rafHandle = requestAnimationFrame(tryScroll)

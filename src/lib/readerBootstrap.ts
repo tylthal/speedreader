@@ -80,6 +80,13 @@ export async function loadReaderBootstrap(
       wordIndex = position.word_index ?? 0
       // scroll_top comes from localStorage only (not IndexedDB bookmark)
       scrollTop = (position as { scroll_top?: number }).scroll_top ?? 0
+      // Read-side clamp: rescue users whose localStorage was poisoned
+      // with a negative scroll_top by a pre-fix build. A negative
+      // scrollTop fed into useFormattedViewCursorSync's restore-direct
+      // path would pass the `snap.scrollTop > 0` check as false and
+      // fall through to segment-center — but the positionStore would
+      // still carry the negative value, so this is belt-and-braces.
+      if (!Number.isFinite(scrollTop) || scrollTop < 0) scrollTop = 0
     }
   }
 

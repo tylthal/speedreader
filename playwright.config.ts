@@ -7,7 +7,7 @@ const browserRoot = path.join(repoRoot, '.browser-libs', 'root');
 
 export default defineConfig({
   testDir: './e2e',
-  testMatch: [/app-smoke\.spec\.ts$/, /bookmark-reader\.spec\.ts$/, /centering-check\.spec\.ts$/, /bookmark-scroll-playback\.spec\.ts$/, /pip-playback-start\.spec\.ts$/, /pip-consistency\.spec\.ts$/, /pip-restore-stress\.spec\.ts$/, /plain-mode-multichapter\.spec\.ts$/],
+  testMatch: [/app-smoke\.spec\.ts$/, /bookmark-reader\.spec\.ts$/, /centering-check\.spec\.ts$/, /bookmark-scroll-playback\.spec\.ts$/, /pip-playback-start\.spec\.ts$/, /pip-consistency\.spec\.ts$/, /pip-restore-stress\.spec\.ts$/, /plain-mode-multichapter\.spec\.ts$/, /restore-position-diag\.spec\.ts$/, /restore-position\.spec\.ts$/],
   testIgnore: ['api.spec.ts', 'library.spec.ts', 'reader.spec.ts', 'diagnose-images.spec.ts', 'qa-quick.spec.ts', 'qa-walkthrough.spec.ts'],
   timeout: 120000,
   fullyParallel: false,

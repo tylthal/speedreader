@@ -130,6 +130,7 @@ export const positionStore = {
       state.wordIndex === nextWord &&
       state.chapterId === nextChapId &&
       state.chapterIdx === nextChapIdx &&
+      state.scrollTop === nextScrollTop &&
       state.origin === origin
     ) {
       return

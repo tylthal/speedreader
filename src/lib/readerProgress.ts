@@ -96,5 +96,23 @@ export function pickFreshestPosition(
   // because localStorage carries scroll_top for pixel-perfect pip restore.
   // IndexedDB bookmarks don't have scroll_top.
   if (lsTime >= bmTime) return localSnapshot
+
+  // Bookmark is newer. If localStorage covers the same logical position
+  // (same chapter + segment + word) and carries a scroll_top that the
+  // bookmark lacks, merge: return a synthetic snapshot with the
+  // bookmark's updated_at but localStorage's scroll_top. Without this,
+  // the bookmark's 2s-debounced API write (which always lands a few ms
+  // after the LS write that flushed at visibility-hidden) will shadow
+  // the LS entry and the restore loses its pixel-perfect scrollTop.
+  if (
+    localSnapshot.scroll_top != null &&
+    localSnapshot.chapter_id === bookmark.chapter_id &&
+    localSnapshot.chapter_idx === bookmark.chapter_idx &&
+    localSnapshot.absolute_segment_index === bookmark.absolute_segment_index &&
+    localSnapshot.word_index === bookmark.word_index
+  ) {
+    return { ...bookmark, scroll_top: localSnapshot.scroll_top }
+  }
+
   return bookmark
 }

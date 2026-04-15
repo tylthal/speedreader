@@ -282,6 +282,15 @@ function ActiveReader({
   const focusItemRefsMap = useRef<Map<number, HTMLDivElement>>(new Map());
   const formattedViewRef = useRef<FormattedViewHandle>(null);
   const velocityProfileRef = useRef<VelocityProfile | null>(null);
+  // Tracks the restore-scroll lifecycle so playwright (and future
+  // diagnostics) can assert on the outcome. 'idle' at mount, 'pending'
+  // while useFormattedViewCursorSync is waiting for prior sections to
+  // render, 'done' once the restore scroll has been committed, or
+  // 'degraded' when the priors-ready budget was exhausted and the code
+  // fell back to segment-center. Surfaced via data-restore-state on
+  // the viewport root below.
+  const [restoreState, setRestoreState] =
+    useState<'idle' | 'pending' | 'done' | 'degraded'>('idle');
 
   /* ---- Layout-version counter for the formatted view ---- */
   // FormattedView writes its body innerHTML in a useEffect that depends
@@ -871,6 +880,7 @@ function ActiveReader({
     pendingTocTargetRef,
     clearPendingTocTarget,
     onPipSectionChange: handleVisibleSectionChange,
+    onRestoreStateChange: setRestoreState,
   });
 
   const handlePrevChapter = useCallback(() => {
@@ -944,7 +954,13 @@ function ActiveReader({
   }, [activeTocLocationKey, tocTitleByKey, currentChapter]);
 
   return (
-    <div className="reader-viewport" role="main" aria-label="Book reader" id="main-content">
+    <div
+      className="reader-viewport"
+      role="main"
+      aria-label="Book reader"
+      id="main-content"
+      data-restore-state={restoreState}
+    >
       <ReaderHeader
         bookTitle={bookTitle}
         sectionTitle={displaySectionTitle}
@@ -1059,6 +1075,7 @@ function ActiveReader({
             velocityProfileRef={velocityProfileRef}
             onLayoutChange={onFormattedLayoutChange}
             visible={showFormattedView}
+            prioritizeAllPriorOnRestore={cursorOrigin === 'restore'}
           />
           {showFormattedView && (
             <VelocityProfileDebugOverlay

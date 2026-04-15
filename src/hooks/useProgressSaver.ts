@@ -102,6 +102,24 @@ export function useProgressSaver({ publicationId, scrollContainerRef, formattedV
       word_index: snap.wordIndex,
     };
 
+    // Refuse to persist implausible scroll_top values. Negative values
+    // happen when the target section's offsetTop grows after we read
+    // container.scrollTop (because prior sections are still filling in
+    // during restore) — persisting them poisons localStorage and
+    // corrupts the next restore. Out-of-range positives are similarly
+    // bogus (> 1e6 px means something went very wrong upstream).
+    if (sectionOffset < 0 || sectionOffset > 1_000_000) {
+      if (import.meta.env.DEV) {
+        console.warn('[ProgressSaver] refusing implausible scroll_top', {
+          sectionOffset,
+          containerScrollTop: container?.scrollTop,
+          sectionOffsetTop: sectionEl?.offsetTop,
+          snap,
+        });
+      }
+      return;
+    }
+
     writeStoredPosition(publicationId, {
       ...location,
       scroll_top: sectionOffset,
@@ -147,10 +165,31 @@ export function useProgressSaver({ publicationId, scrollContainerRef, formattedV
       } else if (container) {
         sectionOffset = container.scrollTop;
       }
-      // Cache the offset while the DOM is known to be live. This value
-      // is the fallback for doSave() during unmount, when the DOM
-      // elements may be detached and return stale/zero geometry.
-      lastLiveSectionOffsetRef.current = sectionOffset;
+      // Cache the offset while the DOM is known to be live, but ONLY
+      // when the value is plausible (>= 0). A negative value here means
+      // the target section's offsetTop was larger than the container's
+      // scrollTop — a transient layout state during restore that must
+      // not be allowed to poison the unmount-fallback cache. Without
+      // this guard, useProgressSaver's doSave() would fall back to the
+      // negative value on unmount and persist it to localStorage.
+      if (sectionOffset >= 0) {
+        lastLiveSectionOffsetRef.current = sectionOffset;
+      }
+
+      // Refuse to persist implausible scroll_top values. See the same
+      // guard in doSave() above for rationale.
+      if (sectionOffset < 0 || sectionOffset > 1_000_000) {
+        if (import.meta.env.DEV) {
+          console.warn('[ProgressSaver] refusing implausible scroll_top (live)', {
+            sectionOffset,
+            containerScrollTop: container?.scrollTop,
+            sectionOffsetTop: sectionEl?.offsetTop,
+            snap,
+          });
+        }
+        return;
+      }
+
       // Include a coarse offset in the key so intra-segment scroll
       // changes trigger a save. Round to 10px to avoid writing on every
       // pixel of scroll while still capturing meaningful position changes.

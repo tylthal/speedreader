@@ -76,6 +76,13 @@ interface FormattedViewProps {
   onPipTap?: () => void
   /** When false the PIP indicator is hidden (e.g. during playback). Defaults to true. */
   showPip?: boolean
+  /** When true (restore flow), widen the innerHTML-write priority set
+   *  from `[current-1, current, current+1]` to `[0..current]` plus
+   *  `current+1`. This guarantees `sectionEl.offsetTop` for the target
+   *  section equals its save-time value before the restore scroll
+   *  commits — otherwise deferred batches leave prior sections empty
+   *  and offsetTop is too small, landing the viewport short. */
+  prioritizeAllPriorOnRestore?: boolean
 }
 
 /**
@@ -125,6 +132,12 @@ export interface FormattedViewHandle {
   getScrollContainer: () => HTMLDivElement | null
   getSectionEl: (idx: number) => HTMLElement | null
   isSectionReady: (idx: number) => boolean
+  /** Returns true iff every section index in `[0, maxIdx]` is ready
+   *  (i.e. its innerHTML has been written and segment index is built).
+   *  Returns true for `maxIdx < 0` (trivially). Used by the restore
+   *  path so it can wait until all prior sections have contributed
+   *  their heights to `offsetTop` before committing the scroll. */
+  areSectionsReadyThrough: (maxIdx: number) => boolean
   rebuildProfile: () => void
   /** Programmatic navigation seam. Call before committing a
    *  programmatic position change (TOC click, chapter-nav, bookmark,
@@ -411,6 +424,7 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
     visible = true,
     onPipTap,
     showPip = true,
+    prioritizeAllPriorOnRestore = false,
   },
   ref,
 ) {
@@ -583,10 +597,14 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
     if (chapters.length === 0) return []
     const indexes = new Set<number>()
     indexes.add(currentSectionIndex)
-    if (currentSectionIndex > 0) indexes.add(currentSectionIndex - 1)
+    if (prioritizeAllPriorOnRestore) {
+      for (let i = 0; i < currentSectionIndex; i += 1) indexes.add(i)
+    } else if (currentSectionIndex > 0) {
+      indexes.add(currentSectionIndex - 1)
+    }
     if (currentSectionIndex < chapters.length - 1) indexes.add(currentSectionIndex + 1)
     return [...indexes].sort((a, b) => a - b)
-  }, [chapters.length, currentSectionIndex])
+  }, [chapters.length, currentSectionIndex, prioritizeAllPriorOnRestore])
 
   // We set the section body innerHTML *imperatively* via a ref, NOT through
   // dangerouslySetInnerHTML. React 19's reconciler appears to track img
@@ -1063,6 +1081,13 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
       },
       getSectionEl: (idx) => sectionRefs.current.get(idx) ?? null,
       isSectionReady: (idx) => getReadySectionContext(idx) != null,
+      areSectionsReadyThrough: (maxIdx) => {
+        if (maxIdx < 0) return true
+        for (let i = 0; i <= maxIdx; i += 1) {
+          if (getReadySectionContext(i) == null) return false
+        }
+        return true
+      },
       rebuildProfile: () => {
         rebuildProfileNow()
       },
