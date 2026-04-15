@@ -1,6 +1,7 @@
 import { memo, useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback } from 'react';
 import type { Segment, InlineImage } from '../types';
 import type { ReadingMode } from '../types';
+import type { ChapterSegments } from '../hooks/useAllChapterSegments';
 import RsvpDisplay from './RsvpDisplay';
 
 /** Renders segment text with optional inline images above it. */
@@ -38,6 +39,16 @@ interface FocusChunkOverlayProps {
   onSeek?: (index: number) => void;
   scrollContainerRef?: React.RefObject<HTMLDivElement | null>;
   scrollItemRefs?: React.RefObject<Map<number, HTMLDivElement>>;
+  /** All chapters' segments for the paused all-book scroll view. When
+   *  provided (plain mode, paused) PausedScrollView renders every
+   *  chapter's segments so users can scroll the whole book. When empty
+   *  (playing, or still loading) the view falls back to single-chapter
+   *  behavior. Playing mode uses ScrollPlayingView and its per-chapter
+   *  segments as before. */
+  allChapters?: ChapterSegments[];
+  currentChapterIdx?: number;
+  currentAbsoluteIndex?: number;
+  onCrossChapterSeek?: (chapterIdx: number, absoluteIndex: number) => void;
 }
 
 const WING_COUNT = 3;
@@ -51,15 +62,66 @@ function getWingOpacity(distFromCenter: number, total: number): number {
 /*  Paused scroll view — all segments in a scrollable list             */
 /* ------------------------------------------------------------------ */
 
+interface FlatItem {
+  chapterIdx: number;
+  absoluteIndex: number;
+  key: string;
+  seg: Segment;
+}
+
 function PausedScrollView({
   segments,
   currentIndex,
   onSeek,
+  allChapters,
+  currentChapterIdx,
+  currentAbsoluteIndex,
+  onCrossChapterSeek,
 }: {
   segments: Segment[];
   currentIndex: number;
   onSeek: (index: number) => void;
+  allChapters?: ChapterSegments[];
+  currentChapterIdx?: number;
+  currentAbsoluteIndex?: number;
+  onCrossChapterSeek?: (chapterIdx: number, absoluteIndex: number) => void;
 }) {
+  // When allChapters is provided we render the flat multi-chapter list;
+  // otherwise we fall back to the original single-chapter behavior using
+  // `segments` / `currentIndex` / `onSeek`.
+  const useMulti =
+    !!allChapters &&
+    allChapters.length > 0 &&
+    currentChapterIdx != null &&
+    currentAbsoluteIndex != null &&
+    !!onCrossChapterSeek;
+
+  const flatItems = useMemo<FlatItem[]>(() => {
+    if (!useMulti) return [];
+    const out: FlatItem[] = [];
+    for (const ch of allChapters!) {
+      for (const seg of ch.segments) {
+        out.push({
+          chapterIdx: ch.chapterIdx,
+          absoluteIndex: seg.segment_index,
+          key: `${ch.chapterIdx}:${seg.segment_index}`,
+          seg,
+        });
+      }
+    }
+    return out;
+  }, [useMulti, allChapters]);
+
+  const currentFlatIndex = useMemo(() => {
+    if (!useMulti) return currentIndex;
+    const idx = flatItems.findIndex(
+      (it) =>
+        it.chapterIdx === currentChapterIdx &&
+        it.absoluteIndex === currentAbsoluteIndex,
+    );
+    return idx >= 0 ? idx : 0;
+  }, [useMulti, flatItems, currentChapterIdx, currentAbsoluteIndex, currentIndex]);
+
   const containerRef = useRef<HTMLDivElement>(null);
   const itemRefs = useRef<Map<number, HTMLDivElement>>(new Map());
   // Suppression flag for handleScroll while a programmatic scroll
@@ -80,16 +142,17 @@ function PausedScrollView({
     setTimeout(cleanup, 1500);
   }, []);
 
-  // Initial scroll (instant). Runs once on mount.
+  // Initial scroll (instant). Runs once the first time the target item
+  // ref is populated (in multi-chapter mode the list may not be
+  // available on the first render because allChapters loads async).
   useEffect(() => {
-    const el = itemRefs.current.get(currentIndex);
-    if (el) {
-      armProgrammaticGuard();
-      el.scrollIntoView({ block: 'center', behavior: 'instant' });
-    }
+    if (initialScrollDoneRef.current) return;
+    const el = itemRefs.current.get(currentFlatIndex);
+    if (!el) return;
+    armProgrammaticGuard();
+    el.scrollIntoView({ block: 'center', behavior: 'instant' });
     initialScrollDoneRef.current = true;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [currentFlatIndex, armProgrammaticGuard]);
 
   // Scroll to current index when it changes from an external seek
   // (keyboard, scrubber, etc). Skips the first render — the initial
@@ -97,12 +160,12 @@ function PausedScrollView({
   // continuity.
   useEffect(() => {
     if (!initialScrollDoneRef.current) return;
-    const el = itemRefs.current.get(currentIndex);
+    const el = itemRefs.current.get(currentFlatIndex);
     if (el) {
       armProgrammaticGuard();
       el.scrollIntoView({ block: 'center', behavior: 'smooth' });
     }
-  }, [currentIndex, armProgrammaticGuard]);
+  }, [currentFlatIndex, armProgrammaticGuard]);
 
   // Detect which segment is closest to viewport center on user scroll.
   // rAF-throttled to one layout read per frame; calls onSeek directly
@@ -111,6 +174,8 @@ function PausedScrollView({
   // source of truth, so there's no need for an unmount flush.
   const rafPending = useRef(false);
   const rafHandleRef = useRef<number>(0);
+
+  const totalCount = useMulti ? flatItems.length : segments.length;
 
   const handleScroll = useCallback(() => {
     if (programmaticScroll.current) return;
@@ -127,14 +192,14 @@ function PausedScrollView({
       const centerY = containerRect.top + containerRect.height / 2;
 
       const items = itemRefs.current;
-      // Adaptive search: start near currentIndex, widen if best match
-      // is at the edge of the search window.
-      let closestIdx = currentIndex;
+      // Adaptive search: start near the current flat index, widen if
+      // the best match is at the edge of the search window.
+      let closestIdx = currentFlatIndex;
       let closestDist = Infinity;
       let radius = 15;
       for (let attempt = 0; attempt < 3; attempt++) {
         const lo = Math.max(0, closestIdx - radius);
-        const hi = Math.min(segments.length - 1, closestIdx + radius);
+        const hi = Math.min(totalCount - 1, closestIdx + radius);
         for (let idx = lo; idx <= hi; idx++) {
           const el = items.get(idx);
           if (!el) continue;
@@ -152,11 +217,16 @@ function PausedScrollView({
         }
       }
 
-      if (closestIdx !== currentIndex) {
-        onSeek(closestIdx);
+      if (closestIdx !== currentFlatIndex) {
+        if (useMulti) {
+          const item = flatItems[closestIdx];
+          if (item) onCrossChapterSeek!(item.chapterIdx, item.absoluteIndex);
+        } else {
+          onSeek(closestIdx);
+        }
       }
     });
-  }, [segments.length, currentIndex, onSeek]);
+  }, [totalCount, currentFlatIndex, onSeek, useMulti, flatItems, onCrossChapterSeek]);
 
   // Cancel any pending rAF on unmount. No flush needed: the store
   // already holds the latest scroll position because handleScroll
@@ -177,6 +247,54 @@ function PausedScrollView({
       itemRefs.current.delete(idx);
     }
   }, []);
+
+  if (useMulti) {
+    // Multi-chapter: flat index across all chapters. We render each
+    // chapter's items sequentially and insert a lightweight title
+    // divider between chapters so the user can see where they are.
+    let runningIdx = 0;
+    return (
+      <div
+        ref={containerRef}
+        className="focus-scroll"
+        onScroll={handleScroll}
+      >
+        <div className="focus-scroll__spacer" />
+        {allChapters!.map((ch, chPosition) => (
+          <div key={`ch-${ch.chapterIdx}`} className="focus-scroll__chapter">
+            {chPosition > 0 && (
+              <div
+                className="focus-scroll__chapter-title"
+                aria-hidden="true"
+              >
+                {ch.title}
+              </div>
+            )}
+            {ch.segments.map((seg) => {
+              const flatIdx = runningIdx++;
+              return (
+                <div
+                  key={`${ch.chapterIdx}:${seg.id}`}
+                  ref={(el) => setItemRef(flatIdx, el)}
+                  className={
+                    flatIdx === currentFlatIndex
+                      ? 'focus-scroll__item focus-scroll__item--current'
+                      : 'focus-scroll__item'
+                  }
+                  onClick={() =>
+                    onCrossChapterSeek!(ch.chapterIdx, seg.segment_index)
+                  }
+                >
+                  <SegmentContent segment={seg} />
+                </div>
+              );
+            })}
+          </div>
+        ))}
+        <div className="focus-scroll__spacer" />
+      </div>
+    );
+  }
 
   return (
     <div
@@ -295,6 +413,10 @@ function FocusChunkOverlayInner({
   onSeek,
   scrollContainerRef,
   scrollItemRefs,
+  allChapters,
+  currentChapterIdx,
+  currentAbsoluteIndex,
+  onCrossChapterSeek,
 }: FocusChunkOverlayProps) {
   const [displayText, setDisplayText] = useState('');
   const [animClass, setAnimClass] = useState('focus-overlay__text--visible');
@@ -370,6 +492,10 @@ function FocusChunkOverlayInner({
           segments={segments}
           currentIndex={currentIndex}
           onSeek={onSeek}
+          allChapters={allChapters}
+          currentChapterIdx={currentChapterIdx}
+          currentAbsoluteIndex={currentAbsoluteIndex}
+          onCrossChapterSeek={onCrossChapterSeek}
         />
       </div>
     );

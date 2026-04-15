@@ -7,13 +7,11 @@ const browserRoot = path.join(repoRoot, '.browser-libs', 'root');
 
 export default defineConfig({
   testDir: './e2e',
-  testMatch: [/app-smoke\.spec\.ts$/, /bookmark-reader\.spec\.ts$/, /centering-check\.spec\.ts$/, /bookmark-scroll-playback\.spec\.ts$/, /pip-playback-start\.spec\.ts$/, /pip-consistency\.spec\.ts$/, /pip-restore-stress\.spec\.ts$/, /plain-mode-multichapter\.spec\.ts$/],
-  testIgnore: ['api.spec.ts', 'library.spec.ts', 'reader.spec.ts', 'diagnose-images.spec.ts', 'qa-quick.spec.ts', 'qa-walkthrough.spec.ts'],
-  timeout: 120000,
-  fullyParallel: false,
-  workers: 1,
+  testMatch: 'diagnose-pip-detail.spec.ts',
+  timeout: 60000,
+  retries: 0,
   use: {
-    baseURL: 'http://127.0.0.1:4173',
+    baseURL: 'http://localhost:5173',
     viewport: { width: 390, height: 844 },
     deviceScaleFactor: 3,
     isMobile: true,
@@ -40,10 +38,5 @@ export default defineConfig({
           ].join(':'),
       },
     },
-  },
-  webServer: {
-    command: 'npm run dev -- --host 127.0.0.1 --port 4173',
-    port: 4173,
-    reuseExistingServer: true,
   },
 });
