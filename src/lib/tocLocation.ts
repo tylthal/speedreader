@@ -1,4 +1,4 @@
-import type { TocNode } from '../api/client'
+import type { TocNode } from '../db/localClient'
 
 export interface FlatTocLocation {
   key: string

@@ -5,7 +5,7 @@ import { Capacitor } from '@capacitor/core'
 import App from './App'
 import { initWebVitals } from './lib/performance'
 import { startLongTaskObserver } from './lib/longTaskObserver'
-import { initClient } from './api/client'
+import { initClient } from './db/localClient'
 import './styles/global.css'
 import './styles/components.css'
 

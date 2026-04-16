@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { getImagePages, getImageUrl } from '../api/client'
-import type { ImagePage } from '../api/client'
+import { getImagePages, getImageUrl } from '../db/localClient'
+import type { ImagePage } from '../db/localClient'
 import { useContentTap } from '../hooks/useContentTap'
 
 interface CbzFormattedViewProps {

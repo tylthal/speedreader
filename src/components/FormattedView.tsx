@@ -8,7 +8,7 @@ import {
   useState,
 } from 'react'
 import type { RefObject } from 'react'
-import type { Chapter } from '../api/client'
+import type { Chapter } from '../db/localClient'
 import { getImageBlobWithSource, type ImageBlobSource } from '../lib/fileStorage'
 import { useContentTap } from '../hooks/useContentTap'
 import { buildProfile, type VelocityProfile } from '../lib/velocityProfile'

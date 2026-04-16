@@ -1,4 +1,4 @@
-import type { DisplayMode } from '../api/types'
+import type { DisplayMode } from '../db/localClient'
 import { useLocalStoragePreference, readStoredPreference } from './useLocalStoragePreference'
 
 const KEY = 'speedreader-default-display-mode'

@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import type { Segment } from '../types';
-import { getSegments } from '../api/client';
+import { getSegments } from '../db/localClient';
 
 interface UseSegmentLoaderOptions {
   publicationId: number;

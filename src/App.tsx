@@ -10,6 +10,7 @@ import InstallNudgeBanner from './components/InstallNudgeBanner'
 import PerfOverlay from './components/PerfOverlay'
 import { A11yAnnouncerProvider } from './components/A11yAnnouncer'
 import { useTheme } from './hooks/useTheme'
+import { isNative } from './lib/platform'
 
 /** Pages where the bottom nav should be shown */
 const NAV_PATHS = ['/', '/archive', '/settings']
@@ -18,13 +19,21 @@ export default function App() {
   useTheme();
   const location = useLocation();
   const showNav = NAV_PATHS.includes(location.pathname);
+  // Web-only UI: no service worker to update on native; install banner
+  // makes no sense inside an App Store / Play Store build; and the
+  // offline-status toast is meaningless when the app is packaged natively.
+  const showWebOnlyUi = !isNative();
 
   return (
     <A11yAnnouncerProvider>
       <a href="#main-content" className="skip-link">Skip to content</a>
-      <OfflineStatusToast />
-      <UpdateToast />
-      <InstallNudgeBanner />
+      {showWebOnlyUi && (
+        <>
+          <OfflineStatusToast />
+          <UpdateToast />
+          <InstallNudgeBanner />
+        </>
+      )}
       <PerfOverlay />
       <div className={`app-shell${showNav ? ' app-shell--with-nav' : ''}`}>
         <Routes>

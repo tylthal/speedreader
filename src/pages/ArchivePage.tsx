@@ -3,8 +3,8 @@ import {
   getArchivedPublications,
   unarchivePublication,
   deletePublication,
-} from '../api/client';
-import type { Publication } from '../api/client';
+} from '../db/localClient';
+import type { Publication } from '../db/localClient';
 import BookCard from '../components/BookCard';
 import EmptyState from '../components/EmptyState';
 import ActionSheet, { type ActionSheetOption } from '../components/ActionSheet';

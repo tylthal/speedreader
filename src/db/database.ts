@@ -1,6 +1,18 @@
 import Dexie from 'dexie'
 import type { Table } from 'dexie'
-import type { DisplayMode, SegmentKind, BookmarkType } from '../api/types'
+
+// ---------------------------------------------------------------------------
+// Shared primitive shape types
+// ---------------------------------------------------------------------------
+//
+// These string-literal unions are used both by the DB table interfaces
+// below and by the richer domain types in `./localClient`. They live here
+// because `database.ts` sits at the lowest level of the storage stack;
+// putting them here avoids any circular import with localClient.ts.
+
+export type DisplayMode = 'plain' | 'formatted'
+export type SegmentKind = 'text' | 'section_title'
+export type BookmarkType = 'user' | 'last_opened' | 'farthest_read'
 
 // ---------------------------------------------------------------------------
 // Table interfaces

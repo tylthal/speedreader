@@ -1,5 +1,5 @@
 import { memo, useState, useRef, useEffect, useCallback } from 'react'
-import type { Bookmark } from '../api/types'
+import type { Bookmark } from '../db/localClient'
 import { useBookmarkSelector, bookmarkStore } from '../state/bookmarkStore'
 
 interface BookmarksPanelProps {

@@ -1,5 +1,5 @@
 import { useRef, useState, useCallback } from 'react';
-import type { Publication, Bookmark } from '../api/types';
+import type { Publication, Bookmark } from '../db/localClient';
 
 interface BookCardProps {
   pub: Publication;

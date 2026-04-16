@@ -1,4 +1,4 @@
-import type { DisplayMode } from '../api/client'
+import type { DisplayMode } from '../db/localClient'
 
 interface ReaderHeaderProps {
   bookTitle: string

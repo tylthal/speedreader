@@ -1,4 +1,4 @@
-import type { Segment } from '../api/types'
+import type { Segment } from '../db/localClient'
 
 /**
  * Extract a text snippet (~maxChars) starting from a given segment/word position.

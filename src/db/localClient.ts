@@ -1,11 +1,6 @@
-import { db } from './database'
+import { db, ensureSchemaWipe } from './database'
 import type { DBPublication, DBBookmark } from './database'
-import type { DisplayMode } from '../api/types'
-import type {
-  Bookmark,
-  CreateBookmarkInput,
-  AutoBookmarkLocation,
-} from '../api/types'
+import type { DisplayMode, SegmentKind, BookmarkType } from './database'
 import {
   storeBookFile,
   deleteBookFiles,
@@ -13,20 +8,153 @@ import {
   storeImage,
   isFileStorageAvailable,
   getCoverUrl as resolveCoverUrl,
+  getImageUrl as resolveImageUrl,
 } from '../lib/fileStorage'
 import type { InternalTocNode } from '../lib/tocTree'
 import { mapTocTree, parseTocTreeJson } from '../lib/tocTree'
 import type { WorkerResult } from '../workers/parserProtocol'
 import { buildWorkerResult } from '../workers/buildWorkerResult'
-import type {
-  Publication,
-  PublicationDetail,
-  SegmentBatch,
-  ImagePageBatch,
-  SegmentInlineImage,
-  TocNode as ApiTocNode,
-} from '../api/types'
 import { getExtForMime } from '../parsers/types'
+
+// ---------------------------------------------------------------------------
+// Domain types (previously in src/api/types.ts)
+// ---------------------------------------------------------------------------
+
+export type ContentType = 'text' | 'image'
+
+// Re-export the primitive shape types so consumers can import them from
+// the single client module instead of reaching into ./database.
+export type { DisplayMode, SegmentKind, BookmarkType }
+
+export interface Publication {
+  id: number
+  title: string
+  author: string
+  filename: string
+  status: string
+  total_segments: number
+  content_type: ContentType
+  total_pages: number
+  created_at: string
+  /** OPFS-resolvable cover URL (when present). */
+  cover_url?: string | null
+  /** Per-book display mode preference. */
+  display_mode_pref?: DisplayMode | null
+}
+
+/** A node in the hierarchical TOC tree (PRD §6.4). */
+export interface TocNode {
+  title: string
+  /** Index into PublicationDetail.chapters; -1 for display-only parents. */
+  section_index: number
+  /** Optional intra-section fragment target from EPUB NCX/nav data. */
+  html_anchor?: string | null
+  children?: TocNode[]
+}
+
+export interface ImagePage {
+  id: number
+  chapter_id: number
+  page_index: number
+  image_path: string
+  width: number | null
+  height: number | null
+  mime_type: string
+}
+
+export interface ImagePageBatch {
+  chapter_id: number
+  start_index: number
+  end_index: number
+  pages: ImagePage[]
+  total_pages: number
+}
+
+export interface Chapter {
+  id: number
+  publication_id: number
+  chapter_index: number
+  title: string
+  /** Number of segments/pages in this chapter — used to compute book-wide
+   *  progress offsets. Matches DBChapter.segment_count. */
+  segment_count: number
+  /** Sanitized HTML for the formatted view (PRD §4.3). Empty for PDF/CBZ. */
+  html?: string | null
+  /** Format-specific metadata (e.g. PDF page range). */
+  meta?: Record<string, unknown> | null
+}
+
+export interface PublicationDetail extends Publication {
+  chapters: Chapter[]
+  /** Hierarchical TOC tree, if the source has one. Optional. */
+  toc_tree?: TocNode[] | null
+}
+
+export interface SegmentInlineImage {
+  image_url: string
+  alt: string
+  width: number
+  height: number
+}
+
+export interface Segment {
+  id: number
+  chapter_id: number
+  segment_index: number
+  text: string
+  word_count: number
+  duration_ms: number
+  inline_images?: SegmentInlineImage[] | null
+  /** Anchor inside the section's html string for Plain↔Formatted mapping. */
+  html_anchor?: string | null
+  /** 'section_title' for synthetic title segments at section boundaries. */
+  kind?: SegmentKind | null
+}
+
+export interface SegmentBatch {
+  chapter_id: number
+  start_index: number
+  end_index: number
+  segments: Segment[]
+  total_segments: number
+}
+
+// ---------------------------------------------------------------------------
+// Bookmarks
+// ---------------------------------------------------------------------------
+
+export interface Bookmark {
+  id: number
+  publication_id: number
+  type: BookmarkType
+  chapter_id: number
+  chapter_idx: number
+  absolute_segment_index: number
+  word_index: number
+  snippet: string
+  name: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface CreateBookmarkInput {
+  chapter_id: number
+  chapter_idx: number
+  absolute_segment_index: number
+  word_index: number
+  snippet: string
+  name: string
+}
+
+export interface AutoBookmarkLocation {
+  chapter_id: number
+  chapter_idx: number
+  absolute_segment_index: number
+  word_index: number
+}
+
+// Local alias so later generic param names don't shadow the exported TocNode.
+type ApiTocNode = TocNode
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -655,4 +783,111 @@ export class LocalClient {
     return result
   }
 
+}
+
+// ---------------------------------------------------------------------------
+// Module-scope client singleton + free-function API
+// ---------------------------------------------------------------------------
+//
+// Previously lived in src/api/client.ts — folded in here now that there is
+// no remote-backend facade. Call sites import these free functions; the
+// singleton is an implementation detail.
+
+let _client: LocalClient | null = null
+
+export async function initClient(): Promise<void> {
+  await ensureSchemaWipe()
+  _client = new LocalClient()
+}
+
+function getClient(): LocalClient {
+  if (!_client) {
+    _client = new LocalClient()
+  }
+  return _client
+}
+
+export function uploadBook(
+  file: File,
+  onProgress?: (phase: string, percent: number) => void,
+) {
+  const client = getClient()
+  if (onProgress) client.onUploadProgress = onProgress
+  const result = client.uploadBook(file)
+  result.finally(() => { client.onUploadProgress = undefined })
+  return result
+}
+
+export function getPublications() {
+  return getClient().getPublications()
+}
+
+export function getArchivedPublications() {
+  return getClient().getArchivedPublications()
+}
+
+export function archivePublication(id: number) {
+  return getClient().archivePublication(id)
+}
+
+export function unarchivePublication(id: number) {
+  return getClient().unarchivePublication(id)
+}
+
+export function deletePublication(id: number) {
+  return getClient().deletePublication(id)
+}
+
+export function getPublication(id: number) {
+  return getClient().getPublication(id)
+}
+
+export function getSegments(pubId: number, chapterId: number, start: number, end: number) {
+  return getClient().getSegments(pubId, chapterId, start, end)
+}
+
+export function getImagePages(pubId: number, chapterId: number, start: number, end: number) {
+  return getClient().getImagePages(pubId, chapterId, start, end)
+}
+
+export function getImageUrl(pubId: number, imagePath: string) {
+  return resolveImageUrl(pubId, imagePath)
+}
+
+export function setDisplayModePref(pubId: number, mode: DisplayMode | null) {
+  return getClient().setDisplayModePref(pubId, mode)
+}
+
+// --- Bookmarks ---
+
+export function getBookmarks(pubId: number) {
+  return getClient().getBookmarks(pubId)
+}
+
+export function getAutoBookmark(pubId: number, type: 'last_opened' | 'farthest_read') {
+  return getClient().getAutoBookmark(pubId, type)
+}
+
+export function getAutoBookmarksForPubs(pubIds: number[], type: 'last_opened' | 'farthest_read') {
+  return getClient().getAutoBookmarksForPubs(pubIds, type)
+}
+
+export function createBookmark(pubId: number, data: CreateBookmarkInput) {
+  return getClient().createBookmark(pubId, data)
+}
+
+export function updateBookmark(bookmarkId: number, name: string) {
+  return getClient().updateBookmark(bookmarkId, name)
+}
+
+export function deleteBookmark(bookmarkId: number) {
+  return getClient().deleteBookmark(bookmarkId)
+}
+
+export function upsertAutoBookmark(
+  pubId: number,
+  type: 'last_opened' | 'farthest_read',
+  location: AutoBookmarkLocation,
+) {
+  return getClient().upsertAutoBookmark(pubId, type, location)
 }

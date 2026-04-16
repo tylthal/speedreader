@@ -6,8 +6,8 @@ import {
   getAutoBookmarksForPubs,
   archivePublication,
   unarchivePublication,
-} from '../api/client';
-import type { Publication, Bookmark } from '../api/client';
+} from '../db/localClient';
+import type { Publication, Bookmark } from '../db/localClient';
 import BookCard from '../components/BookCard';
 import EmptyState from '../components/EmptyState';
 import UploadFAB, { type UploadFABHandle } from '../components/UploadFAB';

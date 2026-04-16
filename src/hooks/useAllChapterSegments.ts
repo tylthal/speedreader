@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import type { Chapter, Segment } from '../api/types';
-import { getSegments } from '../api/client';
+import type { Chapter, Segment } from '../db/localClient';
+import { getSegments } from '../db/localClient';
 
 export interface ChapterSegments {
   chapterIdx: number;

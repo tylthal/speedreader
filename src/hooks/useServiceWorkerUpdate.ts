@@ -1,13 +1,18 @@
 import { useState, useEffect, useCallback } from 'react'
+import { isNative } from '../lib/platform'
 
 /**
  * Detects when a new service worker is waiting and provides a function
  * to activate it. Works with vite-plugin-pwa's autoUpdate registration.
+ *
+ * On native (Capacitor), there is no service worker to update, so the hook
+ * becomes a no-op.
  */
 export function useServiceWorkerUpdate() {
   const [updateAvailable, setUpdateAvailable] = useState(false)
 
   useEffect(() => {
+    if (isNative()) return
     if (!('serviceWorker' in navigator)) return
 
     const checkForUpdate = async () => {

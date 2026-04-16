@@ -1,5 +1,5 @@
 import type { ReadingMode } from '../types'
-import type { AutoBookmarkLocation } from '../api/types'
+import type { AutoBookmarkLocation } from '../db/localClient'
 import { safeGetItem, safeSetItem } from './safeStorage'
 
 // ---------------------------------------------------------------------------

@@ -9,7 +9,7 @@
  */
 
 import type { ParsedSection } from './types'
-import type { SegmentKind } from '../api/types'
+import type { SegmentKind } from '../db/localClient'
 
 export type { SegmentKind }
 

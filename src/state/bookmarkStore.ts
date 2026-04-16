@@ -6,14 +6,14 @@
  */
 
 import { createSelector } from './createSelector'
-import type { Bookmark, CreateBookmarkInput, AutoBookmarkLocation } from '../api/types'
+import type { Bookmark, CreateBookmarkInput, AutoBookmarkLocation } from '../db/localClient'
 import {
   getBookmarks,
   createBookmark as apiCreateBookmark,
   updateBookmark as apiUpdateBookmark,
   deleteBookmark as apiDeleteBookmark,
   upsertAutoBookmark as apiUpsertAutoBookmark,
-} from '../api/client'
+} from '../db/localClient'
 
 // ---------------------------------------------------------------------------
 // State

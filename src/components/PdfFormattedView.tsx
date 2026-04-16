@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { getBookFile } from '../lib/fileStorage'
-import type { Chapter } from '../api/client'
+import type { Chapter } from '../db/localClient'
 import { useContentTap } from '../hooks/useContentTap'
 
 interface PdfFormattedViewProps {

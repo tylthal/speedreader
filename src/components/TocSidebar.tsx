@@ -1,7 +1,7 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { FixedSizeList as List } from 'react-window'
 import type { ListChildComponentProps } from 'react-window'
-import type { Chapter, TocNode } from '../api/client'
+import type { Chapter, TocNode } from '../db/localClient'
 
 interface TocSidebarProps {
   open: boolean

@@ -1,7 +1,7 @@
 import { useTheme, type Theme } from '../hooks/useTheme';
 import { useDefaultDisplayMode } from '../hooks/useDefaultDisplayMode';
 import { useChapterFlow, type ChapterFlow } from '../hooks/useChapterFlow';
-import type { DisplayMode } from '../api/types';
+import type { DisplayMode } from '../db/localClient';
 import StorageStatus from '../components/StorageStatus';
 
 interface ThemeOption {

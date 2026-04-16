@@ -10,7 +10,7 @@
 // Replaces the entire src/state/cursor/* module.
 
 import type { ReadingMode } from '../../types'
-import type { DisplayMode } from '../../api/types'
+import type { DisplayMode } from '../../db/localClient'
 export type { DisplayMode }
 
 export type PositionOrigin =

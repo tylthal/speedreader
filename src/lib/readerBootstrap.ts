@@ -5,7 +5,7 @@ import {
   type ContentType,
   type DisplayMode as ApiDisplayMode,
   type TocNode,
-} from '../api/client'
+} from '../db/localClient'
 import { readDefaultDisplayMode } from '../hooks/useDefaultDisplayMode'
 import type { DisplayMode } from '../state/position/types'
 import type { ReadingMode } from '../types'

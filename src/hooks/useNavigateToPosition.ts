@@ -1,6 +1,6 @@
 import { useCallback } from 'react'
 import type { RefObject } from 'react'
-import type { Chapter } from '../api/client'
+import type { Chapter } from '../db/localClient'
 import type { FormattedViewHandle } from '../components/FormattedView'
 import { positionStore } from '../state/position/positionStore'
 import type { TocJumpTarget } from './useTocNavigation'
