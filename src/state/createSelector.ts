@@ -8,6 +8,11 @@ interface Store<S> {
 /**
  * Creates a selector hook for a module-scope store.
  * Equivalent to a minimal Zustand useStore(selector, equalityFn).
+ *
+ * We rely on `useSyncExternalStore`'s built-in snapshot-identity bailout
+ * and only add the custom `equalityFn` layer so that selectors returning
+ * new object/array shapes with structurally-equal content (e.g. composite
+ * selectors using `shallowEqual`) don't force re-renders.
  */
 export function createSelector<S>(store: Store<S>) {
   return function useSelector<T>(
@@ -15,18 +20,12 @@ export function createSelector<S>(store: Store<S>) {
     equalityFn: (a: T, b: T) => boolean = Object.is,
   ): T {
     const lastRef = useRef<T | undefined>(undefined)
-    const lastSnapshotRef = useRef<S | null>(null)
 
     const getSelected = (): T => {
-      const snapshot = store.getSnapshot()
-      if (lastSnapshotRef.current === snapshot && lastRef.current !== undefined) {
-        return lastRef.current
-      }
-      const next = selector(snapshot)
+      const next = selector(store.getSnapshot())
       if (lastRef.current === undefined || !equalityFn(lastRef.current, next)) {
         lastRef.current = next
       }
-      lastSnapshotRef.current = snapshot
       return lastRef.current!
     }
 

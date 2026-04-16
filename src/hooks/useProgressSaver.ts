@@ -3,6 +3,7 @@ import { bookmarkStore } from '../state/bookmarkStore';
 import { positionStore } from '../state/position/positionStore';
 import { readStoredPrefs, writeStoredPosition, writeStoredPrefs } from '../lib/readerProgress';
 import type { ReadingMode } from '../types';
+import type { DisplayMode } from '../state/position/types';
 
 interface FormattedViewLike {
   getScrollContainer(): HTMLElement | null
@@ -34,8 +35,19 @@ export function useProgressSaver({ publicationId, scrollContainerRef, formattedV
   /** Last section-relative offset computed while the DOM was live.
    *  Used as a fallback in doSave() when the container may be detached
    *  (e.g. during React unmount cleanup in Safari, where detached
-   *  elements return scrollTop=0). */
+   *  elements return scrollTop=0). Cleared on chapter or display-mode
+   *  change so a stale offset from a previous layout can't be persisted. */
   const lastLiveSectionOffsetRef = useRef<number | null>(null);
+  /** Tracks chapterIdx / displayMode so we can null-out the fallback
+   *  cache the first time we observe a layout-invalidating transition. */
+  const lastChapterIdxRef = useRef<number | null>(null);
+  const lastDisplayModeRef = useRef<DisplayMode | null>(null);
+  /** Play->pause edge detection — flush-on-pause (replaces the separate
+   *  pause subscription that used to live in this hook). */
+  const wasPlayingRef = useRef(false);
+  /** Monotonic farthest-read tracker. Moved here from ReaderViewport so
+   *  the single subscription handles both progress save and farthest-read. */
+  const farthestGlobalRef = useRef(-1);
 
   // Seed wpmByMode from localStorage on mount
   useEffect(() => {
@@ -136,10 +148,45 @@ export function useProgressSaver({ publicationId, scrollContainerRef, formattedV
     });
   }, [publicationId]);
 
-  // Subscribe to store directly — no React re-renders.
+  // Single subscription to the store. Handles (in order):
+  //   1. Fallback-cache invalidation on chapter / display-mode transitions.
+  //   2. Play->pause edge detection — flushes the pending API write
+  //      immediately so lastOpened / farthestRead markers don't lag by
+  //      up to 2s after the pause click. Replaces what used to be a
+  //      separate positionStore.subscribe() block.
+  //   3. Placeholder-segment guard (don't overwrite previous chapter's
+  //      position with a chapter-transition placeholder of segment 0).
+  //   4. Synchronous localStorage write on any key change.
+  //   5. Farthest-read update (monotonic), folded in from ReaderViewport.
+  //   6. 2s debounced API flush via doSave().
+  //
+  // Using one subscription guarantees deterministic ordering of the
+  // pause-flush versus the farthest-read update for the same snapshot,
+  // and halves the per-commit listener-iteration cost.
   useEffect(() => {
     return positionStore.subscribe(() => {
       const snap = positionStore.getSnapshot();
+
+      // Edge-detect play->pause BEFORE any early returns so we always
+      // catch the transition, then update the tracker.
+      const wasPlaying = wasPlayingRef.current;
+      wasPlayingRef.current = snap.isPlaying;
+      const pauseTransition = wasPlaying && !snap.isPlaying;
+
+      // Invalidate the unmount-fallback cache whenever layout topology
+      // changes (chapter swap or display-mode flip). Either transition
+      // invalidates offsetTop assumptions, so the cached section offset
+      // must not survive into the next layout.
+      if (
+        lastChapterIdxRef.current !== null &&
+        (snap.chapterIdx !== lastChapterIdxRef.current ||
+          snap.displayMode !== lastDisplayModeRef.current)
+      ) {
+        lastLiveSectionOffsetRef.current = null;
+      }
+      lastChapterIdxRef.current = snap.chapterIdx;
+      lastDisplayModeRef.current = snap.displayMode;
+
       if (snap.revision === 0) return;
       if (snap.chapterId === 0) return;
 
@@ -148,11 +195,22 @@ export function useProgressSaver({ publicationId, scrollContainerRef, formattedV
       // real position will be detected by Effect 3 once segments load.
       // Saving this placeholder would overwrite the correct position in
       // the PREVIOUS chapter, causing re-entry to jump to segment 0.
-      if (
+      const isPlaceholder =
         snap.absoluteSegmentIndex === 0 &&
         snap.chapterId !== lastSavedChapterIdRef.current &&
-        lastSavedChapterIdRef.current !== 0
-      ) {
+        lastSavedChapterIdRef.current !== 0;
+      if (isPlaceholder) {
+        // Still honor the pause-flush: doSave() has its own placeholder
+        // guard that will no-op for the same reason, but calling it
+        // preserves the original flush-on-pause semantic of clearing the
+        // 2s timer so a stale post-pause write doesn't fire.
+        if (pauseTransition) {
+          if (apiTimerRef.current) {
+            clearTimeout(apiTimerRef.current);
+            apiTimerRef.current = null;
+          }
+          doSave();
+        }
         return;
       }
 
@@ -209,8 +267,37 @@ export function useProgressSaver({ publicationId, scrollContainerRef, formattedV
         writeStoredPrefs(publicationId, { wpm: snap.wpm, readingMode: snap.mode, wpmByMode: wpmByModeRef.current });
       }
 
+      // Farthest-read update (monotonic). Mirrors the old ReaderViewport
+      // subscription verbatim: same snap.origin guard, same globalIndex
+      // computation, same call into bookmarkStore.updateFarthestRead.
+      if (snap.origin !== 'restore') {
+        const globalIndex = snap.chapterIdx * 100000 + snap.absoluteSegmentIndex;
+        if (globalIndex > farthestGlobalRef.current) {
+          farthestGlobalRef.current = globalIndex;
+          bookmarkStore
+            .updateFarthestRead(
+              {
+                chapter_id: snap.chapterId,
+                chapter_idx: snap.chapterIdx,
+                absolute_segment_index: snap.absoluteSegmentIndex,
+                word_index: snap.wordIndex,
+              },
+              globalIndex,
+            )
+            .catch(() => {});
+        }
+      }
+
+      // API flush: on play->pause transition, cancel the debounce and
+      // flush immediately so bookmark markers reflect the pause point.
+      // Otherwise, (re)arm the 2s debounce.
       if (apiTimerRef.current) clearTimeout(apiTimerRef.current);
-      apiTimerRef.current = setTimeout(doSave, 2000);
+      if (pauseTransition) {
+        apiTimerRef.current = null;
+        doSave();
+      } else {
+        apiTimerRef.current = setTimeout(doSave, 2000);
+      }
     });
   }, [publicationId, doSave]);
 
@@ -230,27 +317,5 @@ export function useProgressSaver({ publicationId, scrollContainerRef, formattedV
       if (apiTimerRef.current) clearTimeout(apiTimerRef.current);
       doSave();
     };
-  }, [doSave]);
-
-  // Flush on the isPlaying true→false transition. The 2s API debounce is the
-  // right default for continuous playback (avoids hammering IndexedDB on every
-  // segment boundary), but a user who pauses expects their position — and the
-  // auto-bookmark markers on the progress bar — to reflect where they just
-  // stopped. Without this flush, lastOpened/farthestRead markers can take up
-  // to 2s of additional idle time to appear after the pause click.
-  const wasPlayingRef = useRef(false);
-  useEffect(() => {
-    const unsub = positionStore.subscribe(() => {
-      const snap = positionStore.getSnapshot();
-      if (wasPlayingRef.current && !snap.isPlaying) {
-        if (apiTimerRef.current) {
-          clearTimeout(apiTimerRef.current);
-          apiTimerRef.current = null;
-        }
-        doSave();
-      }
-      wasPlayingRef.current = snap.isPlaying;
-    });
-    return unsub;
   }, [doSave]);
 }

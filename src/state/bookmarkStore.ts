@@ -37,6 +37,12 @@ const initial: BookmarkStoreState = {
 
 let state: BookmarkStoreState = initial
 
+// Per-bookmark metadata kept out-of-band so we never mutate the bookmark
+// object itself. Used to track the monotonic "globalIndex" of the
+// farthest_read bookmark so updateFarthestRead() can skip regressions
+// without re-scanning segment counts.
+const farthestGlobalIndexByBookmark = new WeakMap<Bookmark, number>()
+
 // Diagnostic: expose the store on window so headless tests can read state.
 /* eslint-disable @typescript-eslint/no-explicit-any */
 if (typeof window !== 'undefined') {
@@ -144,20 +150,20 @@ export const bookmarkStore = {
     if (current) {
       // We need to check if the new position is actually farther.
       // The caller provides globalIndex (segmentsBefore + absoluteSegmentIndex).
-      // We store the previous globalIndex in a closure-free way by comparing
-      // chapter_idx and absolute_segment_index.
-      const currentGlobal = (current as Bookmark & { _globalIndex?: number })._globalIndex
+      // The previous globalIndex is stored in a WeakMap keyed by the
+      // previous farthestRead bookmark instance so we never mutate the
+      // bookmark object itself.
+      const currentGlobal = farthestGlobalIndexByBookmark.get(current)
       if (currentGlobal !== undefined && globalIndex <= currentGlobal) {
         return false
       }
     }
 
     const bookmark = await apiUpsertAutoBookmark(state.publicationId, 'farthest_read', location)
-    // Tag with globalIndex for future comparisons
-    const tagged = bookmark as Bookmark & { _globalIndex?: number }
-    tagged._globalIndex = globalIndex
+    // Record globalIndex against the new bookmark instance for future comparisons.
+    farthestGlobalIndexByBookmark.set(bookmark, globalIndex)
 
-    state = { ...state, farthestRead: tagged, revision: state.revision + 1 }
+    state = { ...state, farthestRead: bookmark, revision: state.revision + 1 }
     emit()
     return true
   },

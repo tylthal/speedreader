@@ -619,32 +619,9 @@ function ActiveReader({
     return () => { bookmarkStore.reset(); };
   }, [publicationId]);
 
-  // Note: "last_opened" auto-bookmark is now continuously updated by
-  // useProgressSaver, so no mount effect is needed here.
-
-  // Update "farthest read" as user progresses.
-  // Uses a direct store subscription instead of React state to avoid
-  // re-rendering the entire ActiveReader tree on every position commit.
-  const farthestGlobalRef = useRef(-1);
-  useEffect(() => {
-    return positionStore.subscribe(() => {
-      const snap = positionStore.getSnapshot();
-      if (snap.revision === 0) return;
-      if (snap.origin === 'restore') return;
-      if (snap.chapterId === 0) return;
-
-      const globalIndex = snap.chapterIdx * 100000 + snap.absoluteSegmentIndex;
-      if (globalIndex <= farthestGlobalRef.current) return;
-      farthestGlobalRef.current = globalIndex;
-
-      bookmarkStore.updateFarthestRead({
-        chapter_id: snap.chapterId,
-        chapter_idx: snap.chapterIdx,
-        absolute_segment_index: snap.absoluteSegmentIndex,
-        word_index: snap.wordIndex,
-      }, globalIndex).catch(() => {});
-    });
-  }, [publicationId]);
+  // Note: "last_opened" AND "farthest_read" auto-bookmarks are now both
+  // continuously updated by useProgressSaver (single unified subscription),
+  // so no dedicated farthest-read effect is needed here.
 
   // Bookmark selectors for quick-jump buttons & progress bar markers
   const hasLastOpened = useBookmarkSelector((s) => s.lastOpened !== null);
