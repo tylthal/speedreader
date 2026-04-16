@@ -1,6 +1,8 @@
 import {
   memo,
   forwardRef,
+  lazy,
+  Suspense,
   useEffect,
   useImperativeHandle,
   useMemo,
@@ -21,11 +23,24 @@ import {
 import { positionStore } from '../state/position/positionStore'
 import { createScrollDriver, type ScrollDriver, type ScrollSubscriber } from '../lib/scrollDriver'
 import type { FrameRectCache } from '../lib/frameRectCache'
-import {
-  FormattedViewDiagnostics,
-  type ImageDiag,
-  type UploadDiag,
+import type {
+  ImageDiag,
+  UploadDiag,
 } from './formattedView/FormattedViewDiagnostics'
+
+// Dev-only image-load diagnostics banner. Guarded by import.meta.env.DEV so
+// Rollup constant-folds the branch to `null` in production builds and the
+// FormattedViewDiagnostics module is tree-shaken out of the bundle entirely.
+// Types above are pure TS and erased at build time — importing them does not
+// pin the module into the graph. The component's runtime gate (`?diag` URL
+// param) is preserved in dev through the lazy-loaded component.
+const FormattedViewDiagnostics = import.meta.env.DEV
+  ? lazy(() =>
+      import('./formattedView/FormattedViewDiagnostics').then((m) => ({
+        default: m.FormattedViewDiagnostics,
+      })),
+    )
+  : null
 
 /**
  * Vertical position of the reference line as a fraction of the viewport
@@ -1409,8 +1424,11 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
     [],
   )
 
-  const diagEnabled = isImageDiagEnabled()
-  const uploadDiag = diagEnabled ? readUploadDiag(publicationId) : null
+  // Dev-only: diagnostics banner reads these. In prod the DEV constant folds
+  // to false and Rollup prunes the readUploadDiag/isImageDiagEnabled calls
+  // along with the overlay render below.
+  const diagEnabled = import.meta.env.DEV && isImageDiagEnabled()
+  const uploadDiag = import.meta.env.DEV && diagEnabled ? readUploadDiag(publicationId) : null
 
   // Mirror positionStore.isPlaying onto a `data-playing` attribute on the
   // scroll container AND onto the ScrollDriver's source tag. CSS uses
@@ -1458,11 +1476,15 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
           }}
         />
       )}
-      <FormattedViewDiagnostics
-        enabled={diagEnabled}
-        imageDiag={imageDiag}
-        uploadDiag={uploadDiag}
-      />
+      {FormattedViewDiagnostics && (
+        <Suspense fallback={null}>
+          <FormattedViewDiagnostics
+            enabled={diagEnabled}
+            imageDiag={imageDiag}
+            uploadDiag={uploadDiag}
+          />
+        </Suspense>
+      )}
       <div className="formatted-view__column" ref={columnRef}>
         {chapters.map((ch, idx) => (
           <article

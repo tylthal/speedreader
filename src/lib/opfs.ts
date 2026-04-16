@@ -435,3 +435,29 @@ export async function requestPersistence(): Promise<boolean> {
 export function isOpfsAvailable(): boolean {
   return typeof navigator.storage?.getDirectory === 'function'
 }
+
+// ---------------------------------------------------------------------------
+// Compile-time conformance check
+// ---------------------------------------------------------------------------
+//
+// Ensures this module's exported surface stays in lockstep with the shared
+// StorageBackend contract in ./fileStorage. No runtime cost — the value is
+// assembled from existing function references and discarded. If a signature
+// here drifts, this line fails to typecheck before the dynamic import in
+// fileStorage ever runs.
+//
+// Backend-only exports intentionally outside the interface: getImageBlobWithSource,
+// isOpfsWriteKnownBroken, isOpfsAvailable, requestPersistence, ImageBlobSource.
+
+import type { StorageBackend } from './fileStorage'
+
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+const _storageBackendConformance: StorageBackend = {
+  storeBookFile,
+  getBookFile,
+  deleteBookFiles,
+  storeImage,
+  getImageBlob,
+  storeCover,
+  getCoverBlob,
+}

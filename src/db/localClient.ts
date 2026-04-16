@@ -14,6 +14,7 @@ import type { InternalTocNode } from '../lib/tocTree'
 import { mapTocTree, parseTocTreeJson } from '../lib/tocTree'
 import type { WorkerResult } from '../workers/parserProtocol'
 import { buildWorkerResult } from '../workers/buildWorkerResult'
+import { parseWithWorker, canUseParserWorker } from '../lib/parserWorkerClient'
 import { getExtForMime } from '../parsers/types'
 
 // ---------------------------------------------------------------------------
@@ -240,18 +241,23 @@ async function persistImageAsset(
 }
 
 // ---------------------------------------------------------------------------
-// Parsing (main-thread only — Safari/WebKit lacks DOMParser in workers)
+// Parsing
 // ---------------------------------------------------------------------------
+//
+// Prefer a Web Worker when the browser exposes DOMParser inside workers
+// (Chrome/Android/desktop Firefox). Safari/WebKit has historically not,
+// so detection naturally steers iOS to the main-thread path. PDFs always
+// parse on the main thread because pdfParser renders the cover via
+// `document.createElement('canvas')` — worker-unsafe. Any worker failure
+// silently falls back to main-thread parsing.
 
-async function runParse(
+async function runParseMainThread(
   data: ArrayBuffer,
   filename: string,
   onProgress?: (phase: string, percent: number) => void,
 ): Promise<WorkerResult> {
   const { parseFile } = await import('../parsers')
   type LocalParsedBook = import('../parsers/types').ParsedBook
-
-  console.log('[parse] running on main thread:', filename)
 
   onProgress?.('parsing', 0)
   const book: LocalParsedBook = await parseFile(data, filename)
@@ -261,6 +267,22 @@ async function runParse(
   const { result } = await buildWorkerResult(book)
   onProgress?.('chunking', 100)
   return result
+}
+
+async function runParse(
+  data: ArrayBuffer,
+  filename: string,
+  onProgress?: (phase: string, percent: number) => void,
+): Promise<WorkerResult> {
+  if (canUseParserWorker(filename)) {
+    const workerResult = await parseWithWorker(data, filename, onProgress)
+    if (workerResult) {
+      console.log('[parse] ran in worker:', filename)
+      return workerResult
+    }
+  }
+  console.log('[parse] running on main thread:', filename)
+  return runParseMainThread(data, filename, onProgress)
 }
 
 // ---------------------------------------------------------------------------

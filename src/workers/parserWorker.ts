@@ -1,23 +1,38 @@
 /**
  * Web Worker that runs file parsing + section chunking off the main thread.
  *
- * Note: this worker is currently not invoked — runParse() in localClient.ts
- * always uses the main-thread fallback because Safari/WebKit doesn't expose
- * DOMParser in workers. The protocol is kept in lock-step with the
- * main-thread implementation so we can re-enable workers if Safari ships the
- * fix.
+ * Safari/WebKit historically didn't expose DOMParser inside workers, so the
+ * main thread feature-detects by sending a `ping` message before committing
+ * to the worker path (see src/lib/parserWorkerClient.ts). On browsers where
+ * the detection succeeds, uploads for EPUB/FB2/DOCX/etc. de-jank the main
+ * thread by 1-2 s on large books. When detection fails (or the worker
+ * errors), localClient silently falls back to main-thread parseFile().
+ *
+ * PDFs are intentionally routed through main-thread parsing by the client
+ * because pdfParser.renderPageToBlob() uses `document.createElement('canvas')`
+ * for cover rendering, which is unavailable in a worker.
  */
 
 import { parseFile } from '../parsers'
 import type { ParsedBook } from '../parsers/types'
 import type {
   ParseRequest,
+  PingRequest,
+  WorkerInMessage,
   WorkerOutMessage,
 } from './parserProtocol'
 import { buildWorkerResult } from './buildWorkerResult'
 
 function post(msg: WorkerOutMessage, transfer?: Transferable[]) {
   self.postMessage(msg, { transfer: transfer ?? [] })
+}
+
+function handlePing(req: PingRequest) {
+  post({
+    type: 'pong',
+    id: req.id,
+    hasDOMParser: typeof DOMParser !== 'undefined',
+  })
 }
 
 async function handleParse(req: ParseRequest) {
@@ -38,8 +53,11 @@ async function handleParse(req: ParseRequest) {
   }
 }
 
-self.onmessage = (e: MessageEvent<ParseRequest>) => {
-  if (e.data.type === 'parse') {
-    handleParse(e.data)
+self.onmessage = (e: MessageEvent<WorkerInMessage>) => {
+  const msg = e.data
+  if (msg.type === 'ping') {
+    handlePing(msg)
+  } else if (msg.type === 'parse') {
+    handleParse(msg)
   }
 }

@@ -204,3 +204,26 @@ function mimeFromPath(path: string): string {
   if (lower.endsWith('.tiff') || lower.endsWith('.tif')) return 'image/tiff';
   return 'image/png';
 }
+
+// ---------------------------------------------------------------------------
+// Compile-time conformance check
+// ---------------------------------------------------------------------------
+//
+// Mirror of the assertion in ./opfs — keeps the native backend locked to the
+// shared StorageBackend contract. No runtime effect.
+//
+// This backend has no extra exports beyond the interface (unlike ./opfs,
+// which also exposes getImageBlobWithSource, isOpfsAvailable, etc.).
+
+import type { StorageBackend } from './fileStorage';
+
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+const _storageBackendConformance: StorageBackend = {
+  storeBookFile,
+  getBookFile,
+  deleteBookFiles,
+  storeImage,
+  getImageBlob,
+  storeCover,
+  getCoverBlob,
+};

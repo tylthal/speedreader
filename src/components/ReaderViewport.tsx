@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense } from 'react';
 import { useAnnounce } from '../hooks/useAnnounce';
 import { useHaptics } from '../hooks/useHaptics';
 import { useSegmentLoader } from '../hooks/useSegmentLoader';
@@ -35,7 +35,6 @@ import BookmarkNameDialog from './BookmarkNameDialog';
 import ActionSheet from './ActionSheet';
 import FormattedView from './FormattedView';
 import { REFERENCE_LINE_RATIO, type FormattedViewHandle } from './FormattedView';
-import VelocityProfileDebugOverlay from './VelocityProfileDebugOverlay';
 import PdfFormattedView from './PdfFormattedView';
 import CbzFormattedView from './CbzFormattedView';
 import type { ContentType } from '../db/localClient';
@@ -48,6 +47,16 @@ import {
 } from '../state/position/positionStore';
 import { bookmarkStore, useBookmarkSelector } from '../state/bookmarkStore';
 import type { DisplayMode } from '../state/position/types';
+
+// Dev-only tuning overlay for the formatted-view velocity profile. Guarded by
+// import.meta.env.DEV so Rollup constant-folds the branch to `null` in
+// production builds, dropping the overlay module (and its portal/rAF debug
+// path) out of the main entry chunk. A static import would pin the module
+// into the graph regardless of the runtime URL-param gate that used to live
+// inside the component.
+const VelocityProfileDebugOverlay = import.meta.env.DEV
+  ? lazy(() => import('./VelocityProfileDebugOverlay'))
+  : null
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -1111,12 +1120,14 @@ function ActiveReader({
             visible={showFormattedView}
             prioritizeAllPriorOnRestore={cursorOrigin === 'restore'}
           />
-          {showFormattedView && (
-            <VelocityProfileDebugOverlay
-              formattedViewRef={formattedViewRef}
-              velocityProfileRef={velocityProfileRef}
-              wpm={wpm}
-            />
+          {showFormattedView && VelocityProfileDebugOverlay && (
+            <Suspense fallback={null}>
+              <VelocityProfileDebugOverlay
+                formattedViewRef={formattedViewRef}
+                velocityProfileRef={velocityProfileRef}
+                wpm={wpm}
+              />
+            </Suspense>
           )}
 
           {!showFormattedView && (

@@ -6,11 +6,34 @@ import { isNative } from './platform';
  * The backend module is resolved once and cached.
  */
 
-interface StorageBackend {
+/**
+ * Shared contract for file storage backends. Both `./opfs` (web) and
+ * `./nativeFs` (Capacitor) implement this surface; each module has a
+ * `satisfies StorageBackend` assertion at the bottom so compile errors
+ * catch drift rather than blowing up at runtime via the dynamic import
+ * in `getBackend()` below.
+ *
+ * Backend-only exports NOT in this interface:
+ *   - opfs: `getImageBlobWithSource`, `isOpfsWriteKnownBroken`,
+ *           `isOpfsAvailable`, `requestPersistence`, `ImageBlobSource`
+ *   - nativeFs: (none)
+ * The `getImageBlobWithSource` helper below intentionally narrows to
+ * opfs only — native has no Dexie fallback so source tracking is moot.
+ *
+ * `storeImage` returns `'opfs' | 'dexie'` on web (diagnostic signal for
+ * which layer accepted the write) and `void` on native (no fallback).
+ * The union below keeps both backends assignable while the public
+ * `storeImage` re-export in this file normalizes to `ImageStoreBackend`.
+ */
+export interface StorageBackend {
   storeBookFile(pubId: number, file: File): Promise<void>;
   getBookFile(pubId: number): Promise<File | null>;
   deleteBookFiles(pubId: number): Promise<void>;
-  storeImage(pubId: number, name: string, blob: Blob): Promise<any>;
+  storeImage(
+    pubId: number,
+    name: string,
+    blob: Blob,
+  ): Promise<'opfs' | 'dexie' | void>;
   getImageBlob(pubId: number, name: string): Promise<Blob | null>;
   storeCover(pubId: number, blob: Blob, ext: string): Promise<string>;
   getCoverBlob(path: string): Promise<Blob | null>;
@@ -53,7 +76,12 @@ export async function storeImage(
     return 'native';
   }
   const b = await getBackend();
-  return b.storeImage(pubId, name, blob);
+  // On web the backend is always ./opfs, whose storeImage resolves to
+  // the narrower 'opfs' | 'dexie' union (never void). The shared
+  // interface uses the wider union so nativeFs.storeImage (void) fits;
+  // here we know we're on the opfs side and narrow back.
+  const result = (await b.storeImage(pubId, name, blob)) as 'opfs' | 'dexie';
+  return result;
 }
 
 export async function getImageBlob(

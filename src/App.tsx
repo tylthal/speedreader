@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react'
 import { Routes, Route, useLocation } from 'react-router-dom'
 import LibraryPage from './pages/LibraryPage'
 import ArchivePage from './pages/ArchivePage'
@@ -7,10 +8,19 @@ import BottomNav from './components/BottomNav'
 import OfflineStatusToast from './components/OfflineStatusToast'
 import UpdateToast from './components/UpdateToast'
 import InstallNudgeBanner from './components/InstallNudgeBanner'
-import PerfOverlay from './components/PerfOverlay'
 import { A11yAnnouncerProvider } from './components/A11yAnnouncer'
 import { useTheme } from './hooks/useTheme'
 import { isNative } from './lib/platform'
+
+// Dev-only perf HUD. The lazy() call is gated by import.meta.env.DEV so the
+// bundler constant-folds the entire branch to `null` in production builds and
+// tree-shakes the PerfOverlay module (and its web-vitals / long-task / TTFC
+// dependencies) out of the bundle entirely. Keeping the dynamic import inside
+// the DEV guard is load-bearing — a static import would pin the module into
+// the graph regardless of the runtime gate.
+const PerfOverlay = import.meta.env.DEV
+  ? lazy(() => import('./components/PerfOverlay'))
+  : null
 
 /** Pages where the bottom nav should be shown */
 const NAV_PATHS = ['/', '/archive', '/settings']
@@ -34,7 +44,11 @@ export default function App() {
           <InstallNudgeBanner />
         </>
       )}
-      <PerfOverlay />
+      {PerfOverlay && (
+        <Suspense fallback={null}>
+          <PerfOverlay />
+        </Suspense>
+      )}
       <div className={`app-shell${showNav ? ' app-shell--with-nav' : ''}`}>
         <Routes>
           <Route path="/" element={<LibraryPage />} />

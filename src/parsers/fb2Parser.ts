@@ -12,6 +12,7 @@ import type { ParsedBook, ParsedSection, ParsedCover, ParsedImage } from './type
 const FB2_NS = 'http://www.gribuser.ru/xml/fictionbook/2.0'
 const XLINK_NS = 'http://www.w3.org/1999/xlink'
 import { normalizeWhitespace } from './textUtils'
+import { sanitizeHtml } from '../lib/sanitize'
 
 const EXT_BY_MIME: Record<string, string> = {
   'image/jpeg': '.jpg',
@@ -207,13 +208,13 @@ export async function parseFb2(data: ArrayBuffer, filename?: string): Promise<Pa
 
     if (!topSections.length) {
       const text = normalizeWhitespace(elementToText(body, binaries))
-      const html = elementToHtml(body, binaries)
+      const html = sanitizeHtml(elementToHtml(body, binaries))
       sections.push({ title: 'Untitled', text, html })
     } else {
       for (const sec of topSections) {
         const sectionTitle = getSectionTitle(sec) || 'Untitled'
         const text = normalizeWhitespace(elementToText(sec, binaries))
-        const html = elementToHtml(sec, binaries)
+        const html = sanitizeHtml(elementToHtml(sec, binaries))
         sections.push({ title: sectionTitle, text, html })
       }
     }

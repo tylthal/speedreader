@@ -81,11 +81,25 @@ export interface WorkerResult {
 // Messages
 // ---------------------------------------------------------------------------
 
+export interface PingRequest {
+  type: 'ping'
+  id: string
+}
+
 export interface ParseRequest {
   type: 'parse'
   id: string
   data: ArrayBuffer
   filename: string
+}
+
+export type WorkerInMessage = PingRequest | ParseRequest
+
+export interface PongMessage {
+  type: 'pong'
+  id: string
+  /** True iff the worker's global scope exposes DOMParser. */
+  hasDOMParser: boolean
 }
 
 export interface ProgressMessage {
@@ -107,4 +121,8 @@ export interface ErrorMessage {
   message: string
 }
 
-export type WorkerOutMessage = ProgressMessage | DoneMessage | ErrorMessage
+export type WorkerOutMessage =
+  | PongMessage
+  | ProgressMessage
+  | DoneMessage
+  | ErrorMessage
