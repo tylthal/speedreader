@@ -322,16 +322,16 @@ export function useGazeTracker(): [GazeState, React.RefObject<{ direction: GazeD
 
         try {
           if (import.meta.env.DEV) console.log(`[Gaze] Trying ${delegate} delegate...`);
+          // Load WASM + model from local /public so the app works offline.
+          // Assets are fetched at build time by `scripts/setup-mediapipe.mjs`.
           const vision = await Promise.race([
-            FilesetResolver.forVisionTasks(
-              'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm',
-            ),
+            FilesetResolver.forVisionTasks('/mediapipe/wasm'),
             timeoutPromise,
           ]);
           const lm = await Promise.race([
             FaceLandmarker.createFromOptions(vision, {
               baseOptions: {
-                modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',
+                modelAssetPath: '/mediapipe/models/face_landmarker.task',
                 delegate,
               },
               runningMode: 'VIDEO',

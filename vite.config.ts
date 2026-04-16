@@ -5,50 +5,27 @@ import { VitePWA } from 'vite-plugin-pwa'
 import { visualizer } from 'rollup-plugin-visualizer'
 import { fileURLToPath, URL } from 'node:url'
 
+// CAPACITOR=1 disables the PWA plugin so native (iOS/Android) builds skip
+// the service worker, workbox runtime, and precache manifest. The native
+// app unregisters any SW at startup (see src/main.tsx), so shipping these
+// assets in the Capacitor bundle is wasted bytes.
+const isCapacitorBuild = process.env.CAPACITOR === '1'
+
 export default defineConfig({
   plugins: [
     react(),
-    VitePWA({
+    ...(isCapacitorBuild
+      ? []
+      : [VitePWA({
       registerType: 'autoUpdate',
       workbox: {
         // Force new service worker to activate immediately
         skipWaiting: true,
         clientsClaim: true,
-        // Precache all built assets
+        // Precache all built assets. MediaPipe WASM + model are vendored under
+        // public/mediapipe/ and served as same-origin static files, so no
+        // runtime CDN caching rules are needed.
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
-        // Runtime caching rules
-        runtimeCaching: [
-          {
-            // Cache MediaPipe WASM runtime files
-            urlPattern: /cdn\.jsdelivr\.net\/npm\/@mediapipe/,
-            handler: 'CacheFirst',
-            options: {
-              cacheName: 'mediapipe-wasm',
-              expiration: {
-                maxEntries: 20,
-                maxAgeSeconds: 60 * 60 * 24 * 30, // 30 days
-              },
-              cacheableResponse: {
-                statuses: [0, 200],
-              },
-            },
-          },
-          {
-            // Cache MediaPipe face landmarker model
-            urlPattern: /storage\.googleapis\.com\/mediapipe-models/,
-            handler: 'CacheFirst',
-            options: {
-              cacheName: 'mediapipe-models',
-              expiration: {
-                maxEntries: 5,
-                maxAgeSeconds: 60 * 60 * 24 * 30, // 30 days
-              },
-              cacheableResponse: {
-                statuses: [0, 200],
-              },
-            },
-          },
-        ],
       },
       manifest: {
         name: 'SpeedReader',
@@ -105,7 +82,7 @@ export default defineConfig({
           },
         ],
       },
-    }),
+    })]),
   ],
   build: {
     rollupOptions: {

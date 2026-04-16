@@ -7,7 +7,6 @@
  * implemented here.
  */
 
-import mammoth from 'mammoth'
 import type { ParsedBook, ParsedSection, ParsedCover, ParsedImage } from './types'
 import { sanitizeHtml, sanitizeDocument } from '../lib/sanitize'
 
@@ -22,6 +21,10 @@ const EXT_BY_MIME: Record<string, string> = {
 }
 
 export async function parseDocx(data: ArrayBuffer): Promise<ParsedBook> {
+  // Lazy-load mammoth (~200 KB) so it's only fetched when a DOCX is parsed.
+  const mammothModule = await import('mammoth')
+  const mammoth = mammothModule.default ?? mammothModule
+
   const parsedImages: ParsedImage[] = []
   const placeholderToName = new Map<string, string>()
 

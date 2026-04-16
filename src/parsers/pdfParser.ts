@@ -11,13 +11,31 @@
  *    section's `html` field stays empty; the page range goes into `meta`.
  */
 
-import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs'
-import PdfWorker from '../workers/pdfWorker.ts?worker'
+import type * as PdfJsLib from 'pdfjs-dist/legacy/build/pdf.mjs'
 import type { ParsedBook, ParsedSection, ParsedCover, TocNode } from './types'
 
-pdfjsLib.GlobalWorkerOptions.workerPort = new PdfWorker()
-
 import { normalizeWhitespace } from './textUtils'
+
+// Lazy-loaded pdf.js library + worker. Importing pdfjs-dist statically pulls
+// ~500KB into whatever chunk holds this module; we want PDF code to load only
+// when a PDF is actually being parsed. Cached after the first call so repeated
+// parses don't re-import.
+let pdfjsLibPromise: Promise<typeof PdfJsLib> | null = null
+async function loadPdfJs(): Promise<typeof PdfJsLib> {
+  if (!pdfjsLibPromise) {
+    pdfjsLibPromise = (async () => {
+      const [pdfjsLib, PdfWorkerMod] = await Promise.all([
+        import('pdfjs-dist/legacy/build/pdf.mjs'),
+        import('../workers/pdfWorker.ts?worker'),
+      ])
+      if (!pdfjsLib.GlobalWorkerOptions.workerPort) {
+        pdfjsLib.GlobalWorkerOptions.workerPort = new PdfWorkerMod.default()
+      }
+      return pdfjsLib
+    })()
+  }
+  return pdfjsLibPromise
+}
 
 const BLANK_LINES_RE = /\n{3,}/g
 
@@ -30,7 +48,7 @@ function normalizeText(text: string): string {
     .trim()
 }
 
-async function extractPageText(page: pdfjsLib.PDFPageProxy): Promise<string> {
+async function extractPageText(page: PdfJsLib.PDFPageProxy): Promise<string> {
   const content = await page.getTextContent()
   const raw = content.items
     .map((item) => ('str' in item ? item.str : ''))
@@ -45,7 +63,7 @@ interface OutlineLeaf {
 
 /** Resolve only top-level outline entries to (title, pageIndex) pairs. */
 async function resolveTopLevelOutline(
-  doc: pdfjsLib.PDFDocumentProxy,
+  doc: PdfJsLib.PDFDocumentProxy,
 ): Promise<OutlineLeaf[]> {
   const outline = await doc.getOutline()
   if (!outline?.length) return []
@@ -70,7 +88,7 @@ async function resolveTopLevelOutline(
 
 /** Walk the full outline tree (including nested children) into a TocNode tree. */
 async function buildTocTree(
-  doc: pdfjsLib.PDFDocumentProxy,
+  doc: PdfJsLib.PDFDocumentProxy,
   topLeaves: OutlineLeaf[],
 ): Promise<TocNode[]> {
   const outline = await doc.getOutline()
@@ -109,7 +127,7 @@ async function buildTocTree(
 }
 
 async function renderPageToBlob(
-  doc: pdfjsLib.PDFDocumentProxy,
+  doc: PdfJsLib.PDFDocumentProxy,
   pageNum: number,
   maxWidth = 600,
 ): Promise<{ blob: Blob; mimeType: string } | null> {
@@ -138,6 +156,7 @@ export async function parsePdf(
   data: ArrayBuffer,
   onProgress?: (percent: number) => void,
 ): Promise<ParsedBook> {
+  const pdfjsLib = await loadPdfJs()
   const doc = await pdfjsLib.getDocument({ data }).promise
 
   const meta = await doc.getMetadata()
