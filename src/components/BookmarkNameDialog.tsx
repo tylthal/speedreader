@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { useModalAnimation } from '../hooks/useModalAnimation'
+import BasePanel from './BasePanel'
 
 interface BookmarkNameDialogProps {
   defaultName: string
@@ -18,7 +18,6 @@ export default function BookmarkNameDialog({
 }: BookmarkNameDialogProps) {
   const [name, setName] = useState(defaultName)
   const inputRef = useRef<HTMLInputElement>(null)
-  const { ref: dialogRef } = useModalAnimation(onCancel, 'bookmark-dialog--visible')
 
   // Auto-focus and select all text on mount
   useEffect(() => {
@@ -37,43 +36,42 @@ export default function BookmarkNameDialog({
   }
 
   return (
-    <div className="bookmark-dialog__overlay" onClick={onCancel}>
-      <div
-        ref={dialogRef}
-        className="bookmark-dialog"
-        onClick={(e) => e.stopPropagation()}
-        role="dialog"
-        aria-modal="true"
-        aria-label="Name this bookmark"
-      >
-        <h3 className="bookmark-dialog__title">Name this bookmark</h3>
-        <input
-          ref={inputRef}
-          className="bookmark-dialog__input"
-          type="text"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') handleSubmit()
-          }}
-          maxLength={100}
-          aria-label="Bookmark name"
-        />
-        <div className="bookmark-dialog__actions">
-          <button
-            className="bookmark-dialog__btn bookmark-dialog__btn--cancel"
-            onClick={onCancel}
-          >
-            Cancel
-          </button>
-          <button
-            className="bookmark-dialog__btn bookmark-dialog__btn--save"
-            onClick={handleSubmit}
-          >
-            Save
-          </button>
-        </div>
+    <BasePanel
+      onClose={onCancel}
+      visibleClass="bookmark-dialog--visible"
+      overlayClassName="bookmark-dialog__overlay"
+      className="bookmark-dialog"
+      ariaLabel="Name this bookmark"
+      ariaModal
+      animateBackdropClose={false}
+    >
+      <h3 className="bookmark-dialog__title">Name this bookmark</h3>
+      <input
+        ref={inputRef}
+        className="bookmark-dialog__input"
+        type="text"
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') handleSubmit()
+        }}
+        maxLength={100}
+        aria-label="Bookmark name"
+      />
+      <div className="bookmark-dialog__actions">
+        <button
+          className="bookmark-dialog__btn bookmark-dialog__btn--cancel"
+          onClick={onCancel}
+        >
+          Cancel
+        </button>
+        <button
+          className="bookmark-dialog__btn bookmark-dialog__btn--save"
+          onClick={handleSubmit}
+        >
+          Save
+        </button>
       </div>
-    </div>
+    </BasePanel>
   )
 }

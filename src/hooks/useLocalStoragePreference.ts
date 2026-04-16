@@ -1,4 +1,5 @@
 import { useState, useCallback } from 'react'
+import { safeGetItem, safeSetItem } from '../lib/safeStorage'
 
 /**
  * Generic hook for preferences persisted in localStorage.
@@ -17,11 +18,7 @@ export function useLocalStoragePreference<T extends string>(
   const setValue = useCallback(
     (next: T) => {
       setValueState(next)
-      try {
-        localStorage.setItem(key, next)
-      } catch {
-        /* localStorage unavailable */
-      }
+      safeSetItem(key, next)
     },
     [key],
   )
@@ -43,14 +40,10 @@ function readStored<T extends string>(
   validate: (raw: string) => T | undefined,
   fallback: T,
 ): T {
-  try {
-    const raw = localStorage.getItem(key)
-    if (raw != null) {
-      const valid = validate(raw)
-      if (valid !== undefined) return valid
-    }
-  } catch {
-    /* localStorage unavailable */
+  const raw = safeGetItem(key)
+  if (raw != null) {
+    const valid = validate(raw)
+    if (valid !== undefined) return valid
   }
   return fallback
 }

@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { GazeProcessor, extractPitchFromMatrix, extractYawFromMatrix } from '../lib/gazeProcessor';
 import type { GazeDirection, CalibrationData } from '../lib/gazeProcessor';
+import { safeGetItem, safeSetItem, safeRemoveItem } from '../lib/safeStorage';
 
 export type { GazeDirection } from '../lib/gazeProcessor';
 
@@ -373,18 +374,18 @@ export function useGazeTracker(): [GazeState, React.RefObject<{ direction: GazeD
       }
 
       // 4. Load saved calibration (must have top/bottom fields from v2 format)
-      try {
-        const saved = localStorage.getItem(CALIBRATION_KEY);
-        if (saved) {
+      const saved = safeGetItem(CALIBRATION_KEY);
+      if (saved) {
+        try {
           const data = JSON.parse(saved);
           if (data.top !== undefined && data.bottom !== undefined) {
             processorRef.current.loadCalibration(data as CalibrationData);
           } else {
             // Old format — discard, will need recalibration
-            localStorage.removeItem(CALIBRATION_KEY);
+            safeRemoveItem(CALIBRATION_KEY);
           }
-        }
-      } catch { /* ignore */ }
+        } catch { /* corrupt JSON — ignore */ }
+      }
 
       // 5. Start frame capture
       lastGazeTimestampRef.current = Date.now();
@@ -447,9 +448,7 @@ export function useGazeTracker(): [GazeState, React.RefObject<{ direction: GazeD
 
   const finishCalibration = useCallback(() => {
     const data = processorRef.current.applyCalibration();
-    try {
-      localStorage.setItem(CALIBRATION_KEY, JSON.stringify(data));
-    } catch { /* storage full */ }
+    safeSetItem(CALIBRATION_KEY, JSON.stringify(data));
     if (import.meta.env.DEV) console.log('[Gaze] Calibration applied:', data);
     setState(prev => ({ ...prev, status: 'tracking' }));
   }, []);

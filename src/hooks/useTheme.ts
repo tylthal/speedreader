@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback } from 'react';
-import { readStoredPreference } from './useLocalStoragePreference';
+import { useEffect, useState } from 'react';
+import { useLocalStoragePreference } from './useLocalStoragePreference';
 
 export type Theme = 'light' | 'dark' | 'bedtime' | 'evening' | 'forest' | 'ocean' | 'system';
 export type ResolvedTheme = 'light' | 'dark' | 'bedtime' | 'evening' | 'forest' | 'ocean';
@@ -55,24 +55,9 @@ function applyTheme(resolved: ResolvedTheme) {
   });
 }
 
-function readStoredTheme(): Theme {
-  return readStoredPreference(STORAGE_KEY, validateTheme, 'system');
-}
-
 export function useTheme(): UseThemeReturn {
-  const [theme, setThemeState] = useState<Theme>(readStoredTheme);
-  const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme>(() =>
-    resolveTheme(readStoredTheme())
-  );
-
-  const setTheme = useCallback((newTheme: Theme) => {
-    setThemeState(newTheme);
-    try {
-      localStorage.setItem(STORAGE_KEY, newTheme);
-    } catch {
-      // localStorage unavailable
-    }
-  }, []);
+  const [theme, setTheme] = useLocalStoragePreference<Theme>(STORAGE_KEY, validateTheme, 'system');
+  const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme>(() => resolveTheme(theme));
 
   // Apply theme whenever theme preference changes
   useEffect(() => {
