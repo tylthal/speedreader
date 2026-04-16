@@ -5,7 +5,6 @@ import ArchivePage from './pages/ArchivePage'
 import SettingsPage from './pages/SettingsPage'
 import ReaderPage from './pages/ReaderPage'
 import BottomNav from './components/BottomNav'
-import OfflineStatusToast from './components/OfflineStatusToast'
 import UpdateToast from './components/UpdateToast'
 import InstallNudgeBanner from './components/InstallNudgeBanner'
 import { A11yAnnouncerProvider } from './components/A11yAnnouncer'
@@ -30,8 +29,7 @@ export default function App() {
   const location = useLocation();
   const showNav = NAV_PATHS.includes(location.pathname);
   // Web-only UI: no service worker to update on native; install banner
-  // makes no sense inside an App Store / Play Store build; and the
-  // offline-status toast is meaningless when the app is packaged natively.
+  // makes no sense inside an App Store / Play Store build.
   const showWebOnlyUi = !isNative();
 
   return (
@@ -39,7 +37,6 @@ export default function App() {
       <a href="#main-content" className="skip-link">Skip to content</a>
       {showWebOnlyUi && (
         <>
-          <OfflineStatusToast />
           <UpdateToast />
           <InstallNudgeBanner />
         </>
