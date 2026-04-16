@@ -181,6 +181,27 @@ npx cap open android   # Open in Android Studio
 
 ---
 
+## 11. CFBundleVersion / versionCode Auto-Increment
+
+**Status: Manual — not automated in CI**
+
+Store submissions require a monotonically increasing build number every upload. Right now `CFBundleVersion` (iOS, `$(CURRENT_PROJECT_VERSION)` in `ios/App/App.xcodeproj/project.pbxproj`) and `versionCode` (Android, `android/app/build.gradle`) must be bumped by hand.
+
+Recommended approaches (document-only; do not implement until CI is wired up):
+
+- **iOS / Xcode build phase** — add a "Run Script" build phase before the "Compile Sources" phase that runs:
+  ```sh
+  cd "$SRCROOT"
+  agvtool next-version -all
+  ```
+  This requires `VERSIONING_SYSTEM = "apple-generic"` and `CURRENT_PROJECT_VERSION` to be set in the target's build settings (they already are). Caveat: the change gets written back into `project.pbxproj`, so local builds will produce dirty working trees. Gate the script on `CONFIGURATION = Release` to avoid churn during development.
+- **fastlane** — run `fastlane run increment_build_number` (iOS) and `fastlane run increment_version_code` (Android) as an early lane step before `gym` / `gradle`. Cleaner than Xcode build phases because the bump happens in CI, not in every developer's local archive.
+- **CI-driven** — derive `CFBundleVersion` from `GITHUB_RUN_NUMBER` (or a commit count: `git rev-list --count HEAD`) and inject via `xcodebuild CURRENT_PROJECT_VERSION=...` / Gradle `-PversionCode=...`. This keeps the repo clean (no generated bumps committed) but requires the build command to always set the flag.
+
+No Xcode project changes have been made for this — revisit once GitHub Actions (Section 8) lands.
+
+---
+
 ## What's Already Done
 
 - Fully offline, client-side app (no backend)
