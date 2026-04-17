@@ -204,8 +204,26 @@ export default function ControlsBottomSheet({
     isStripExpanded ? 'controls--expanded' : '',
   ].filter(Boolean).join(' ');
 
+  const controlsRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = controlsRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const write = (h: number) => {
+      document.documentElement.style.setProperty('--controls-height', `${Math.round(h)}px`);
+    };
+    write(el.getBoundingClientRect().height);
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) write(entry.contentRect.height);
+    });
+    ro.observe(el);
+    return () => {
+      ro.disconnect();
+      document.documentElement.style.removeProperty('--controls-height');
+    };
+  }, []);
+
   return (
-    <div className={className} role="toolbar" aria-label="Reading controls">
+    <div ref={controlsRef} className={className} role="toolbar" aria-label="Reading controls">
       {/* ── Interactive Progress Bar ── */}
       <div
         className={`controls__progress-wrap${isScrubbing ? ' controls__progress-wrap--scrubbing' : ''}`}

@@ -2891,7 +2891,7 @@ body.has-install-banner {
 
 .update-toast {
   position: fixed;
-  bottom: calc(80px + env(safe-area-inset-bottom, 0px));
+  bottom: calc(var(--controls-height, 72px) + env(safe-area-inset-bottom, 0px) + 12px);
   left: 16px;
   right: 16px;
   z-index: 9998;
@@ -2909,9 +2909,17 @@ body.has-install-banner {
   animation: toast-slide-in 0.3s ease-out;
 }
 
+.update-toast__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
 .update-toast__button {
   flex-shrink: 0;
-  padding: 6px 16px;
+  padding: 8px 16px;
+  min-height: 44px;
   border: none;
   border-radius: 8px;
   background: var(--color-accent, #6366f1);
@@ -2924,6 +2932,27 @@ body.has-install-banner {
 
 .update-toast__button:active {
   opacity: 0.8;
+}
+
+.update-toast__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  opacity: 0.7;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.update-toast__close:active {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.08);
 }
 
 /* ---------- StorageStatus ---------- */
