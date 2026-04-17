@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { Capacitor } from '@capacitor/core'
+import { getBoolPref, getPref, setPref, PREF_KEYS } from '../lib/uiPrefs'
 
 type Platform = 'ios' | 'android' | 'desktop' | 'unknown'
 
@@ -17,7 +18,17 @@ interface BeforeInstallPromptEvent extends Event {
   userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>
 }
 
-const SESSION_KEY = 'install-nudge-dismissed'
+const DISMISS_TTL_MS = 7 * 24 * 60 * 60 * 1000 // 7 days
+
+function readDismissed(): boolean {
+  const iso = getPref('installBannerDismissedAt')
+  if (!iso) return false
+  const ts = Date.parse(iso)
+  if (!Number.isFinite(ts)) return false
+  // Treat future timestamps as "now" to survive clock skew.
+  const age = Math.max(0, Date.now() - ts)
+  return age < DISMISS_TTL_MS
+}
 
 function detectPlatform(): Platform {
   const ua = navigator.userAgent
@@ -48,15 +59,31 @@ export function useInstallPrompt(): InstallPromptState {
 
   const [platform] = useState<Platform>(detectPlatform)
   const [isInstalled] = useState<boolean>(detectInstalled)
-  const [isDismissed, setIsDismissed] = useState<boolean>(() => {
-    try {
-      return sessionStorage.getItem(SESSION_KEY) === 'true'
-    } catch {
-      return false
-    }
-  })
+  const [isDismissed, setIsDismissed] = useState<boolean>(readDismissed)
+  const [hasEverImported, setHasEverImported] = useState<boolean>(() =>
+    getBoolPref('hasEverImported'),
+  )
   const [promptEvent, setPromptEvent] = useState<BeforeInstallPromptEvent | null>(null)
   const promptRef = useRef<BeforeInstallPromptEvent | null>(null)
+
+  // Pick up the flag when a first import completes in another hook/page.
+  useEffect(() => {
+    if (hasEverImported) return
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === PREF_KEYS.hasEverImported && e.newValue === '1') {
+        setHasEverImported(true)
+      }
+    }
+    const onFocus = () => {
+      if (getBoolPref('hasEverImported')) setHasEverImported(true)
+    }
+    window.addEventListener('storage', onStorage)
+    window.addEventListener('focus', onFocus)
+    return () => {
+      window.removeEventListener('storage', onStorage)
+      window.removeEventListener('focus', onFocus)
+    }
+  }, [hasEverImported])
 
   useEffect(() => {
     if (isNativePlatform) return
@@ -90,11 +117,7 @@ export function useInstallPrompt(): InstallPromptState {
 
   const dismiss = useCallback(() => {
     setIsDismissed(true)
-    try {
-      sessionStorage.setItem(SESSION_KEY, 'true')
-    } catch {
-      // sessionStorage unavailable
-    }
+    setPref('installBannerDismissedAt', new Date().toISOString())
   }, [])
 
   // On native Capacitor apps, there is no install prompt
@@ -102,6 +125,7 @@ export function useInstallPrompt(): InstallPromptState {
 
   const canInstall = (() => {
     if (isInstalled) return false
+    if (!hasEverImported) return false
     if (platform === 'android' && promptEvent !== null) return true
     if (platform === 'ios') return true
     if (platform === 'desktop' && promptEvent !== null) return true
