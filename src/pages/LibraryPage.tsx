@@ -15,6 +15,15 @@ import ActionSheet, { type ActionSheetOption } from '../components/ActionSheet';
 import ProcessingDialog from '../components/ProcessingDialog';
 import FirstRunCard from '../components/FirstRunCard';
 import { getBoolPref, setBoolPref } from '../lib/uiPrefs';
+import { useLibrarySearch, type LibrarySort } from '../hooks/useLibrarySearch';
+
+const SEARCH_THRESHOLD = 7;
+
+const SORT_LABELS: Record<LibrarySort, string> = {
+  recent: 'Recent',
+  title: 'Title',
+  author: 'Author',
+};
 
 function sortPublications(
   pubs: Publication[],
@@ -51,8 +60,16 @@ export default function LibraryPage() {
   const uploadFabRef = useRef<UploadFABHandle>(null);
   const archiveUndoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const navigate = useNavigate();
-  const featuredPublication = publications[0] ?? null;
-  const remainingPublications = featuredPublication ? publications.slice(1) : [];
+
+  const search = useLibrarySearch(publications, progressMap);
+  const showSearch = publications.length > SEARCH_THRESHOLD;
+  const displayPublications = showSearch ? search.filtered : publications;
+  const featuredPublication = (!search.isSearching && !showSearch)
+    ? (publications[0] ?? null)
+    : null;
+  const remainingPublications = featuredPublication
+    ? displayPublications.filter((p) => p.id !== featuredPublication.id)
+    : displayPublications;
   const featuredProgress = featuredPublication ? progressMap[featuredPublication.id] : undefined;
 
   const fetchPubs = useCallback(async () => {
@@ -255,6 +272,49 @@ export default function LibraryPage() {
         </p>
       </header>
 
+      {showSearch && (
+        <div className="library-search" role="search">
+          <div className="library-search__input-wrap">
+            <svg className="library-search__icon" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true">
+              <circle cx="7" cy="7" r="5" />
+              <line x1="11" y1="11" x2="14" y2="14" />
+            </svg>
+            <input
+              type="search"
+              className="library-search__input"
+              value={search.query}
+              onChange={(e) => search.setQuery(e.target.value)}
+              placeholder="Search title or author"
+              aria-label="Search library"
+              autoComplete="off"
+            />
+            {search.query && (
+              <button
+                type="button"
+                className="library-search__clear"
+                onClick={() => search.setQuery('')}
+                aria-label="Clear search"
+              >
+                &#x2715;
+              </button>
+            )}
+          </div>
+          <label className="library-search__sort">
+            <span className="visually-hidden">Sort by</span>
+            <select
+              className="library-search__sort-select"
+              value={search.sort}
+              onChange={(e) => search.setSort(e.target.value as LibrarySort)}
+              aria-label="Sort library"
+            >
+              {(Object.keys(SORT_LABELS) as LibrarySort[]).map((s) => (
+                <option key={s} value={s}>{SORT_LABELS[s]}</option>
+              ))}
+            </select>
+          </label>
+        </div>
+      )}
+
       {error && (
         <div className="toast toast--error" role="alert">
           <span>{error}</span>
@@ -290,6 +350,16 @@ export default function LibraryPage() {
             }}
           />
         )
+      ) : search.isSearching && displayPublications.length === 0 ? (
+        <EmptyState
+          icon="search"
+          title="No matches"
+          description={`Nothing in your library matches "${search.query.trim()}". Try a different search.`}
+          action={{
+            label: 'Clear search',
+            onClick: () => search.setQuery(''),
+          }}
+        />
       ) : (
         <>
           {featuredPublication && (
