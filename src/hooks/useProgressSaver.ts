@@ -32,6 +32,42 @@ export function useProgressSaver({ publicationId, scrollContainerRef, formattedV
   const lastSavedChapterIdRef = useRef(0);
   const wpmByModeRef = useRef<Partial<Record<ReadingMode, number>>>({});
   const apiTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Debounce localStorage writes so scroll-tick commits don't land a
+  // synchronous setItem on every 10-px scroll bucket.
+  const lsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingPositionRef = useRef<{
+    chapter_id: number
+    chapter_idx: number
+    absolute_segment_index: number
+    word_index: number
+    scroll_top: number
+  } | null>(null);
+  const pendingPrefsRef = useRef<{ wpm: number; readingMode: ReadingMode; wpmByMode: Partial<Record<ReadingMode, number>> } | null>(null);
+
+  const flushLocalStorage = useCallback(() => {
+    if (lsTimerRef.current) {
+      clearTimeout(lsTimerRef.current);
+      lsTimerRef.current = null;
+    }
+    const pos = pendingPositionRef.current;
+    if (pos) {
+      pendingPositionRef.current = null;
+      writeStoredPosition(publicationId, pos);
+    }
+    const prefs = pendingPrefsRef.current;
+    if (prefs) {
+      pendingPrefsRef.current = null;
+      writeStoredPrefs(publicationId, prefs);
+    }
+  }, [publicationId]);
+
+  const scheduleLocalStorageWrite = useCallback(() => {
+    if (lsTimerRef.current) return;
+    lsTimerRef.current = setTimeout(() => {
+      lsTimerRef.current = null;
+      flushLocalStorage();
+    }, 500);
+  }, [flushLocalStorage]);
   /** Last section-relative offset computed while the DOM was live.
    *  Used as a fallback in doSave() when the container may be detached
    *  (e.g. during React unmount cleanup in Safari, where detached
@@ -209,6 +245,7 @@ export function useProgressSaver({ publicationId, scrollContainerRef, formattedV
             clearTimeout(apiTimerRef.current);
             apiTimerRef.current = null;
           }
+          flushLocalStorage();
           doSave();
         }
         return;
@@ -256,15 +293,24 @@ export function useProgressSaver({ publicationId, scrollContainerRef, formattedV
       if (key !== lastSavedKeyRef.current) {
         lastSavedKeyRef.current = key;
         lastSavedChapterIdRef.current = snap.chapterId;
-        writeStoredPosition(publicationId, {
+        // Stash the latest values and debounce the sync localStorage
+        // writes. During playback the commit rate outpaces what the
+        // main thread can absorb as setItem calls; the pause/unload/
+        // unmount flush paths still persist immediately.
+        pendingPositionRef.current = {
           chapter_id: snap.chapterId,
           chapter_idx: snap.chapterIdx,
           absolute_segment_index: snap.absoluteSegmentIndex,
           word_index: snap.wordIndex,
           scroll_top: sectionOffset,
-        });
+        };
         wpmByModeRef.current = { ...wpmByModeRef.current, [snap.mode]: snap.wpm };
-        writeStoredPrefs(publicationId, { wpm: snap.wpm, readingMode: snap.mode, wpmByMode: wpmByModeRef.current });
+        pendingPrefsRef.current = {
+          wpm: snap.wpm,
+          readingMode: snap.mode,
+          wpmByMode: wpmByModeRef.current,
+        };
+        scheduleLocalStorageWrite();
       }
 
       // Farthest-read update (monotonic). Mirrors the old ReaderViewport
@@ -294,19 +340,26 @@ export function useProgressSaver({ publicationId, scrollContainerRef, formattedV
       if (apiTimerRef.current) clearTimeout(apiTimerRef.current);
       if (pauseTransition) {
         apiTimerRef.current = null;
+        flushLocalStorage();
         doSave();
       } else {
         apiTimerRef.current = setTimeout(doSave, 2000);
       }
     });
-  }, [publicationId, doSave]);
+  }, [publicationId, doSave, flushLocalStorage, scheduleLocalStorageWrite]);
 
   // Immediate save on page hide, beforeunload, and unmount
   useEffect(() => {
     const onVisibilityChange = () => {
-      if (document.visibilityState === 'hidden') doSave();
+      if (document.visibilityState === 'hidden') {
+        flushLocalStorage();
+        doSave();
+      }
     };
-    const onBeforeUnload = () => doSave();
+    const onBeforeUnload = () => {
+      flushLocalStorage();
+      doSave();
+    };
 
     document.addEventListener('visibilitychange', onVisibilityChange);
     window.addEventListener('beforeunload', onBeforeUnload);
@@ -315,7 +368,8 @@ export function useProgressSaver({ publicationId, scrollContainerRef, formattedV
       document.removeEventListener('visibilitychange', onVisibilityChange);
       window.removeEventListener('beforeunload', onBeforeUnload);
       if (apiTimerRef.current) clearTimeout(apiTimerRef.current);
+      flushLocalStorage();
       doSave();
     };
-  }, [doSave]);
+  }, [doSave, flushLocalStorage]);
 }

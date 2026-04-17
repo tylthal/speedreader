@@ -726,6 +726,15 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
   // threshold ignores sub-pixel jitter from font hinting / scrollbar
   // reflow. Debounced to one rAF so a burst of late image loads collapses
   // into a single rebuild.
+  //
+  // Split into two effects so the observer + its height memory survive
+  // chapter transitions. Attaching a fresh observer on every chapter
+  // change re-fires `significant=true` for every section on first
+  // observation (because `prev === 0`), scheduling a rebuild that can
+  // destabilize layout right when the new chapter is loading.
+  const resizeObserverRef = useRef<ResizeObserver | null>(null)
+  const observedSectionsRef = useRef<Set<HTMLElement>>(new Set())
+
   useEffect(() => {
     if (!velocityProfileRef) return
     const container = containerRef.current
@@ -735,11 +744,6 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
     let pendingHandle = 0
     let pendingIsIdle = false
     let pendingRebuildAfterPause = false
-    // Profile rebuilds are important but never truly urgent — they affect
-    // scroll speed on the NEXT frame, not the current one. Prefer
-    // requestIdleCallback so the rebuild slots into browser idle time
-    // rather than competing with the next paint. Falls back to rAF on
-    // browsers without idle callback (Safari pre-17).
     const ric = (window as Window & {
       requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number
       cancelIdleCallback?: (h: number) => void
@@ -780,9 +784,6 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
         }
       }
       if (!significant) return
-      // During playback, profile rebuilds cause layout thrashing that
-      // manifests as scroll jitter. Defer until pause — otherwise the
-      // first frame after an image decodes during scroll will stall.
       if (positionStore.getSnapshot().isPlaying) {
         pendingRebuildAfterPause = true
         return
@@ -790,9 +791,6 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
       scheduleRebuild()
     })
 
-    // When playback stops, drain any deferred rebuild. scheduleRebuild
-    // uses requestIdleCallback internally, so the rebuild lands between
-    // frames rather than blocking the first post-pause paint.
     const onPlaybackChange = () => {
       if (positionStore.getSnapshot().isPlaying) return
       if (!pendingRebuildAfterPause) return
@@ -800,20 +798,43 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
       scheduleRebuild()
     }
     const unsubPlayback = positionStore.subscribe(onPlaybackChange)
+    resizeObserverRef.current = observer
 
+    // Observe whatever sections are currently mounted. Subsequent chapter
+    // changes are handled by the companion effect below without disposing
+    // the observer.
     for (const el of sectionRefs.current.values()) {
       observer.observe(el)
+      observedSectionsRef.current.add(el)
     }
 
     return () => {
       cancelPending()
       unsubPlayback()
       observer.disconnect()
+      resizeObserverRef.current = null
+      observedSectionsRef.current.clear()
+      lastHeights.clear()
     }
-    // We intentionally re-run when chapters change so the observer attaches
-    // to whatever sections currently exist.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chapters, velocityProfileRef])
+  }, [velocityProfileRef])
+
+  // Sync the observer's section set when chapters change. The observer
+  // instance itself is stable (above effect), so the per-section height
+  // memory survives chapter transitions — this only attaches new section
+  // elements and detaches ones that no longer exist.
+  useEffect(() => {
+    const observer = resizeObserverRef.current
+    if (!observer) return
+    const current = new Set<HTMLElement>()
+    for (const el of sectionRefs.current.values()) current.add(el)
+    for (const el of observedSectionsRef.current) {
+      if (!current.has(el)) observer.unobserve(el)
+    }
+    for (const el of current) {
+      if (!observedSectionsRef.current.has(el)) observer.observe(el)
+    }
+    observedSectionsRef.current = current
+  }, [chapters])
 
   // Track the last section index we *reported* to the parent so the
   // IntersectionObserver doesn't re-emit it on every entry batch. The
@@ -1085,12 +1106,13 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
       applySubpixelScroll: (offsetPx: number) => {
         const el = columnRef.current
         if (!el) return
-        // Round to 0.05 px to avoid spamming style writes with float
-        // noise; the eye cannot resolve finer than that.
-        const q = Math.round(offsetPx * 20) / 20
-        if (q === subpixelOffsetRef.current) return
-        subpixelOffsetRef.current = q
-        el.style.transform = q === 0 ? '' : `translate3d(0, ${q}px, 0)`
+        // Skip sub-visible updates to avoid spamming style writes. Using
+        // a delta threshold instead of hard quantization avoids boundary
+        // oscillation at slow track-mode speeds where the fractional
+        // offset can advance by less than the quantum per frame.
+        if (Math.abs(offsetPx - subpixelOffsetRef.current) < 0.05) return
+        subpixelOffsetRef.current = offsetPx
+        el.style.transform = offsetPx === 0 ? '' : `translate3d(0, ${offsetPx}px, 0)`
       },
       resetSubpixelScroll: () => {
         const el = columnRef.current

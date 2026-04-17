@@ -623,8 +623,13 @@ export function usePlaybackController(
             const intended = scrollPositionRef.current
             const intTop = Math.floor(intended)
             const frac = intended - intTop
-            container.scrollTop = intTop
+            // Apply the sub-pixel transform BEFORE the scrollTop write so
+            // the visual position is consistent at the moment the scroll
+            // event dispatches — otherwise subscribers waking on the
+            // scroll event can read an intermediate position between the
+            // two DOM writes.
             formattedViewRef.current?.applySubpixelScroll(-frac)
+            container.scrollTop = intTop
           } else {
             container.scrollTop = Math.floor(scrollPositionRef.current * dpr) / dpr
           }
