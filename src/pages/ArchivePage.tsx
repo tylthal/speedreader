@@ -8,6 +8,28 @@ import type { Publication } from '../db/localClient';
 import BookCard from '../components/BookCard';
 import EmptyState from '../components/EmptyState';
 import ActionSheet, { type ActionSheetOption } from '../components/ActionSheet';
+import StorageStatus from '../components/StorageStatus';
+import { getBookFileSize } from '../lib/fileStorage';
+
+async function resolveSizes(pubs: Publication[]): Promise<Record<number, number>> {
+  const out: Record<number, number> = {};
+  const LIMIT = 6;
+  let i = 0;
+  async function worker() {
+    while (i < pubs.length) {
+      const idx = i++;
+      const p = pubs[idx];
+      try {
+        const size = await getBookFileSize(p.id);
+        if (size > 0) out[p.id] = size;
+      } catch {
+        // skip
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(LIMIT, pubs.length) }, worker));
+  return out;
+}
 
 export default function ArchivePage() {
   const [archived, setArchived] = useState<Publication[]>([]);
@@ -16,6 +38,7 @@ export default function ArchivePage() {
   const [actionSheet, setActionSheet] = useState<{ pub: Publication } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Publication | null>(null);
   const [deleting, setDeleting] = useState<number | null>(null);
+  const [sizes, setSizes] = useState<Record<number, number>>({});
 
   const fetchArchived = useCallback(async () => {
     try {
@@ -24,6 +47,9 @@ export default function ArchivePage() {
       // Newest first
       pubs.sort((a, b) => b.id - a.id);
       setArchived(pubs);
+      // Resolve file sizes in parallel (capped) so Archive cards can
+      // show the reclaim-worthy entries prominently.
+      void resolveSizes(pubs).then(setSizes).catch(() => {});
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load archive');
     } finally {
@@ -133,6 +159,8 @@ export default function ArchivePage() {
         <span>Archived books are hidden from your library but still stored on your device. Swipe left to restore.</span>
       </div>
 
+      <StorageStatus bookCount={archived.length} showArchiveLink={false} />
+
       {loading ? (
         <div className="book-list">
           {[1, 2].map((i) => (
@@ -161,6 +189,7 @@ export default function ArchivePage() {
               swipeLabel="Restore"
               swipeColor="accent"
               disabled={deleting === pub.id}
+              byteSize={sizes[pub.id]}
             />
           ))}
         </div>

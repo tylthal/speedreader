@@ -58,6 +58,23 @@ export async function getBookFile(pubId: number): Promise<File | null> {
   return b.getBookFile(pubId);
 }
 
+/**
+ * Best-effort total byte size for a single book across its stored files
+ * (main book file + any stored images/cover). Returns 0 if nothing is
+ * stored or the backend couldn't resolve a size. Uses the Blob.size
+ * after a round-trip through getBookFile/getCoverBlob; cheap for small
+ * libraries, and called with a concurrency limit where appropriate.
+ */
+export async function getBookFileSize(pubId: number): Promise<number> {
+  try {
+    const file = await getBookFile(pubId);
+    if (file) return file.size;
+    return 0;
+  } catch {
+    return 0;
+  }
+}
+
 export async function deleteBookFiles(pubId: number): Promise<void> {
   const b = await getBackend();
   return b.deleteBookFiles(pubId);

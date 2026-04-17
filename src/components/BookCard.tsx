@@ -1,6 +1,7 @@
 import { useRef, useState, useCallback } from 'react';
 import type { Publication, Bookmark } from '../db/localClient';
 import CoverPlaceholder from './CoverPlaceholder';
+import { formatBytes } from '../lib/format';
 
 interface BookCardProps {
   pub: Publication;
@@ -14,6 +15,8 @@ interface BookCardProps {
   swipeColor?: 'accent' | 'danger';
   disabled?: boolean;
   peek?: boolean;
+  /** Optional per-book byte size displayed in the footer. */
+  byteSize?: number;
 }
 
 export default function BookCard({
@@ -28,6 +31,7 @@ export default function BookCard({
   swipeColor = 'accent',
   disabled,
   peek,
+  byteSize,
 }: BookCardProps) {
   const cardRef = useRef<HTMLDivElement>(null);
   const startX = useRef(0);
@@ -203,7 +207,15 @@ export default function BookCard({
           <p className="book-card__author">{pub.author || 'Unknown author'}</p>
 
           <div className="book-card__footer">
-            <span className="book-card__meta">{supportingMeta}</span>
+            <span className="book-card__meta">
+              {supportingMeta}
+              {typeof byteSize === 'number' && byteSize > 0 && (
+                <>
+                  <span className="book-card__meta-dot" aria-hidden="true"> · </span>
+                  <span className="book-card__size">{formatBytes(byteSize)}</span>
+                </>
+              )}
+            </span>
             <span className={`book-card__progress-label${pct === 0 ? ' book-card__progress-label--new' : ''}`}>
               {progressText}
             </span>

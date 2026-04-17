@@ -1,7 +1,8 @@
+import { useEffect, useState } from 'react';
 import { useTheme, type Theme } from '../hooks/useTheme';
 import { useDefaultDisplayMode } from '../hooks/useDefaultDisplayMode';
 import { useChapterFlow, type ChapterFlow } from '../hooks/useChapterFlow';
-import type { DisplayMode } from '../db/localClient';
+import { getPublications, type DisplayMode } from '../db/localClient';
 import StorageStatus from '../components/StorageStatus';
 
 interface ThemeOption {
@@ -48,6 +49,15 @@ export default function SettingsPage() {
   const { theme, setTheme } = useTheme();
   const { defaultDisplayMode, setDefaultDisplayMode } = useDefaultDisplayMode();
   const { chapterFlow, setChapterFlow } = useChapterFlow();
+  const [bookCount, setBookCount] = useState<number | undefined>(undefined);
+
+  useEffect(() => {
+    let cancelled = false;
+    getPublications()
+      .then((pubs) => { if (!cancelled) setBookCount(pubs.length); })
+      .catch(() => { if (!cancelled) setBookCount(undefined); });
+    return () => { cancelled = true; };
+  }, []);
 
   return (
     <div className="app-page app-page--settings" role="main" aria-label="Settings" id="main-content">
@@ -91,7 +101,7 @@ export default function SettingsPage() {
         <p className="settings-section__description">
           Books are stored locally on your device. No data is sent to any server.
         </p>
-        <StorageStatus />
+        <StorageStatus bookCount={bookCount} />
       </section>
 
       {/* Reading */}
