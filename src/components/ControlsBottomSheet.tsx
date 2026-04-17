@@ -37,6 +37,8 @@ interface ControlsBottomSheetProps {
   gazeStatus?: GazeStatus;
   gazeVideoRef?: React.RefObject<HTMLVideoElement | null>;
   gazeLandmarksRef?: React.RefObject<FaceLandmark[] | null>;
+  /** Live ref for direction/intensity — HUD reads this at ~15Hz without re-rendering. */
+  gazeRef?: React.RefObject<{ direction: GazeDirection; intensity: number }>;
   /** Open the Table of Contents panel. */
   onOpenToc?: () => void;
   /** Open the Bookmarks panel. */
@@ -74,6 +76,7 @@ export default function ControlsBottomSheet({
   gazeStatus,
   gazeVideoRef,
   gazeLandmarksRef,
+  gazeRef,
   onOpenToc,
   onOpenBookmarks,
 }: ControlsBottomSheetProps) {
@@ -430,6 +433,7 @@ export default function ControlsBottomSheet({
               status={gazeStatus}
               videoRef={gazeVideoRef}
               landmarksRef={gazeLandmarksRef}
+              gazeRef={gazeRef}
             />
           </div>
         )}

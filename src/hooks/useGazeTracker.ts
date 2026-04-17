@@ -76,9 +76,9 @@ export function useGazeTracker(): [GazeState, React.RefObject<{ direction: GazeD
   const landmarksRef = useRef<FaceLandmark[] | null>(null);
   const lastGazeTimestampRef = useRef(0);
   const lostTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lastStateUpdateRef = useRef(0);
   const mountedRef = useRef(true);
   const statusRef = useRef<GazeStatus>('idle');
+  const lastDirectionRef = useRef<GazeDirection>('neutral');
 
   statusRef.current = state.status;
 
@@ -87,23 +87,34 @@ export function useGazeTracker(): [GazeState, React.RefObject<{ direction: GazeD
     return () => { mountedRef.current = false; };
   }, []);
 
-  /* ---- Throttled state update (4 Hz for UI) ---- */
   const debugRef = useRef({ pitch: 0, normalized: 0 });
 
+  // Gaze direction/intensity live in gazeRef (read by the playback tick
+  // and by GazeIndicator's own rAF). We only re-render React state on
+  // discrete transitions — direction change or status change — so
+  // continuous reading doesn't trigger a re-render cascade across the
+  // reader tree during scroll.
   const updateGaze = useCallback((direction: GazeDirection, intensity: number, confidence: number, debugPitch?: number, debugNormalized?: number) => {
     gazeRef.current = { direction, intensity };
     if (debugPitch !== undefined) debugRef.current = { pitch: debugPitch, normalized: debugNormalized ?? 0 };
 
-    const now = Date.now();
-    if (now - lastStateUpdateRef.current < 250) return;
-    lastStateUpdateRef.current = now;
-
     if (!mountedRef.current) return;
-    setState({
-      status: 'tracking', direction, intensity, confidence, resumeCountdown: 0,
+
+    const directionChanged = direction !== lastDirectionRef.current;
+    const statusChanging = statusRef.current !== 'tracking';
+    if (!directionChanged && !statusChanging) return;
+
+    lastDirectionRef.current = direction;
+    setState(prev => ({
+      ...prev,
+      status: 'tracking',
+      direction,
+      intensity,
+      confidence,
+      resumeCountdown: 0,
       debugPitch: debugRef.current.pitch,
       debugNormalized: debugRef.current.normalized,
-    });
+    }));
   }, []);
 
   // Tracks when face reappeared after a loss, for resume delay
@@ -119,6 +130,7 @@ export function useGazeTracker(): [GazeState, React.RefObject<{ direction: GazeD
     // Immediately pause — zero gaze and mark as lost
     gazeRef.current = { direction: 'neutral', intensity: 0 };
     reacquiredAtRef.current = 0; // reset resume timer
+    lastDirectionRef.current = 'neutral';
 
     if (statusRef.current === 'tracking') {
       setState(prev => ({ ...prev, status: 'lost', direction: 'neutral', intensity: 0, resumeCountdown: 0 }));
