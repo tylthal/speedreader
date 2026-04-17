@@ -8,6 +8,8 @@ interface EmptyStateProps {
     label: string;
     onClick: () => void;
   };
+  chips?: readonly string[];
+  chipsLabel?: string;
 }
 
 const icons: Record<string, React.ReactNode> = {
@@ -35,7 +37,14 @@ const icons: Record<string, React.ReactNode> = {
   ),
 };
 
-export default function EmptyState({ icon, title, description, action }: EmptyStateProps) {
+export default function EmptyState({
+  icon,
+  title,
+  description,
+  action,
+  chips,
+  chipsLabel,
+}: EmptyStateProps) {
   return (
     <div className={`empty-state empty-state--${icon}`}>
       <div className="empty-state__icon">{icons[icon]}</div>
@@ -45,6 +54,16 @@ export default function EmptyState({ icon, title, description, action }: EmptySt
         <button className="empty-state__action" onClick={action.onClick} type="button">
           {action.label}
         </button>
+      )}
+      {chips && chips.length > 0 && (
+        <div className="empty-state__chips-wrap">
+          {chipsLabel && <span className="empty-state__chips-label">{chipsLabel}</span>}
+          <ul className="empty-state__chips" aria-label="Supported formats">
+            {chips.map((c) => (
+              <li key={c} className="empty-state__chip">{c}</li>
+            ))}
+          </ul>
+        </div>
       )}
     </div>
   );

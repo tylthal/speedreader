@@ -10,7 +10,7 @@ import {
 import type { Publication, Bookmark } from '../db/localClient';
 import BookCard from '../components/BookCard';
 import EmptyState from '../components/EmptyState';
-import UploadFAB, { type UploadFABHandle } from '../components/UploadFAB';
+import UploadFAB, { type UploadFABHandle, ACCEPTED_FORMAT_LABELS } from '../components/UploadFAB';
 import ActionSheet, { type ActionSheetOption } from '../components/ActionSheet';
 import ProcessingDialog from '../components/ProcessingDialog';
 import { getBoolPref, setBoolPref } from '../lib/uiPrefs';
@@ -283,6 +283,8 @@ export default function LibraryPage() {
             label: 'Import your first book',
             onClick: () => uploadFabRef.current?.openPicker(),
           }}
+          chipsLabel="Supports"
+          chips={ACCEPTED_FORMAT_LABELS}
         />
       ) : (
         <>

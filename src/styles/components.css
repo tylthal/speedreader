@@ -1814,6 +1814,32 @@ body.has-install-banner {
   flex-shrink: 0;
 }
 
+.book-card__placeholder {
+  flex-shrink: 0;
+  margin-right: 0.85rem;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-display);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
+  user-select: none;
+}
+
+.book-card--featured .book-card__placeholder--featured {
+  margin-right: 1rem;
+}
+
+.book-card__placeholder-initials {
+  font-size: 1.25rem;
+}
+
+.book-card--featured .book-card__placeholder-initials {
+  font-size: 1.6rem;
+}
+
 .book-card__cover {
   flex-shrink: 0;
   width: 56px;
@@ -2115,6 +2141,45 @@ body.has-install-banner {
 .empty-state__action:active {
   background: var(--accent-hover);
   transform: scale(0.98);
+}
+
+.empty-state__chips-wrap {
+  margin-top: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.empty-state__chips-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.empty-state__chips {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.4rem;
+  max-width: 320px;
+}
+
+.empty-state__chip {
+  font-family: var(--font-ui);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: var(--text-muted);
+  background: var(--surface-subtle);
+  border: 1px solid var(--surface-border);
+  padding: 0.3rem 0.6rem;
+  border-radius: 999px;
 }
 
 /* ==========================================================================

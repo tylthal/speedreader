@@ -1,5 +1,6 @@
 import { useRef, useState, useCallback } from 'react';
 import type { Publication, Bookmark } from '../db/localClient';
+import CoverPlaceholder from './CoverPlaceholder';
 
 interface BookCardProps {
   pub: Publication;
@@ -170,7 +171,7 @@ export default function BookCard({
             />
           </div>
         ) : (
-          <div className="book-card__spine" />
+          <CoverPlaceholder title={pub.title} format={format} featured={featured} />
         )}
 
         <div className="book-card__content">

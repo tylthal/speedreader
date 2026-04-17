@@ -11,7 +11,16 @@ export interface UploadFABHandle {
   openPicker: () => void;
 }
 
-const ACCEPTED = '.epub,.pdf,.txt,.html,.htm,.md,.fb2,.rtf,.docx,.cbz';
+export const ACCEPTED_EXTENSIONS = ['.epub', '.pdf', '.txt', '.html', '.htm', '.md', '.fb2', '.rtf', '.docx', '.cbz'] as const;
+const ACCEPTED = ACCEPTED_EXTENSIONS.join(',');
+
+export const ACCEPTED_FORMAT_LABELS: readonly string[] = Array.from(
+  new Set(
+    ACCEPTED_EXTENSIONS.map((ext) => ext.replace('.', '').toUpperCase()).map((raw) =>
+      raw === 'HTM' ? 'HTML' : raw,
+    ),
+  ),
+);
 
 const UploadFAB = forwardRef<UploadFABHandle, UploadFABProps>(function UploadFAB(
   { onFileSelect, uploading, uploadPhase, uploadPercent }: UploadFABProps,
