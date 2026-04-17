@@ -37,6 +37,10 @@ interface ControlsBottomSheetProps {
   gazeStatus?: GazeStatus;
   gazeVideoRef?: React.RefObject<HTMLVideoElement | null>;
   gazeLandmarksRef?: React.RefObject<FaceLandmark[] | null>;
+  /** Open the Table of Contents panel. */
+  onOpenToc?: () => void;
+  /** Open the Bookmarks panel. */
+  onOpenBookmarks?: () => void;
 }
 
 const MODE_META: Record<ReadingMode, { label: string; short: string; description: string }> = {
@@ -70,6 +74,8 @@ export default function ControlsBottomSheet({
   gazeStatus,
   gazeVideoRef,
   gazeLandmarksRef,
+  onOpenToc,
+  onOpenBookmarks,
 }: ControlsBottomSheetProps) {
   const { announce } = useAnnounce();
   const haptics = useHaptics();
@@ -229,6 +235,7 @@ export default function ControlsBottomSheet({
       {/* ── Interactive Progress Bar ── */}
       <div
         className={`controls__progress-wrap${isScrubbing ? ' controls__progress-wrap--scrubbing' : ''}`}
+        style={{ '--scrub-left': `${displayProgress * 100}%` } as CSSProperties}
         onPointerDown={onSeek ? handleProgressPointerDown : undefined}
         onPointerMove={onSeek ? handleProgressPointerMove : undefined}
         onPointerUp={onSeek ? handleProgressPointerUp : undefined}
@@ -465,6 +472,40 @@ export default function ControlsBottomSheet({
           &#x2759;&#x2759;
         </button>
       </div>
+
+      {/* ── Thumb-zone Nav (TOC + Bookmarks) ── */}
+      {(onOpenToc || onOpenBookmarks) && (
+        <div className="controls__nav-row">
+          {onOpenToc && (
+            <button
+              type="button"
+              className="controls__nav-pill"
+              onClick={() => { onOpenToc(); haptics.tap(); }}
+              aria-label="Open table of contents"
+            >
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true">
+                <line x1="3" y1="4" x2="13" y2="4" />
+                <line x1="3" y1="8" x2="13" y2="8" />
+                <line x1="3" y1="12" x2="13" y2="12" />
+              </svg>
+              <span>Contents</span>
+            </button>
+          )}
+          {onOpenBookmarks && (
+            <button
+              type="button"
+              className="controls__nav-pill"
+              onClick={() => { onOpenBookmarks(); haptics.tap(); }}
+              aria-label="Open bookmarks"
+            >
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M4 2h8v12l-4-3-4 3z" />
+              </svg>
+              <span>Bookmarks</span>
+            </button>
+          )}
+        </div>
+      )}
 
       {/* ── Play/Pause Button ── */}
       <button

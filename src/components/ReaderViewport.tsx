@@ -1284,6 +1284,8 @@ function ActiveReader({
         gazeStatus={readingMode === 'track' ? gazeState.status : undefined}
         gazeVideoRef={gazeVideoRef}
         gazeLandmarksRef={gazeLandmarksRef}
+        onOpenToc={() => setTocOpen(true)}
+        onOpenBookmarks={() => setBookmarksOpen(true)}
       />
     </div>
   );

@@ -177,6 +177,17 @@ html[data-playing] .reader-header {
   transition: opacity 200ms ease-out;
 }
 
+/* On phone-sized viewports, TOC and Bookmarks are promoted into the
+   controls bottom sheet for thumb reach; hide the header icons so
+   the header isn't showing duplicate triggers. Desktop / tablet
+   keeps them next to the title for keyboard / pointer users. */
+@media (max-width: 640px) {
+  .reader-header__toc,
+  .reader-header__bookmarks {
+    display: none;
+  }
+}
+
 .reader-header__btn {
   background: transparent;
   border: none;
@@ -1025,6 +1036,24 @@ html[data-playing] .reader-header {
   color: var(--text-muted);
   line-height: 1;
   pointer-events: none;
+  transition: top 0.15s ease, right 0.15s ease, transform 0.15s ease, background 0.15s ease, color 0.15s ease, padding 0.15s ease, border 0.15s ease;
+}
+
+/* During an active scrub, lift the % into a floating bubble above the
+   thumb — otherwise the thumb covers the live value the user is
+   trying to read. */
+.controls__progress-wrap--scrubbing .controls__progress-label {
+  top: -22px;
+  right: auto;
+  left: var(--scrub-left, 0%);
+  transform: translateX(-50%);
+  padding: 2px 8px;
+  background: var(--accent);
+  color: #fff;
+  border-radius: 999px;
+  font-weight: 700;
+  font-size: 0.72rem;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
 }
 
 /* ---------- Bookmark markers on progress bar ---------- */
@@ -1528,6 +1557,39 @@ html[data-playing] .reader-header {
 }
 
 .controls__strip-wpm--interactive:active {
+  background: var(--surface-hover);
+}
+
+/* ==========================================================================
+   Controls nav row (thumb-zone TOC + Bookmarks triggers)
+   ========================================================================== */
+
+.controls__nav-row {
+  display: flex;
+  gap: 0.5rem;
+  margin: 0.75rem 0 0.5rem;
+}
+
+.controls__nav-pill {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  min-height: 44px;
+  padding: 0.5rem 0.75rem;
+  background: var(--surface-subtle);
+  border: 1px solid var(--surface-border);
+  border-radius: var(--radius-md);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.controls__nav-pill:active {
   background: var(--surface-hover);
 }
 
@@ -4401,16 +4463,32 @@ body.has-install-banner {
   background: none;
   border: none;
   color: var(--text-muted);
-  padding: 6px 8px;
-  border-radius: 6px;
+  padding: 4px 6px;
+  border-radius: 8px;
   cursor: pointer;
-  font-size: 0.85rem;
-  min-width: 32px;
-  min-height: 32px;
-  display: flex;
+  min-width: 44px;
+  min-height: 44px;
+  display: inline-flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 1px;
+  font-family: var(--font-ui);
+  -webkit-tap-highlight-color: transparent;
 }
+
+.theme-toggle__icon {
+  display: inline-flex;
+  line-height: 1;
+}
+
+.theme-toggle__label {
+  font-size: 0.58rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  line-height: 1;
+}
+
 .theme-toggle__btn--active {
   background: var(--accent);
   color: white;
