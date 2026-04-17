@@ -10,9 +10,10 @@ import {
 import type { Publication, Bookmark } from '../db/localClient';
 import BookCard from '../components/BookCard';
 import EmptyState from '../components/EmptyState';
-import UploadFAB, { type UploadFABHandle, ACCEPTED_FORMAT_LABELS } from '../components/UploadFAB';
+import UploadFAB, { type UploadFABHandle } from '../components/UploadFAB';
 import ActionSheet, { type ActionSheetOption } from '../components/ActionSheet';
 import ProcessingDialog from '../components/ProcessingDialog';
+import FirstRunCard from '../components/FirstRunCard';
 import { getBoolPref, setBoolPref } from '../lib/uiPrefs';
 
 function sortPublications(
@@ -118,6 +119,7 @@ export default function LibraryPage() {
         setUploadPhase(phase);
         setUploadPercent(percent);
       });
+      setBoolPref('hasEverImported', true);
       navigate(`/read/${pub.id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Upload failed');
@@ -275,17 +277,19 @@ export default function LibraryPage() {
           ))}
         </div>
       ) : publications.length === 0 ? (
-        <EmptyState
-          icon="library"
-          title="Your library is empty"
-          description="Import an EPUB, PDF, or other supported format to start reading. Your books stay on this device."
-          action={{
-            label: 'Import your first book',
-            onClick: () => uploadFabRef.current?.openPicker(),
-          }}
-          chipsLabel="Supports"
-          chips={ACCEPTED_FORMAT_LABELS}
-        />
+        !getBoolPref('hasEverImported') ? (
+          <FirstRunCard onImport={() => uploadFabRef.current?.openPicker()} />
+        ) : (
+          <EmptyState
+            icon="library"
+            title="Your library is empty"
+            description="Your archived books are in Archive. Import another to keep reading."
+            action={{
+              label: 'Import a book',
+              onClick: () => uploadFabRef.current?.openPicker(),
+            }}
+          />
+        )
       ) : (
         <>
           {featuredPublication && (
