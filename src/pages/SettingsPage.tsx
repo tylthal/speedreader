@@ -4,6 +4,7 @@ import { useDefaultDisplayMode } from '../hooks/useDefaultDisplayMode';
 import { useChapterFlow, type ChapterFlow } from '../hooks/useChapterFlow';
 import { getPublications, type DisplayMode } from '../db/localClient';
 import StorageStatus from '../components/StorageStatus';
+import Accordion from '../components/Accordion';
 
 interface ThemeOption {
   value: Theme;
@@ -66,13 +67,11 @@ export default function SettingsPage() {
         <p className="page-header__subtitle">Customize your reading experience</p>
       </header>
 
-      {/* Theme selection */}
-      <section className="settings-section">
-        <h2 className="settings-section__title">Appearance</h2>
+      <Accordion title="Appearance" defaultOpen>
         <p className="settings-section__description">
           Choose a theme that suits your environment. Evening and Bedtime themes are designed to reduce eye strain during night reading.
         </p>
-        <div className="theme-grid" role="radiogroup" aria-label="Choose theme">
+        <div className="theme-grid theme-grid--scroll" role="radiogroup" aria-label="Choose theme">
           {themeOptions.map((opt) => (
             <button
               key={opt.value}
@@ -93,20 +92,9 @@ export default function SettingsPage() {
             </button>
           ))}
         </div>
-      </section>
+      </Accordion>
 
-      {/* Storage */}
-      <section className="settings-section">
-        <h2 className="settings-section__title">Storage</h2>
-        <p className="settings-section__description">
-          Books are stored locally on your device. No data is sent to any server.
-        </p>
-        <StorageStatus bookCount={bookCount} />
-      </section>
-
-      {/* Reading */}
-      <section className="settings-section">
-        <h2 className="settings-section__title">Reading</h2>
+      <Accordion title="Reading">
         <p className="settings-section__description">
           The default display mode is used the first time you open a new book. Each book can be toggled individually from the reader.
         </p>
@@ -145,10 +133,9 @@ export default function SettingsPage() {
             </button>
           ))}
         </div>
-      </section>
+      </Accordion>
 
-      <section className="settings-section">
-        <h2 className="settings-section__title">Hands-free reading</h2>
+      <Accordion title="Hands-free reading">
         <p className="settings-section__description">
           Hands-free mode is designed for reading without touching the screen. Tracking runs on-device and only while you choose that mode.
         </p>
@@ -166,11 +153,16 @@ export default function SettingsPage() {
             <span className="settings-about__value">Recalibrate any time from that panel</span>
           </div>
         </div>
-      </section>
+      </Accordion>
 
-      {/* About */}
-      <section className="settings-section">
-        <h2 className="settings-section__title">About</h2>
+      <Accordion title="Storage">
+        <p className="settings-section__description">
+          Books are stored locally on your device. No data is sent to any server.
+        </p>
+        <StorageStatus bookCount={bookCount} />
+      </Accordion>
+
+      <Accordion title="About">
         <div className="settings-about">
           <div className="settings-about__row">
             <span className="settings-about__label">App</span>
@@ -185,7 +177,7 @@ export default function SettingsPage() {
             <span className="settings-about__value">EPUB, PDF, DOCX, FB2, HTML, MD, TXT, RTF, CBZ</span>
           </div>
         </div>
-      </section>
+      </Accordion>
     </div>
   );
 }

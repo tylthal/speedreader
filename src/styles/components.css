@@ -2211,6 +2211,59 @@ body.has-install-banner {
 }
 
 /* ==========================================================================
+   Accordion (Settings disclosure groups)
+   ========================================================================== */
+
+.accordion {
+  border: 1px solid var(--surface-border);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  margin-bottom: 0.75rem;
+  overflow: hidden;
+}
+
+.accordion__trigger {
+  width: 100%;
+  min-height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.85rem 1rem;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: var(--text);
+  font-family: var(--font-display);
+  font-size: 1rem;
+  font-weight: 600;
+  text-align: left;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.accordion__trigger:active {
+  background: var(--surface-hover);
+}
+
+.accordion__title {
+  flex: 1;
+  min-width: 0;
+}
+
+.accordion__chevron {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  transition: transform 180ms ease;
+}
+
+.accordion--open .accordion__chevron {
+  transform: rotate(180deg);
+}
+
+.accordion__panel {
+  padding: 0 1rem 1rem;
+}
+
+/* ==========================================================================
    Library Search + Sort
    ========================================================================== */
 
@@ -3021,6 +3074,27 @@ body.has-install-banner {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
   gap: 0.625rem;
+}
+
+/* Horizontal scrolling variant for narrow viewports — on phones the
+   7-theme 2-column grid burns too many rows; the scroll variant keeps
+   the full set reachable within a single row. */
+@media (max-width: 480px) {
+  .theme-grid--scroll {
+    grid-template-columns: none;
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 0.625rem;
+    overflow-x: auto;
+    scroll-snap-type: x mandatory;
+    -webkit-overflow-scrolling: touch;
+    padding: 0.25rem 0.1rem 0.75rem;
+    margin: 0 -0.25rem;
+  }
+  .theme-grid--scroll .theme-option {
+    flex: 0 0 104px;
+    scroll-snap-align: start;
+  }
 }
 
 .theme-grid--compact {
