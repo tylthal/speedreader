@@ -19,8 +19,12 @@ export default function ProcessingDialog({ filename, phase, percent, onCancel }:
   const dialogRef = useRef<HTMLDivElement>(null);
   const [displayPercent, setDisplayPercent] = useState(0);
   const [stalled, setStalled] = useState(false);
-  const lastProgressAtRef = useRef<number>(Date.now());
+  const lastProgressAtRef = useRef<number>(0);
   const lastPercentRef = useRef(percent);
+
+  useEffect(() => {
+    lastProgressAtRef.current = Date.now();
+  }, []);
 
   // Smooth percentage animation
   useEffect(() => {
