@@ -4,17 +4,23 @@ interface ProcessingDialogProps {
   filename: string;
   phase: string; // 'parsing' | 'chunking' | ''
   percent: number;
+  onCancel?: () => void;
 }
 
-const PHASE_LABELS: Record<string, { title: string; subtitle: string }> = {
-  '': { title: 'Opening your book', subtitle: 'Everything stays on this device.' },
-  parsing: { title: 'Reading your book', subtitle: 'Finding chapters, text, and images.' },
-  chunking: { title: 'Getting it ready', subtitle: 'Building the reading view and progress map.' },
+const PHASE_LABELS: Record<string, { title: string; subtitle: string; step: number }> = {
+  '': { title: 'Opening your book', subtitle: 'Everything stays on this device.', step: 1 },
+  parsing: { title: 'Reading your book', subtitle: 'Finding chapters, text, and images.', step: 1 },
+  chunking: { title: 'Getting it ready', subtitle: 'Building the reading view and progress map.', step: 2 },
 };
 
-export default function ProcessingDialog({ filename, phase, percent }: ProcessingDialogProps) {
+const STALL_MS = 8_000;
+
+export default function ProcessingDialog({ filename, phase, percent, onCancel }: ProcessingDialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const [displayPercent, setDisplayPercent] = useState(0);
+  const [stalled, setStalled] = useState(false);
+  const lastProgressAtRef = useRef<number>(Date.now());
+  const lastPercentRef = useRef(percent);
 
   // Smooth percentage animation
   useEffect(() => {
@@ -23,6 +29,22 @@ export default function ProcessingDialog({ filename, phase, percent }: Processin
     });
     return () => cancelAnimationFrame(id);
   }, [percent]);
+
+  // Track stalls — if percent doesn't change for 8s, flip the subtitle
+  // to a reassuring "large file" message.
+  useEffect(() => {
+    if (percent !== lastPercentRef.current) {
+      lastPercentRef.current = percent;
+      lastProgressAtRef.current = Date.now();
+      if (stalled) setStalled(false);
+    }
+    const id = setInterval(() => {
+      if (Date.now() - lastProgressAtRef.current > STALL_MS) {
+        setStalled(true);
+      }
+    }, 1000);
+    return () => clearInterval(id);
+  }, [percent, stalled]);
 
   // Animate in
   useEffect(() => {
@@ -33,6 +55,7 @@ export default function ProcessingDialog({ filename, phase, percent }: Processin
 
   const labels = PHASE_LABELS[phase] || PHASE_LABELS[''];
   const format = filename.split('.').pop()?.toUpperCase() || 'FILE';
+  const stalledSubtitle = 'Large file — still working…';
 
   // Progress ring dimensions
   const size = 120;
@@ -44,6 +67,8 @@ export default function ProcessingDialog({ filename, phase, percent }: Processin
   return (
     <div className="processing-dialog__overlay">
       <div ref={dialogRef} className="processing-dialog" role="alertdialog" aria-label="Processing book">
+        <span className="processing-dialog__stepper">Step {labels.step} of 2</span>
+
         {/* Animated progress ring */}
         <div className="processing-dialog__ring-container">
           <svg
@@ -97,7 +122,7 @@ export default function ProcessingDialog({ filename, phase, percent }: Processin
 
         {/* Phase info */}
         <h3 className="processing-dialog__title">{labels.title}</h3>
-        <p className="processing-dialog__subtitle">{labels.subtitle}</p>
+        <p className="processing-dialog__subtitle">{stalled ? stalledSubtitle : labels.subtitle}</p>
 
         {/* Filename pill */}
         <div className="processing-dialog__file">
@@ -111,6 +136,16 @@ export default function ProcessingDialog({ filename, phase, percent }: Processin
           <span className="processing-dialog__dot" />
           <span className="processing-dialog__dot" />
         </div>
+
+        {onCancel && (
+          <button
+            type="button"
+            className="processing-dialog__cancel"
+            onClick={onCancel}
+          >
+            Cancel
+          </button>
+        )}
       </div>
     </div>
   );

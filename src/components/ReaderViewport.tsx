@@ -28,7 +28,9 @@ import GestureLayer from './GestureLayer';
 import FocusChunkOverlay from './FocusChunkOverlay';
 import ControlsBottomSheet from './ControlsBottomSheet';
 import ReaderSettingsSheet from './ReaderSettingsSheet';
+import ReaderFirstRunHint from './ReaderFirstRunHint';
 import { useReaderTypography } from '../hooks/useReaderTypography';
+import { getBoolPref, setBoolPref, getNumberPref, setNumberPref } from '../lib/uiPrefs';
 import TrackCalibration from './TrackCalibration';
 import ReaderHeader from './ReaderHeader';
 import TocSidebar from './TocSidebar';
@@ -214,8 +216,13 @@ function ActiveReader({
   const [tocOpen, setTocOpen] = useState(false);
   const [bookmarksOpen, setBookmarksOpen] = useState(false);
   const [readerSettingsOpen, setReaderSettingsOpen] = useState(false);
+  const [showFirstRunHint, setShowFirstRunHint] = useState(() => !getBoolPref('readerHintSeen'));
   const typographyApi = useReaderTypography();
   const typographyStyle = typographyApi.cssVars as React.CSSProperties;
+  const dismissFirstRunHint = useCallback(() => {
+    setShowFirstRunHint(false);
+    setBoolPref('readerHintSeen', true);
+  }, []);
   const [bookmarkNaming, setBookmarkNaming] = useState<{
     chapterId: number
     chapterIdx: number
@@ -322,9 +329,23 @@ function ActiveReader({
 
   /* ---- Gaze tracker ---- */
   const [gazeState, gazeRef, gazeActions, gazeVideoRef, gazeLandmarksRef] = useGazeTracker();
-  const [showCalibration, setShowCalibration] = useState(false);
-  const [gazeSensitivity, setGazeSensitivity] = useState(1.0);
+  const [showCalibration, setShowCalibration] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    const params = new URLSearchParams(window.location.search);
+    return params.get('calibrate') === '1';
+  });
+  const [gazeSensitivity, setGazeSensitivityState] = useState(() => getNumberPref('gazeSensitivity', 1.0));
+  const setGazeSensitivity = useCallback((val: number) => {
+    setGazeSensitivityState(val);
+    setNumberPref('gazeSensitivity', val);
+  }, []);
   const hasCalibrated = useRef(!!(() => { try { return localStorage.getItem('speedreader_gaze_calibration'); } catch { return null; } })());
+
+  // Apply persisted sensitivity on mount so it survives reloads.
+  useEffect(() => {
+    gazeActions.setSensitivity(gazeSensitivity);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   /* ---- The single playback controller ---- */
   const handleAutoAdvance = useCallback((): boolean => {
@@ -1113,6 +1134,7 @@ function ActiveReader({
           onClose={() => setReaderSettingsOpen(false)}
         />
       )}
+      {showFirstRunHint && <ReaderFirstRunHint onDismiss={dismissFirstRunHint} />}
 
       {/* CBZ and PDF views are conditionally rendered (they're cheap and
           rarely used). The HTML FormattedView is ALWAYS mounted to avoid

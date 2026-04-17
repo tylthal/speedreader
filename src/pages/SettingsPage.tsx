@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useTheme, type Theme } from '../hooks/useTheme';
 import { useDefaultDisplayMode } from '../hooks/useDefaultDisplayMode';
 import { useChapterFlow, type ChapterFlow } from '../hooks/useChapterFlow';
-import { getPublications, type DisplayMode } from '../db/localClient';
+import { getPublications, type DisplayMode, type Publication } from '../db/localClient';
 import StorageStatus from '../components/StorageStatus';
 import Accordion from '../components/Accordion';
+import { getNumberPref, setNumberPref } from '../lib/uiPrefs';
 
 interface ThemeOption {
   value: Theme;
@@ -51,14 +53,36 @@ export default function SettingsPage() {
   const { defaultDisplayMode, setDefaultDisplayMode } = useDefaultDisplayMode();
   const { chapterFlow, setChapterFlow } = useChapterFlow();
   const [bookCount, setBookCount] = useState<number | undefined>(undefined);
+  const [firstPubId, setFirstPubId] = useState<number | null>(null);
+  const [gazeSensitivity, setGazeSensitivityState] = useState<number>(() => getNumberPref('gazeSensitivity', 1.0));
+  const navigate = useNavigate();
 
   useEffect(() => {
     let cancelled = false;
     getPublications()
-      .then((pubs) => { if (!cancelled) setBookCount(pubs.length); })
-      .catch(() => { if (!cancelled) setBookCount(undefined); });
+      .then((pubs: Publication[]) => {
+        if (cancelled) return;
+        setBookCount(pubs.length);
+        setFirstPubId(pubs.length > 0 ? pubs[0].id : null);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setBookCount(undefined);
+          setFirstPubId(null);
+        }
+      });
     return () => { cancelled = true; };
   }, []);
+
+  const handleRecalibrate = () => {
+    if (firstPubId == null) return;
+    navigate(`/read/${firstPubId}?calibrate=1`);
+  };
+
+  const updateSensitivity = (val: number) => {
+    setGazeSensitivityState(val);
+    setNumberPref('gazeSensitivity', val);
+  };
 
   return (
     <div className="app-page app-page--settings" role="main" aria-label="Settings" id="main-content">
@@ -137,20 +161,37 @@ export default function SettingsPage() {
 
       <Accordion title="Hands-free reading">
         <p className="settings-section__description">
-          Hands-free mode is designed for reading without touching the screen. Tracking runs on-device and only while you choose that mode.
+          Hands-free mode runs on-device. Tilt your head to advance and rewind.
         </p>
+
+        <label className="settings-slider">
+          <span className="settings-slider__label">Tracking sensitivity</span>
+          <input
+            type="range"
+            min={0.5}
+            max={3.0}
+            step={0.1}
+            value={gazeSensitivity}
+            onChange={(e) => updateSensitivity(Number(e.target.value))}
+            className="settings-slider__input"
+            aria-label={`Tracking sensitivity: ${gazeSensitivity.toFixed(1)}x`}
+          />
+          <span className="settings-slider__value">{gazeSensitivity.toFixed(1)}x</span>
+        </label>
+
+        <button
+          type="button"
+          className="settings-action"
+          onClick={handleRecalibrate}
+          disabled={firstPubId == null}
+        >
+          {firstPubId == null ? 'Import a book first to calibrate' : 'Recalibrate now'}
+        </button>
+
         <div className="settings-about settings-about--compact">
           <div className="settings-about__row">
             <span className="settings-about__label">Privacy</span>
             <span className="settings-about__value">Camera input stays on this device</span>
-          </div>
-          <div className="settings-about__row">
-            <span className="settings-about__label">Tune it</span>
-            <span className="settings-about__value">Open Tracking options in the reader</span>
-          </div>
-          <div className="settings-about__row">
-            <span className="settings-about__label">Reset</span>
-            <span className="settings-about__value">Recalibrate any time from that panel</span>
           </div>
         </div>
       </Accordion>

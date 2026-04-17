@@ -31,8 +31,10 @@ export default function TrackCalibration({
 }: TrackCalibrationProps) {
   const [step, setStep] = useState<CalibrationStep>('intro');
   const [progress, setProgress] = useState(0);
+  const [faceMissing, setFaceMissing] = useState(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const startTimeRef = useRef(0);
+  const lastLandmarkAtRef = useRef(0);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const videoCanvasRef = useRef<HTMLCanvasElement>(null);
   const rafRef = useRef(0);
@@ -85,6 +87,8 @@ export default function TrackCalibration({
 
           const landmarks = landmarksRef.current;
           if (landmarks && landmarks.length > 0) {
+            lastLandmarkAtRef.current = Date.now();
+            if (faceMissing) setFaceMissing(false);
             drawFaceLandmarks(ctx, landmarks, vw, vh, {
               ovalColor: 'rgba(120, 220, 255, 0.7)',
               eyeColor: 'rgba(120, 220, 255, 0.85)',
@@ -125,7 +129,27 @@ export default function TrackCalibration({
       running = false;
       cancelAnimationFrame(rafRef.current);
     };
-  }, [videoRef, landmarksRef]);
+  }, [videoRef, landmarksRef, faceMissing]);
+
+  // Watch for face-not-detected during point steps so we can hint the
+  // user. Also pauses the progress timer by resetting startTimeRef
+  // while the face is missing — otherwise we'd capture a non-face
+  // sample.
+  useEffect(() => {
+    if (step !== 'top' && step !== 'center' && step !== 'bottom') return;
+    const id = setInterval(() => {
+      const stale = Date.now() - lastLandmarkAtRef.current > 500;
+      if (stale && !faceMissing) {
+        setFaceMissing(true);
+        // Freeze timer so we don't count missing-face time toward progress.
+        startTimeRef.current = Date.now() - progress * POINT_DURATION_MS;
+      } else if (!stale && faceMissing) {
+        setFaceMissing(false);
+        startTimeRef.current = Date.now() - progress * POINT_DURATION_MS;
+      }
+    }, 150);
+    return () => clearInterval(id);
+  }, [step, faceMissing, progress]);
 
   // Animate progress ring during calibration points
   useEffect(() => {
@@ -135,6 +159,8 @@ export default function TrackCalibration({
       startTimeRef.current = Date.now();
 
       timerRef.current = setInterval(() => {
+        // Pause accumulation when the face isn't currently detected.
+        if (faceMissing) return;
         const elapsed = Date.now() - startTimeRef.current;
         const pct = Math.min(1, elapsed / POINT_DURATION_MS);
         setProgress(pct);
@@ -153,7 +179,18 @@ export default function TrackCalibration({
 
       return clearTimer;
     }
-  }, [step, clearTimer]);
+  }, [step, clearTimer, faceMissing]);
+
+  const handleRestart = useCallback(() => {
+    clearTimer();
+    setProgress(0);
+    setStep('intro');
+  }, [clearTimer]);
+
+  const handleCancel = useCallback(() => {
+    clearTimer();
+    onSkip();
+  }, [clearTimer, onSkip]);
 
   const currentPoint = POINTS.find(p => p.step === step);
   const stepIndex = POINTS.findIndex(p => p.step === step);
@@ -170,11 +207,30 @@ export default function TrackCalibration({
       {step === 'intro' && (
         <div className="gaze-calibration__intro">
           <h2 className="gaze-calibration__title">Head Tracking Setup</h2>
+          <svg
+            className="gaze-calibration__demo"
+            viewBox="0 0 120 80"
+            width="140"
+            height="96"
+            aria-hidden="true"
+          >
+            <g className="gaze-calibration__demo-head">
+              <circle cx="60" cy="38" r="18" fill="none" stroke="currentColor" strokeWidth="2" />
+              <circle cx="54" cy="36" r="1.8" fill="currentColor" />
+              <circle cx="66" cy="36" r="1.8" fill="currentColor" />
+              <path d="M54 46 Q60 49 66 46" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+            </g>
+            <g opacity="0.5">
+              <path d="M30 20 L24 14 L32 14 Z M24 14 L24 30" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M90 60 L96 66 L88 66 Z M96 66 L96 50" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+            </g>
+          </svg>
           <p className="gaze-calibration__text">
-            Tilt your head toward each dot for 2 seconds. Use comfortable, natural tilts — not extreme ones.
+            You&rsquo;ll nod to advance and tilt up to rewind.
           </p>
           <p className="gaze-calibration__text gaze-calibration__text--muted">
-            The overlay shows what the tracker sees. Your camera feed stays on this device.
+            Tilt toward each dot for 2 seconds. Natural tilts, not extreme.
+            The camera feed never leaves this device.
           </p>
           <div className="gaze-calibration__buttons">
             <button
@@ -195,9 +251,32 @@ export default function TrackCalibration({
 
       {currentPoint && (
         <div className="gaze-calibration__point-screen">
+          <div className="gaze-calibration__point-actions">
+            <button
+              type="button"
+              className="gaze-calibration__point-action"
+              onClick={handleRestart}
+              aria-label="Restart calibration"
+            >
+              Restart
+            </button>
+            <button
+              type="button"
+              className="gaze-calibration__point-action gaze-calibration__point-action--danger"
+              onClick={handleCancel}
+              aria-label="Cancel calibration"
+            >
+              Cancel
+            </button>
+          </div>
           <span className="gaze-calibration__step-label">
             {currentPoint.label} ({stepIndex + 1}/3)
           </span>
+          {faceMissing && (
+            <div className="gaze-calibration__missing" role="status">
+              Face not detected — check your lighting and frame your face.
+            </div>
+          )}
           <div
             className="gaze-calibration__dot-container"
             style={{ top: currentPoint.position }}

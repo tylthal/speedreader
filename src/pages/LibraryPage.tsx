@@ -47,6 +47,7 @@ export default function LibraryPage() {
   const [uploadPhase, setUploadPhase] = useState('');
   const [uploadPercent, setUploadPercent] = useState(0);
   const [uploadFilename, setUploadFilename] = useState('');
+  const uploadCancelledRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [actionSheet, setActionSheet] = useState<{
     pub: Publication;
@@ -126,6 +127,7 @@ export default function LibraryPage() {
   }, [clearArchiveUndoTimer]);
 
   const handleFileSelect = async (file: File) => {
+    uploadCancelledRef.current = false;
     setUploading(true);
     setUploadPhase('');
     setUploadPercent(0);
@@ -137,12 +139,24 @@ export default function LibraryPage() {
         setUploadPercent(percent);
       });
       setBoolPref('hasEverImported', true);
-      navigate(`/read/${pub.id}`);
+      if (uploadCancelledRef.current) {
+        // User cancelled mid-parse; the parser still finished and the
+        // book is saved. Refresh the library list and stay on this
+        // page instead of jumping into the reader.
+        await fetchPubs();
+      } else {
+        navigate(`/read/${pub.id}`);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Upload failed');
     } finally {
       setUploading(false);
     }
+  };
+
+  const handleCancelUpload = () => {
+    uploadCancelledRef.current = true;
+    setUploading(false);
   };
 
   const handleArchive = async (pub: Publication) => {
@@ -449,6 +463,7 @@ export default function LibraryPage() {
           filename={uploadFilename}
           phase={uploadPhase}
           percent={uploadPercent}
+          onCancel={handleCancelUpload}
         />
       )}
     </div>
