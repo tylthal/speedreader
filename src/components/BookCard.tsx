@@ -12,6 +12,7 @@ interface BookCardProps {
   swipeLabel?: string;
   swipeColor?: 'accent' | 'danger';
   disabled?: boolean;
+  peek?: boolean;
 }
 
 export default function BookCard({
@@ -25,6 +26,7 @@ export default function BookCard({
   swipeLabel = 'Archive',
   swipeColor = 'accent',
   disabled,
+  peek,
 }: BookCardProps) {
   const cardRef = useRef<HTMLDivElement>(null);
   const startX = useRef(0);
@@ -147,7 +149,8 @@ export default function BookCard({
 
       <div
         className={`book-card${disabled ? ' book-card--disabled' : ''}${pub.cover_url ? ' book-card--has-cover' : ''}${featured ? ' book-card--featured' : ''}`}
-        style={{ transform: `translateX(${swipeOffset}px)` }}
+        style={swipeOffset !== 0 ? { transform: `translateX(${swipeOffset}px)` } : undefined}
+        data-peek={peek && swipeOffset === 0 ? 'true' : undefined}
         onClick={handleClick}
         onTouchStart={onTouchStart}
         onTouchMove={onTouchMove}

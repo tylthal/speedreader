@@ -13,6 +13,7 @@ import EmptyState from '../components/EmptyState';
 import UploadFAB, { type UploadFABHandle } from '../components/UploadFAB';
 import ActionSheet, { type ActionSheetOption } from '../components/ActionSheet';
 import ProcessingDialog from '../components/ProcessingDialog';
+import { getBoolPref, setBoolPref } from '../lib/uiPrefs';
 
 function sortPublications(
   pubs: Publication[],
@@ -45,6 +46,7 @@ export default function LibraryPage() {
     progress?: Bookmark;
   } | null>(null);
   const [dragActive, setDragActive] = useState(false);
+  const [showPeek, setShowPeek] = useState(false);
   const uploadFabRef = useRef<UploadFABHandle>(null);
   const archiveUndoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const navigate = useNavigate();
@@ -75,6 +77,15 @@ export default function LibraryPage() {
   useEffect(() => {
     fetchPubs();
   }, [fetchPubs]);
+
+  useEffect(() => {
+    if (loading || publications.length < 2) return;
+    if (getBoolPref('swipeHintShown')) return;
+    setShowPeek(true);
+    setBoolPref('swipeHintShown', true);
+    const t = setTimeout(() => setShowPeek(false), 1400);
+    return () => clearTimeout(t);
+  }, [loading, publications.length]);
 
   const clearArchiveUndoTimer = useCallback(() => {
     if (archiveUndoTimerRef.current) {
@@ -306,14 +317,9 @@ export default function LibraryPage() {
             <section className="library-section">
               <div className="library-section__header">
                 <h2 className="library-section__title">Library</h2>
-                {publications.length <= 3 && (
-                  <p className="book-list__hint">
-                    Swipe left to archive or use the menu for more options
-                  </p>
-                )}
               </div>
               <div className="book-list">
-                {remainingPublications.map((pub) => (
+                {remainingPublications.map((pub, idx) => (
                   <BookCard
                     key={pub.id}
                     pub={pub}
@@ -324,6 +330,7 @@ export default function LibraryPage() {
                     onOptions={handleOpenOptions}
                     swipeLabel="Archive"
                     swipeColor="accent"
+                    peek={showPeek && idx === 0}
                   />
                 ))}
               </div>

@@ -1560,10 +1560,15 @@ html[data-playing] .reader-header {
 .app-shell {
   min-height: 100dvh;
   height: 100dvh;
+  --install-banner-height: 0px;
 }
 
 .app-shell--with-nav {
   padding-bottom: calc(var(--bottom-nav-height) + var(--safe-bottom));
+}
+
+body.has-install-banner {
+  --install-banner-height: 72px;
 }
 
 /* ==========================================================================
@@ -1575,7 +1580,7 @@ html[data-playing] .reader-header {
   min-height: 100dvh;
   padding: 1rem 1.25rem;
   padding-top: calc(1.25rem + env(safe-area-inset-top));
-  padding-bottom: calc(2rem + var(--bottom-nav-height) + var(--safe-bottom));
+  padding-bottom: calc(5.5rem + var(--bottom-nav-height) + var(--safe-bottom) + var(--install-banner-height, 0px));
   padding-left: calc(1.25rem + env(safe-area-inset-left));
   padding-right: calc(1.25rem + env(safe-area-inset-right));
   max-width: 600px;
@@ -1766,6 +1771,23 @@ html[data-playing] .reader-header {
 
 .book-card:active {
   background: var(--surface-hover);
+}
+
+.book-card[data-peek='true'] {
+  animation: book-card-peek 0.9s ease-out 0.35s 1 both;
+}
+
+@keyframes book-card-peek {
+  0%   { transform: translateX(0); }
+  35%  { transform: translateX(-64px); }
+  65%  { transform: translateX(-64px); }
+  100% { transform: translateX(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .book-card[data-peek='true'] {
+    animation: none;
+  }
 }
 
 .book-card--featured {
@@ -2098,7 +2120,7 @@ html[data-playing] .reader-header {
 
 .upload-fab {
   position: fixed;
-  bottom: calc(var(--bottom-nav-height) + var(--safe-bottom) + 1rem);
+  bottom: calc(var(--bottom-nav-height) + var(--safe-bottom) + 1.75rem + var(--install-banner-height, 0px));
   right: calc(1.25rem + env(safe-area-inset-right));
   z-index: 50;
   width: 56px;
@@ -2340,7 +2362,9 @@ html[data-playing] .reader-header {
   position: fixed;
   left: 1rem;
   right: 1rem;
-  bottom: calc(var(--bottom-nav-height) + var(--safe-bottom) + 1rem);
+  top: calc(env(safe-area-inset-top) + 0.75rem);
+  max-width: 600px;
+  margin: 0 auto;
   z-index: 120;
   display: flex;
   align-items: center;
@@ -2352,6 +2376,11 @@ html[data-playing] .reader-header {
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-card-hover);
   animation: toast-in 0.25s ease-out;
+}
+
+.undo-toast__action {
+  min-height: 44px;
+  min-width: 64px;
 }
 
 .undo-toast__content {
@@ -2986,10 +3015,14 @@ html[data-playing] .reader-header {
 }
 
 .install-banner__share-icon {
-  display: inline-block;
-  font-size: 1rem;
-  vertical-align: middle;
+  display: inline-flex;
+  align-items: center;
+  vertical-align: -0.2em;
   color: var(--accent);
+}
+
+.install-banner__share-svg {
+  display: inline-block;
 }
 
 .install-banner__action {
