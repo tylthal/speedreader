@@ -32,6 +32,8 @@ export default function TrackCalibration({
   const [step, setStep] = useState<CalibrationStep>('intro');
   const [progress, setProgress] = useState(0);
   const [faceMissing, setFaceMissing] = useState(false);
+  const faceMissingRef = useRef(false);
+  faceMissingRef.current = faceMissing;
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const startTimeRef = useRef(0);
   const lastLandmarkAtRef = useRef(0);
@@ -132,16 +134,19 @@ export default function TrackCalibration({
   }, [videoRef, landmarksRef, faceMissing]);
 
   // Watch for face-not-detected during point steps so we can hint the
-  // user. Also pauses the progress timer by resetting startTimeRef
-  // while the face is missing — otherwise we'd capture a non-face
-  // sample.
+  // user. Also pauses the progress timer while the face is missing so
+  // we don't capture a non-face sample. Landmarks-never-seen is the
+  // startup case — treat that as "not missing yet" so we give the
+  // tracker a beat to wake up instead of flashing the hint on start.
   useEffect(() => {
     if (step !== 'top' && step !== 'center' && step !== 'bottom') return;
+    // Prime the staleness reference on step entry so the first tick
+    // doesn't see a 50-year-old timestamp.
+    lastLandmarkAtRef.current = Date.now();
     const id = setInterval(() => {
       const stale = Date.now() - lastLandmarkAtRef.current > 500;
       if (stale && !faceMissing) {
         setFaceMissing(true);
-        // Freeze timer so we don't count missing-face time toward progress.
         startTimeRef.current = Date.now() - progress * POINT_DURATION_MS;
       } else if (!stale && faceMissing) {
         setFaceMissing(false);
@@ -151,7 +156,9 @@ export default function TrackCalibration({
     return () => clearInterval(id);
   }, [step, faceMissing, progress]);
 
-  // Animate progress ring during calibration points
+  // Animate progress ring during calibration points. faceMissing is
+  // read via ref so a missed-face flicker doesn't re-run this effect
+  // and reset progress to 0.
   useEffect(() => {
     if (step === 'top' || step === 'center' || step === 'bottom') {
       onCalibrateRef.current(step);
@@ -159,8 +166,7 @@ export default function TrackCalibration({
       startTimeRef.current = Date.now();
 
       timerRef.current = setInterval(() => {
-        // Pause accumulation when the face isn't currently detected.
-        if (faceMissing) return;
+        if (faceMissingRef.current) return;
         const elapsed = Date.now() - startTimeRef.current;
         const pct = Math.min(1, elapsed / POINT_DURATION_MS);
         setProgress(pct);
@@ -179,7 +185,7 @@ export default function TrackCalibration({
 
       return clearTimer;
     }
-  }, [step, clearTimer, faceMissing]);
+  }, [step, clearTimer]);
 
   const handleRestart = useCallback(() => {
     clearTimer();
