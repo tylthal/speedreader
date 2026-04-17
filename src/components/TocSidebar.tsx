@@ -2,6 +2,7 @@ import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { FixedSizeList as List } from 'react-window'
 import type { ListChildComponentProps } from 'react-window'
 import type { Chapter, TocNode } from '../db/localClient'
+import { useSwipeDismiss } from '../hooks/useSwipeDismiss'
 
 interface TocSidebarProps {
   open: boolean
@@ -117,6 +118,14 @@ function TocSidebar({
     }
   }, [open, useTree, useVirtualTreeRows, activeFlatIndex])
 
+  const panelRef = useRef<HTMLElement>(null)
+  const { bind: bindSwipe } = useSwipeDismiss<HTMLElement, HTMLElement>({
+    panelRef,
+    axis: 'x-right',
+    onDismiss: onClose,
+    enabled: open,
+  })
+
   return (
     <div
       className={`toc-sidebar${open ? ' toc-sidebar--open' : ' toc-sidebar--closed'}`}
@@ -126,8 +135,8 @@ function TocSidebar({
       aria-label="Table of contents"
     >
       <div className="toc-sidebar__backdrop" onClick={onClose} />
-      <aside className="toc-sidebar__panel">
-        <header className="toc-sidebar__header">
+      <aside className="toc-sidebar__panel" ref={panelRef}>
+        <header className="toc-sidebar__header" {...bindSwipe()}>
           <h2 className="toc-sidebar__title">Contents</h2>
           <button
             className="toc-sidebar__close"

@@ -25,11 +25,15 @@ interface BasePanelProps {
   /**
    * Panel contents. May be a ReactNode or a render-prop receiving
    * `handleClose` so interactive children (e.g. cancel / option buttons)
-   * can trigger the animated close path.
+   * can trigger the animated close path. Also receives `panelRef` so
+   * children can hook the animated container (for swipe-to-dismiss).
    */
   children:
     | React.ReactNode
-    | ((api: { handleClose: () => void }) => React.ReactNode);
+    | ((api: {
+        handleClose: () => void;
+        panelRef: React.RefObject<HTMLDivElement | null>;
+      }) => React.ReactNode);
 }
 
 /**
@@ -71,7 +75,7 @@ export default function BasePanel({
         aria-label={ariaLabel}
         aria-modal={ariaModal}
       >
-        {typeof children === 'function' ? children({ handleClose }) : children}
+        {typeof children === 'function' ? children({ handleClose, panelRef: ref }) : children}
       </div>
     </div>
   );

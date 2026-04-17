@@ -2422,12 +2422,23 @@ body.has-install-banner {
   transform: translateY(0);
 }
 
+.action-sheet__drag-zone {
+  padding: 0.25rem 0 0.75rem;
+  display: flex;
+  justify-content: center;
+  touch-action: none;
+  cursor: grab;
+}
+
+.action-sheet__drag-zone:active {
+  cursor: grabbing;
+}
+
 .action-sheet__handle {
-  width: 36px;
-  height: 4px;
-  border-radius: 2px;
+  width: 44px;
+  height: 5px;
+  border-radius: 999px;
   background: var(--surface-border);
-  margin: 0 auto 1rem;
 }
 
 .action-sheet__header {

@@ -1,6 +1,7 @@
 import { memo, useState, useRef, useEffect, useCallback } from 'react'
 import type { Bookmark } from '../db/localClient'
 import { useBookmarkSelector, bookmarkStore } from '../state/bookmarkStore'
+import { useSwipeDismiss } from '../hooks/useSwipeDismiss'
 
 interface BookmarksPanelProps {
   open: boolean
@@ -32,6 +33,14 @@ function BookmarksPanel({ open, chapters, onJump, onClose }: BookmarksPanelProps
     [onJump, onClose],
   )
 
+  const panelRef = useRef<HTMLElement>(null)
+  const { bind: bindSwipe } = useSwipeDismiss<HTMLElement, HTMLElement>({
+    panelRef,
+    axis: 'x-right',
+    onDismiss: onClose,
+    enabled: open,
+  })
+
   return (
     <div
       className={`bookmarks-panel${open ? ' bookmarks-panel--open' : ' bookmarks-panel--closed'}`}
@@ -41,8 +50,8 @@ function BookmarksPanel({ open, chapters, onJump, onClose }: BookmarksPanelProps
       aria-label="Bookmarks"
     >
       <div className="bookmarks-panel__backdrop" onClick={onClose} />
-      <aside className="bookmarks-panel__panel">
-        <header className="bookmarks-panel__header">
+      <aside className="bookmarks-panel__panel" ref={panelRef}>
+        <header className="bookmarks-panel__header" {...bindSwipe()}>
           <h2 className="bookmarks-panel__title">Bookmarks</h2>
           <button
             className="bookmarks-panel__close"
