@@ -1180,6 +1180,26 @@ html[data-playing] .reader-header {
   user-select: none;
 }
 
+.controls__speed-display--interactive {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  padding: 0.25rem 0.75rem;
+  cursor: pointer;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+  -webkit-tap-highlight-color: transparent;
+}
+
+.controls__speed-display--interactive:hover,
+.controls__speed-display--interactive:focus-visible {
+  background: var(--surface-subtle);
+  border-color: var(--surface-border);
+}
+
+.controls__speed-display--interactive:active {
+  background: var(--surface-hover);
+}
+
 .controls__speed-value {
   font-size: 1.3rem;
   font-weight: 700;
@@ -1494,6 +1514,21 @@ html[data-playing] .reader-header {
 
 .controls__strip-wpm--changed {
   animation: wpmPulse 0.3s ease;
+}
+
+.controls__strip-wpm--interactive {
+  background: transparent;
+  border: none;
+  padding: 0.15rem 0.35rem;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.controls__strip-wpm--interactive:active {
+  background: var(--surface-hover);
 }
 
 /* ---------- Face HUD embedded in the strip ---------- */
@@ -4612,6 +4647,8 @@ body.has-install-banner {
   align-items: center;
   justify-content: center;
   padding: 1rem;
+  padding-bottom: calc(1rem + var(--keyboard-height, 0px));
+  transition: padding-bottom 160ms ease;
 }
 
 .bookmark-dialog {
@@ -4686,6 +4723,146 @@ body.has-install-banner {
 
 .bookmark-dialog__btn--save:hover {
   filter: brightness(1.1);
+}
+
+/* ==========================================================================
+   WPM Preset Picker (bottom sheet)
+   ========================================================================== */
+
+.wpm-picker {
+  padding-bottom: calc(1.25rem + var(--safe-bottom) + var(--keyboard-height, 0px));
+  transition: padding-bottom 160ms ease;
+}
+
+.wpm-picker__presets {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 1rem;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.5rem;
+}
+
+.wpm-picker__preset {
+  min-height: 56px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 0.5rem 0.4rem;
+  background: var(--surface-subtle);
+  border: 1px solid var(--surface-border);
+  border-radius: var(--radius-md);
+  font-family: var(--font-ui);
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--text);
+  cursor: pointer;
+  transition: transform var(--transition-fast), background var(--transition-fast), border-color var(--transition-fast);
+  -webkit-tap-highlight-color: transparent;
+}
+
+.wpm-picker__preset--active {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.wpm-picker__preset:active {
+  transform: scale(0.96);
+}
+
+.wpm-picker__preset-unit {
+  font-size: 0.6rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+
+.wpm-picker__preset--active .wpm-picker__preset-unit {
+  color: var(--accent);
+  opacity: 0.8;
+}
+
+.wpm-picker__slider-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-bottom: 1rem;
+}
+
+.wpm-picker__slider-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.wpm-picker__slider {
+  width: 100%;
+  accent-color: var(--accent);
+  height: 44px;
+}
+
+.wpm-picker__slider-value {
+  align-self: flex-end;
+  font-family: var(--font-display);
+  font-size: 1.1rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.wpm-picker__numeric {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0;
+  margin-bottom: 0.5rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.wpm-picker__numeric-input-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: var(--surface-subtle);
+  border: 1px solid var(--surface-border);
+  border-radius: var(--radius-sm);
+  padding: 0.2rem 0.6rem;
+}
+
+.wpm-picker__numeric-input {
+  width: 4.5rem;
+  padding: 0.45rem 0;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text);
+  font-family: var(--font-display);
+  font-size: 1.05rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.wpm-picker__numeric-input::-webkit-outer-spin-button,
+.wpm-picker__numeric-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.wpm-picker__numeric-unit {
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  text-transform: uppercase;
 }
 
 /* ==========================================================================

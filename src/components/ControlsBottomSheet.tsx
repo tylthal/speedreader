@@ -5,6 +5,7 @@ import type { ReadingMode } from '../types';
 import type { GazeDirection } from '../lib/gazeProcessor';
 import type { GazeStatus, FaceLandmark } from '../hooks/useGazeTracker';
 import GazeIndicator from './GazeIndicator';
+import WpmPresetPicker from './WpmPresetPicker';
 
 interface ControlsBottomSheetProps {
   isPlaying: boolean;
@@ -51,7 +52,7 @@ export default function ControlsBottomSheet({
   wpm,
   progress,
   onTogglePlay,
-  onSetWpm: _onSetWpm,
+  onSetWpm,
   onAdjustWpm,
   mode = 'phrase',
   onToggleMode,
@@ -74,6 +75,7 @@ export default function ControlsBottomSheet({
   const haptics = useHaptics();
   const [showTrackOptions, setShowTrackOptions] = useState(false);
   const [isStripExpanded, setIsStripExpanded] = useState(false);
+  const [wpmPickerOpen, setWpmPickerOpen] = useState(false);
 
   // Scrubbing state
   const [isScrubbing, setIsScrubbing] = useState(false);
@@ -373,12 +375,17 @@ export default function ControlsBottomSheet({
         >
           &minus;
         </button>
-        <div className="controls__speed-display">
+        <button
+          type="button"
+          className="controls__speed-display controls__speed-display--interactive"
+          onClick={() => { setWpmPickerOpen(true); haptics.tap(); }}
+          aria-label={`Open speed picker. Current speed: ${wpm} words per minute`}
+        >
           <span className={`controls__speed-value${wpmBump ? ' controls__speed-value--bump' : ''}`}>
             {wpm}
           </span>
           <span className="controls__speed-unit">WPM</span>
-        </div>
+        </button>
         <button
           className="controls__speed-btn"
           onPointerDown={() => startSpeedRepeat(1)}
@@ -430,12 +437,15 @@ export default function ControlsBottomSheet({
             >
               &minus;
             </button>
-            <span
-              className={`controls__strip-wpm${stripWpmChanged ? ' controls__strip-wpm--changed' : ''}`}
+            <button
+              type="button"
+              className={`controls__strip-wpm controls__strip-wpm--interactive${stripWpmChanged ? ' controls__strip-wpm--changed' : ''}`}
+              onClick={(e) => { e.stopPropagation(); setWpmPickerOpen(true); haptics.tap(); }}
+              aria-label={`Open speed picker. Current speed: ${wpm} words per minute`}
               aria-live="polite"
             >
               {wpm}
-            </span>
+            </button>
             <span className="controls__strip-wpm-unit">WPM</span>
             <button
               className="controls__strip-speed-btn"
@@ -469,6 +479,14 @@ export default function ControlsBottomSheet({
           {isPlaying ? 'Pause' : 'Start reading'}
         </span>
       </button>
+
+      {wpmPickerOpen && (
+        <WpmPresetPicker
+          wpm={wpm}
+          onSetWpm={onSetWpm}
+          onClose={() => setWpmPickerOpen(false)}
+        />
+      )}
     </div>
   );
 }

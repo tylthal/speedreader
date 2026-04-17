@@ -19,15 +19,39 @@ export default function BookmarkNameDialog({
   const [name, setName] = useState(defaultName)
   const inputRef = useRef<HTMLInputElement>(null)
 
-  // Auto-focus and select all text on mount
+  // Auto-focus and select all text after the enter animation settles —
+  // iOS Safari jumps the entire layout to center the focused input on
+  // first paint when the software keyboard opens; delaying the focus
+  // until the dialog has positioned avoids that collision.
   useEffect(() => {
-    requestAnimationFrame(() => {
+    const timer = setTimeout(() => {
       const input = inputRef.current
       if (input) {
         input.focus()
         input.select()
       }
-    })
+    }, 220)
+    return () => clearTimeout(timer)
+  }, [])
+
+  // Mirror the software-keyboard height into a CSS var so the dialog
+  // can lift above it (visualViewport shrinks when the keyboard opens
+  // on iOS / Android; window.innerHeight does not).
+  useEffect(() => {
+    const vv = typeof window !== 'undefined' ? window.visualViewport : undefined
+    if (!vv) return
+    const update = () => {
+      const keyboard = Math.max(0, window.innerHeight - vv.height - vv.offsetTop)
+      document.documentElement.style.setProperty('--keyboard-height', `${Math.round(keyboard)}px`)
+    }
+    update()
+    vv.addEventListener('resize', update)
+    vv.addEventListener('scroll', update)
+    return () => {
+      vv.removeEventListener('resize', update)
+      vv.removeEventListener('scroll', update)
+      document.documentElement.style.removeProperty('--keyboard-height')
+    }
   }, [])
 
   const handleSubmit = () => {
