@@ -540,12 +540,12 @@ html[data-playing] .reader-header {
 }
 
 .formatted-view__column {
-  max-width: 680px;
+  max-width: var(--reader-column-max, 680px);
   margin: 0 auto;
   padding: 1.25rem 1.25rem 4rem;
   font-family: var(--font-display);
-  font-size: 1.05rem;
-  line-height: 1.65;
+  font-size: calc(1.05rem * var(--reader-font-scale, 1));
+  line-height: var(--reader-line-height, 1.65);
   color: var(--text);
 }
 
@@ -750,7 +750,7 @@ html[data-playing] .reader-header {
 }
 
 .focus-overlay__text {
-  font-size: clamp(1.5rem, 5vw, 2.5rem);
+  font-size: calc(clamp(1.5rem, 5vw, 2.5rem) * var(--reader-font-scale, 1));
   font-weight: 700;
   color: var(--text);
   text-align: center;
@@ -866,8 +866,8 @@ html[data-playing] .reader-header {
   flex-shrink: 0;
   padding: 12px 16px;
   text-align: center;
-  font-size: clamp(1rem, 3.5vw, 1.4rem);
-  line-height: 1.5;
+  font-size: calc(clamp(1rem, 3.5vw, 1.4rem) * var(--reader-font-scale, 1));
+  line-height: var(--reader-line-height, 1.5);
   color: var(--text);
   max-width: 90%;
   cursor: pointer;
@@ -5174,6 +5174,76 @@ body.has-install-banner {
   letter-spacing: 0.04em;
   color: var(--text-muted);
   text-transform: uppercase;
+}
+
+/* ==========================================================================
+   Reader Settings Sheet (typography)
+   ========================================================================== */
+
+.reader-settings__group {
+  margin-bottom: 0.9rem;
+}
+
+.reader-settings__label {
+  display: block;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 0.4rem;
+}
+
+.reader-settings__choices {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.4rem;
+}
+
+.reader-settings__choice {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.2rem;
+  min-height: 52px;
+  padding: 0.5rem 0.4rem;
+  background: var(--surface-subtle);
+  border: 1px solid var(--surface-border);
+  border-radius: var(--radius-md);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.reader-settings__choice--active {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.reader-settings__preview {
+  font-family: var(--font-display);
+  font-weight: 700;
+  line-height: 1;
+}
+
+.reader-settings__choice--size-0 .reader-settings__preview { font-size: 0.95rem; }
+.reader-settings__choice--size-1 .reader-settings__preview { font-size: 1.15rem; }
+.reader-settings__choice--size-2 .reader-settings__preview { font-size: 1.35rem; }
+
+.reader-settings__choice-label {
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.reader-settings__choice--active .reader-settings__choice-label {
+  color: inherit;
+  opacity: 0.8;
 }
 
 /* ==========================================================================

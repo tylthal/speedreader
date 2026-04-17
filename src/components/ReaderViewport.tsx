@@ -27,6 +27,8 @@ import type { ReadingMode } from '../types';
 import GestureLayer from './GestureLayer';
 import FocusChunkOverlay from './FocusChunkOverlay';
 import ControlsBottomSheet from './ControlsBottomSheet';
+import ReaderSettingsSheet from './ReaderSettingsSheet';
+import { useReaderTypography } from '../hooks/useReaderTypography';
 import TrackCalibration from './TrackCalibration';
 import ReaderHeader from './ReaderHeader';
 import TocSidebar from './TocSidebar';
@@ -211,6 +213,9 @@ function ActiveReader({
 
   const [tocOpen, setTocOpen] = useState(false);
   const [bookmarksOpen, setBookmarksOpen] = useState(false);
+  const [readerSettingsOpen, setReaderSettingsOpen] = useState(false);
+  const typographyApi = useReaderTypography();
+  const typographyStyle = typographyApi.cssVars as React.CSSProperties;
   const [bookmarkNaming, setBookmarkNaming] = useState<{
     chapterId: number
     chapterIdx: number
@@ -1030,6 +1035,7 @@ function ActiveReader({
       aria-label="Book reader"
       id="main-content"
       data-restore-state={restoreState}
+      style={typographyStyle}
     >
       <ReaderHeader
         bookTitle={bookTitle}
@@ -1040,6 +1046,7 @@ function ActiveReader({
         formattedSuppressed={phraseLikeMode && displayMode === 'formatted'}
         onOpenToc={() => setTocOpen(true)}
         onOpenBookmarks={() => setBookmarksOpen(true)}
+        onOpenReaderSettings={isImageBook ? undefined : () => setReaderSettingsOpen(true)}
         onExit={() => {
           if (readingMode === 'track') {
             positionStore.setMode('scroll');
@@ -1095,6 +1102,15 @@ function ActiveReader({
           defaultName={`Bookmark ${bookmarkStore.getUserBookmarkCount() + 1}`}
           onConfirm={handleBookmarkConfirm}
           onCancel={() => setBookmarkNaming(null)}
+        />
+      )}
+      {readerSettingsOpen && (
+        <ReaderSettingsSheet
+          typography={typographyApi.typography}
+          onFontScale={typographyApi.setFontScale}
+          onLineHeight={typographyApi.setLineHeight}
+          onColumnWidth={typographyApi.setColumnWidth}
+          onClose={() => setReaderSettingsOpen(false)}
         />
       )}
 

@@ -7,6 +7,7 @@ interface ReaderHeaderProps {
   onToggleDisplayMode?: () => void
   onOpenToc: () => void
   onOpenBookmarks: () => void
+  onOpenReaderSettings?: () => void
   onExit: () => void
   /** Hide the display-mode toggle entirely (e.g. for CBZ — PRD §4.5). */
   hideDisplayToggle?: boolean
@@ -27,6 +28,7 @@ export default function ReaderHeader({
   onToggleDisplayMode,
   onOpenToc,
   onOpenBookmarks,
+  onOpenReaderSettings,
   onExit,
   hideDisplayToggle,
   formattedSuppressed = false,
@@ -76,6 +78,20 @@ export default function ReaderHeader({
           }
         >
           {displayMode === 'formatted' ? 'Page' : 'Text'}
+        </button>
+      )}
+
+      {onOpenReaderSettings && (
+        <button
+          className="reader-header__btn reader-header__appearance"
+          onClick={onOpenReaderSettings}
+          aria-label="Reader appearance"
+          title="Reader appearance"
+        >
+          <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M4 5h10 M4 9h10 M4 13h6" />
+            <path d="M15 2v3 M15 2l-1.5 1.5 M15 2l1.5 1.5" />
+          </svg>
         </button>
       )}
 
