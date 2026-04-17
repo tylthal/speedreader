@@ -419,28 +419,18 @@ function FocusChunkOverlayInner({
   onCrossChapterSeek,
 }: FocusChunkOverlayProps) {
   const [displayText, setDisplayText] = useState('');
-  const [animClass, setAnimClass] = useState('focus-overlay__text--visible');
   const prevTextRef = useRef('');
   const [wingsVisible, setWingsVisible] = useState(false);
 
   useEffect(() => {
     const newText = segment?.text ?? '';
     if (newText !== prevTextRef.current) {
-      if (isPlaying) {
-        // During playback, swap text instantly — no animation flash.
-        setDisplayText(newText);
-        prevTextRef.current = newText;
-        setAnimClass('focus-overlay__text--visible');
-      } else {
-        // On pause or initial load, animate the transition.
-        setAnimClass('focus-overlay__text--entering');
-        const timer = setTimeout(() => {
-          setDisplayText(newText);
-          prevTextRef.current = newText;
-          setAnimClass('focus-overlay__text--visible');
-        }, 80);
-        return () => clearTimeout(timer);
-      }
+      // Unconditionally swap text. The previous pause-state 80ms hide-
+      // then-show blink caused a visible strobing flash when pausing
+      // from phrase mode — the outer overlay already fades when
+      // play/pause toggles, so the inner text swap should just happen.
+      setDisplayText(newText);
+      prevTextRef.current = newText;
     }
   }, [segment, isPlaying]);
 
@@ -561,7 +551,7 @@ function FocusChunkOverlayInner({
         {showPrompt ? (
           <span className="focus-overlay__prompt">Tap to start</span>
         ) : (
-          <span className={`focus-overlay__text ${animClass}`}>{displayText}</span>
+          <span className="focus-overlay__text">{displayText}</span>
         )}
       </div>
 
