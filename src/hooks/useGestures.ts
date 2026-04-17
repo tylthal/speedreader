@@ -14,11 +14,17 @@ interface PointerState {
   startY: number;
   startTime: number;
   active: boolean;
+  startedInHorizontalEdgeBand: boolean;
 }
 
 const TAP_MAX_DISTANCE = 15;
 const TAP_MAX_DURATION = 300;
 const SWIPE_MIN_DISTANCE = 30;
+// Ignore horizontal swipes that originate within this edge band so the
+// browser's own back gesture (iOS Safari left edge, Android Chrome
+// right edge) can win without also firing onSwipeLeft/onSwipeRight.
+// Vertical gestures starting in the band still work (speed control).
+const EDGE_DEADZONE_PX = 20;
 
 export function useGestures(handlers: GestureHandlers): {
   onPointerDown: (e: React.PointerEvent) => void;
@@ -30,17 +36,22 @@ export function useGestures(handlers: GestureHandlers): {
     startY: 0,
     startTime: 0,
     active: false,
+    startedInHorizontalEdgeBand: false,
   });
 
   const handlersRef = useRef(handlers);
   handlersRef.current = handlers;
 
   const onPointerDown = useCallback((e: React.PointerEvent) => {
+    const width = typeof window !== 'undefined' ? window.innerWidth : 0;
+    const inLeftBand = e.clientX <= EDGE_DEADZONE_PX;
+    const inRightBand = width > 0 && e.clientX >= width - EDGE_DEADZONE_PX;
     stateRef.current = {
       startX: e.clientX,
       startY: e.clientY,
       startTime: Date.now(),
       active: true,
+      startedInHorizontalEdgeBand: inLeftBand || inRightBand,
     };
   }, []);
 
@@ -71,7 +82,10 @@ export function useGestures(handlers: GestureHandlers): {
     // Swipe detection
     if (totalMovement >= SWIPE_MIN_DISTANCE) {
       if (absDx > absDy) {
-        // Horizontal swipe
+        // Horizontal swipes that started in the edge band belong to the
+        // browser's native back gesture — drop them instead of firing
+        // chapter jumps.
+        if (state.startedInHorizontalEdgeBand) return;
         if (dx < 0) {
           h.onSwipeLeft?.();
         } else {

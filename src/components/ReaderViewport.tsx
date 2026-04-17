@@ -759,10 +759,10 @@ function ActiveReader({
     wordIndex: number
   } | null>(null);
 
-  const handlePipTap = useCallback(() => {
+  const capturePipPosition = useCallback(() => {
     const snap = positionStore.getSnapshot();
-    if (snap.isPlaying) return;
-    if (snap.chapterId === 0) return;
+    if (snap.isPlaying) return null;
+    if (snap.chapterId === 0) return null;
 
     let abs = snap.absoluteSegmentIndex;
     let word = snap.wordIndex;
@@ -780,14 +780,44 @@ function ActiveReader({
         }
       }
     }
-    pipTapPositionRef.current = {
+    const captured = {
       chapterId: snap.chapterId,
       chapterIdx: snap.chapterIdx,
       absoluteSegmentIndex: abs,
       wordIndex: word,
     };
-    setPipMenuOpen(true);
+    pipTapPositionRef.current = captured;
+    return captured;
   }, [loaderState.segments, translators]);
+
+  // Quick tap on the PIP: skip the single-option ActionSheet and
+  // open the bookmark-naming dialog directly. Long-press still opens
+  // the sheet so future secondary options can live there.
+  const handlePipTap = useCallback(() => {
+    if (!capturePipPosition()) return;
+    const snap = positionStore.getSnapshot();
+    if (snap.chapterId === 0) return;
+    const captured = pipTapPositionRef.current;
+    if (!captured) return;
+    const snippet = extractSnippet(
+      loaderState.segments,
+      captured.absoluteSegmentIndex,
+      captured.wordIndex,
+    );
+    setBookmarkNaming({
+      chapterId: captured.chapterId,
+      chapterIdx: captured.chapterIdx,
+      absoluteSegmentIndex: captured.absoluteSegmentIndex,
+      wordIndex: captured.wordIndex,
+      snippet,
+    });
+    haptics.success();
+  }, [capturePipPosition, loaderState.segments, haptics]);
+
+  const handlePipLongPress = useCallback(() => {
+    if (!capturePipPosition()) return;
+    setPipMenuOpen(true);
+  }, [capturePipPosition]);
 
   const handlePipAddBookmark = useCallback(() => {
     const captured = pipTapPositionRef.current;
@@ -1114,6 +1144,7 @@ function ActiveReader({
             onVisibleSectionChange={handleVisibleSectionChange}
             onTap={isPlaying ? userPause : undefined}
             onPipTap={handlePipTap}
+            onPipLongPress={handlePipLongPress}
             showPip={!isPlaying}
             velocityProfileRef={velocityProfileRef}
             onLayoutChange={onFormattedLayoutChange}

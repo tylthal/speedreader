@@ -89,6 +89,8 @@ interface FormattedViewProps {
   visible?: boolean
   /** Called when the user taps the PIP indicator. */
   onPipTap?: () => void
+  /** Called when the user long-presses the PIP indicator (500ms+). */
+  onPipLongPress?: () => void
   /** When false the PIP indicator is hidden (e.g. during playback). Defaults to true. */
   showPip?: boolean
   /** When true (restore flow), widen the innerHTML-write priority set
@@ -438,6 +440,7 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
     onLayoutChange,
     visible = true,
     onPipTap,
+    onPipLongPress,
     showPip = true,
     prioritizeAllPriorOnRestore = false,
   },
@@ -1463,17 +1466,10 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
       {...tapHandlers}
     >
       {pipTop != null && showPip && (
-        <div
-          className="formatted-view__pip"
-          aria-hidden="true"
-          // Positioned via transform so repositioning is a compositor-
-          // only operation (no layout). The CSS anchor at top: 0 stays
-          // static; translateY carries the per-scroll pip offset.
-          style={{ transform: `translate3d(0, ${pipTop}px, 0)` }}
-          onClick={(e) => {
-            e.stopPropagation()
-            onPipTap?.()
-          }}
+        <PipIndicator
+          pipTop={pipTop}
+          onTap={onPipTap}
+          onLongPress={onPipLongPress}
         />
       )}
       {FormattedViewDiagnostics && (
@@ -1519,6 +1515,75 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
 })
 
 FormattedViewInner.displayName = 'FormattedView'
+
+interface PipIndicatorProps {
+  pipTop: number
+  onTap?: () => void
+  onLongPress?: () => void
+}
+
+function PipIndicator({ pipTop, onTap, onLongPress }: PipIndicatorProps) {
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const startRef = useRef<{ x: number; y: number } | null>(null)
+  const firedLongPressRef = useRef(false)
+
+  const clear = () => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current)
+      longPressTimerRef.current = null
+    }
+  }
+
+  const handleDown = (e: React.PointerEvent) => {
+    e.stopPropagation()
+    startRef.current = { x: e.clientX, y: e.clientY }
+    firedLongPressRef.current = false
+    clear()
+    if (onLongPress) {
+      longPressTimerRef.current = setTimeout(() => {
+        firedLongPressRef.current = true
+        onLongPress()
+      }, 500)
+    }
+  }
+
+  const handleMove = (e: React.PointerEvent) => {
+    if (!startRef.current) return
+    const dx = e.clientX - startRef.current.x
+    const dy = e.clientY - startRef.current.y
+    if (Math.sqrt(dx * dx + dy * dy) > 10) {
+      // Moved too far — treat as cancel, don't fire tap or long-press.
+      clear()
+      startRef.current = null
+    }
+  }
+
+  const handleUp = (e: React.PointerEvent) => {
+    e.stopPropagation()
+    clear()
+    const start = startRef.current
+    startRef.current = null
+    if (firedLongPressRef.current || !start) return
+    onTap?.()
+  }
+
+  const handleCancel = () => {
+    clear()
+    startRef.current = null
+  }
+
+  return (
+    <div
+      className="formatted-view__pip"
+      aria-hidden="true"
+      style={{ transform: `translate3d(0, ${pipTop}px, 0)` }}
+      onPointerDown={handleDown}
+      onPointerMove={handleMove}
+      onPointerUp={handleUp}
+      onPointerCancel={handleCancel}
+    />
+  )
+}
 
 const FormattedView = memo(FormattedViewInner)
 FormattedView.displayName = 'FormattedView'
