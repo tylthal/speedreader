@@ -42,14 +42,86 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Segment } from '../types'
 import type { GazeDirection } from '../lib/gazeProcessor'
 import {
+  buildConstantKeyframes,
+  buildPlaybackKeyframes,
   createLookupCache,
   getPxPerWeight,
+  type PlaybackKeyframes,
   type ProfileLookupCache,
   type VelocityProfile,
 } from '../lib/velocityProfile'
+import {
+  createPlaybackAnimator,
+  isWaapiSupported,
+  type PlaybackAnimator,
+} from '../lib/playbackAnimator'
 import { positionStore, usePositionSelector } from '../state/position/positionStore'
 import type { SegmentLoaderTranslators } from './useSegmentLoader'
 import { REFERENCE_LINE_RATIO, type FormattedViewHandle } from '../components/FormattedView'
+
+/**
+ * Feature gate for the WAAPI compositor-animation scroll path.
+ *
+ * WAAPI sounded great in theory — compositor-driven motion is immune to
+ * main-thread jank — but in practice the mobile compositor can't
+ * rasterize a chapter-height element as a single layer ahead of
+ * movement, which produces 190ms hitches on mobile Safari (no
+ * long-task attribution, worse with images, worse with complex
+ * layout). Native scroll + tile-based raster is the right approach
+ * for tall scrollable containers.
+ *
+ * Default: OFF. The code is retained behind this flag for device-
+ * specific experimentation — flip via `localStorage.waapiPlayback =
+ * 'on'` to try the compositor path.
+ */
+function waapiPlaybackEnabled(): boolean {
+  if (!isWaapiSupported()) return false
+  if (typeof window === 'undefined') return false
+  try {
+    return window.localStorage?.getItem('waapiPlayback') === 'on'
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Force constant-speed keyframes even when a velocity profile is
+ * available. A velocity profile produces piecewise-linear keyframes
+ * whose slope changes at each block boundary — those slope
+ * discontinuities read as "choppy" motion on mobile even when the
+ * animation itself is running on the compositor.
+ *
+ * Default: ON while we validate compositor smoothness on mobile.
+ * Flip off via `localStorage.setItem('waapiConstantSpeed', 'off')`
+ * to re-enable the profile's per-block dwell-time variation once the
+ * keyframe-smoothing pass is in place.
+ */
+function waapiConstantSpeedForced(): boolean {
+  if (typeof window === 'undefined') return true
+  try {
+    return window.localStorage?.getItem('waapiConstantSpeed') !== 'off'
+  } catch {
+    return true
+  }
+}
+
+/** Binary search: largest i where arr[i] <= target. Returns -1 if none. */
+function binarySearchLE(arr: Float64Array, target: number): number {
+  if (arr.length === 0) return -1
+  let lo = 0
+  let hi = arr.length - 1
+  let best = -1
+  while (lo <= hi) {
+    const mid = (lo + hi) >>> 1
+    if (arr[mid] <= target) {
+      best = mid
+      lo = mid + 1
+    } else {
+      hi = mid - 1
+    }
+  }
+  return best
+}
 
 /* ------------------------------------------------------------------ */
 /*  Constants                                                          */
@@ -219,6 +291,33 @@ export function usePlaybackController(
    *  mid-play; cleared on pause(), seekToAbs(), or by the prefetch-arrival
    *  effect. While true, the prefetch-arrival effect is allowed to auto-resume. */
   const waitingForSegmentsRef = useRef(false)
+
+  /* ---- WAAPI compositor-scroll state ---- */
+  /** The live WAAPI animation driving the column's translate3d during
+   *  formatted scroll/track playback. Null when paused or when the
+   *  legacy rAF+scrollTop path is active (flag off, plain mode,
+   *  or WAAPI unsupported). */
+  const animatorRef = useRef<PlaybackAnimator | null>(null)
+  /** Keyframes backing `animatorRef`. Retained so virtualOffset() can
+   *  sample without re-reading the animator's effect. */
+  const keyframesRef = useRef<PlaybackKeyframes | null>(null)
+  /** Container-relative Y-coordinates of each segment's center for the
+   *  current chapter. Built once at play-start. Segment detection during
+   *  playback is O(log n) against this array — no per-frame getClientRects. */
+  const segmentCenterPxRef = useRef<Float64Array | null>(null)
+  /** The `container.scrollTop` value at play-start. During WAAPI playback
+   *  scrollTop stays pinned at this value; all visible motion comes from
+   *  the column's animated transform. On pause we reconcile. */
+  const baselineScrollTopRef = useRef(0)
+  /** Last playbackRate written to the animator. Deduplicates per-frame writes. */
+  const lastAppliedPlaybackRateRef = useRef(1)
+  /** Current segment index, tracked locally during playback and flushed
+   *  to positionStore only on pause/chapter-end. Both legacy and WAAPI
+   *  paths use this. Avoiding per-segment store commits during play
+   *  eliminates the React re-render cascade + the progress saver's
+   *  synchronous `localStorage.setItem`, both of which land on the main
+   *  thread and produce visible hitches on mobile. */
+  const liveArrIdxRef = useRef<number | null>(null)
 
   // RSVP live word (used for display only). Re-renders this hook
   // (and only this hook) when the word changes.
@@ -509,6 +608,111 @@ export function usePlaybackController(
       const container = getActiveScrollContainer()
       if (!container) return true // try again next frame
 
+      /* -------------------------------------------------------------- */
+      /*  WAAPI compositor-scroll fast path                              */
+      /* -------------------------------------------------------------- */
+      // When a live animator is driving the column's transform, the
+      // rAF loop does NOT write scrollTop. Its only job is to:
+      //   (1) sample gaze, lerp the speed multiplier, push the new
+      //       playbackRate to the compositor
+      //   (2) throttled segment detection via virtualOffset + a
+      //       precomputed segmentCenterPx[] binary search
+      // The animation's `finished` promise handles end-of-chapter —
+      // the tick body never observes it directly.
+      const animator = animatorRef.current
+      const keyframes = keyframesRef.current
+      if (animator && animator.isActive() && keyframes) {
+        const dt = lastTimestampRef.current > 0
+          ? Math.min((timestamp - lastTimestampRef.current) / 1000, 0.25)
+          : 0
+        lastTimestampRef.current = timestamp
+
+        // (1) Gaze-driven speed multiplier (track mode only).
+        let multiplier = 1.0
+        if (isTrack) {
+          const gaze = gazeRef.current
+          const elapsedSincePlay = performance.now() - playStartTimeRef.current
+          const inGracePeriod = elapsedSincePlay < PLAY_GRACE_MS
+          const intensity =
+            gaze.intensity < INTENSITY_DEADZONE ? 0 : gaze.intensity
+          let target = 1.0
+          if (inGracePeriod) {
+            target = 1.0
+          } else if (gaze.direction === 'down' && intensity > 0) {
+            target = 1.0 + 1.5 * intensity
+          } else if (gaze.direction === 'up' && intensity > 0) {
+            if (intensity <= HOLD_THRESHOLD) {
+              target = 1.0 - intensity / HOLD_THRESHOLD
+            } else {
+              target =
+                MIN_MULTIPLIER *
+                ((intensity - HOLD_THRESHOLD) / (1 - HOLD_THRESHOLD))
+            }
+          }
+          target = Math.max(MIN_MULTIPLIER, Math.min(MAX_MULTIPLIER, target))
+          const delta = target - speedMultiplierRef.current
+          if (Math.abs(delta) < MULTIPLIER_SNAP) {
+            speedMultiplierRef.current = target
+          } else {
+            const isDecelerating = delta < 0
+            const tau = isDecelerating ? 0.45 : 0.30
+            const lerpRate = 1 - Math.exp(-dt / tau)
+            speedMultiplierRef.current += delta * lerpRate
+          }
+          multiplier = speedMultiplierRef.current
+        } else {
+          speedMultiplierRef.current = 1.0
+        }
+
+        // Compose the compositor rate: WPM scaling × gaze multiplier.
+        const wpm = positionStore.getSnapshot().wpm
+        const baselineWpm = keyframes.baselineWpm || DEFAULT_WPM
+        let targetRate = (wpm / baselineWpm) * multiplier
+        if (isTrack && targetRate > 0) {
+          // Clamp the absolute upper bound to MAX_EFFECTIVE_WPM so a
+          // gaze blip can't overshoot the compositor into motion-sick
+          // speeds.
+          const maxRate = MAX_EFFECTIVE_WPM / baselineWpm
+          targetRate = Math.min(targetRate, maxRate)
+        }
+        if (targetRate !== lastAppliedPlaybackRateRef.current) {
+          animator.setPlaybackRate(targetRate)
+          lastAppliedPlaybackRateRef.current = targetRate
+        }
+
+        // (2) Throttled segment tracking. Every 10 frames (~167 ms at
+        // 60 Hz), find the segment at the reference line via binary
+        // search on the precomputed midpoint table. No DOM reads.
+        //
+        // IMPORTANT: we do NOT commit to positionStore during WAAPI
+        // playback. A store commit cascades into React re-renders
+        // plus a synchronous `localStorage.setItem` via the progress
+        // saver — both land on the main thread and, on mobile, take
+        // long enough to drop frames. Since the WAAPI motion runs on
+        // the compositor, any such main-thread stall shows up as a
+        // visible "hitch" ~1×/sec. Instead we track the idx locally
+        // and flush once on pause / chapter-end.
+        if (++segCheckCounterRef.current >= 10) {
+          segCheckCounterRef.current = 0
+          const centers = segmentCenterPxRef.current
+          if (centers && centers.length > 0) {
+            const virtualPx = animator.virtualOffset()
+            const referencePx =
+              baselineScrollTopRef.current +
+              virtualPx +
+              container.clientHeight * REFERENCE_LINE_RATIO
+            const newIdx = binarySearchLE(centers, referencePx)
+            if (newIdx >= 0) liveArrIdxRef.current = newIdx
+          }
+        }
+
+        return true
+      }
+
+      /* -------------------------------------------------------------- */
+      /*  Legacy rAF + scrollTop path                                    */
+      /* -------------------------------------------------------------- */
+
       // Always use constant-speed scrolling. Recompute the average
       // speed ratio on first tick or after a chapter/play reset.
       if (pxPerSecPerWpmRef.current === 0) {
@@ -609,30 +813,24 @@ export function usePlaybackController(
           scrollPositionRef.current += effectivePxPerSec * dt
           if (scrollPositionRef.current < 0) scrollPositionRef.current = 0
 
-          // Sub-pixel smoothing for formatted mode. Browsers snap
-          // scrollTop to integer pixels on assignment, producing
-          // visible 1-px stair-stepping at slow track-mode speeds
-          // (< ~1 px/frame). We split the virtual position into an
-          // integer part (written to scrollTop) and a fractional
-          // remainder (applied as translate3d on the inner column).
-          // The transform lives on a compositor layer so per-frame
-          // updates don't touch layout/paint. Plain mode keeps the
-          // original rounded-write behavior since its focus-scroll
-          // container has a different DOM shape.
-          if (displayMode === 'formatted') {
-            const intended = scrollPositionRef.current
-            const intTop = Math.floor(intended)
-            const frac = intended - intTop
-            // Apply the sub-pixel transform BEFORE the scrollTop write so
-            // the visual position is consistent at the moment the scroll
-            // event dispatches — otherwise subscribers waking on the
-            // scroll event can read an intermediate position between the
-            // two DOM writes.
-            formattedViewRef.current?.applySubpixelScroll(-frac)
-            container.scrollTop = intTop
-          } else {
-            container.scrollTop = Math.floor(scrollPositionRef.current * dpr) / dpr
-          }
+          // Integer `scrollTop` only. The previous sub-pixel translate3d
+          // smoother (applied as a transform on the column to fill the
+          // gap left by integer snapping) caused two problems on mobile:
+          //   1. Any transform with non-integer Y value promoted the
+          //      text to a compositor layer and switched anti-aliasing
+          //      from subpixel → grayscale. Per-frame value changes
+          //      then re-rasterized glyphs at sub-pixel positions,
+          //      producing the "bold shimmer" symptom.
+          //   2. The resulting compositor layer was chapter-height and
+          //      exceeded mobile Safari's raster budget, so it stalled
+          //      on tile raster — hitches.
+          // Integer scrollTop uses the browser's native scrollable-
+          // container pipeline: tiles are rasterized only for the
+          // visible region, text stays in subpixel AA, and motion
+          // looks native. The trade-off is 1 px stair-step at very
+          // slow (< 1 px/frame) track-mode speeds; invisible at
+          // normal reading velocity.
+          container.scrollTop = Math.floor(scrollPositionRef.current)
 
           const maxScroll = container.scrollHeight - container.clientHeight
           const endTolerance = Math.max(2, Math.ceil(dpr))
@@ -644,36 +842,33 @@ export function usePlaybackController(
       }
       lastTimestampRef.current = timestamp
 
-      // Segment detection. Throttle to ~6 Hz (every 10 frames) and
-      // DEFER the store commit to after paint via setTimeout. This
-      // keeps the rAF tick free of React re-render cascades that cause
-      // visible jitter during smooth scrolling. The commit is also
-      // rate-limited to at most once per second.
+      // Segment tracking. Update `liveArrIdxRef` every 10 frames via a
+      // precomputed midpoint-table binary search when available, else
+      // fall back to the DOM-reading detector (section not ready, plain
+      // mode without midpoint table, etc.). We do NOT commit to the
+      // position store during playback — that cascade (React re-render
+      // + progress saver's synchronous localStorage.setItem) is the
+      // second-worst source of mobile hitches. pause() flushes the
+      // final idx on the way out.
       if (++segCheckCounterRef.current >= 10) {
         segCheckCounterRef.current = 0
         const displayMode = positionStore.getSnapshot().displayMode
-        const newIdx = detectArrayIdxFromScroll(container, displayMode)
-        if (newIdx != null) {
-          const currentArr = getArrayIdx()
-          if (newIdx !== currentArr) {
-            pendingScrollCommitRef.current = newIdx
-            const now = performance.now()
-            if (
-              now - lastScrollCommitTimeRef.current >= 1000 &&
-              !scrollCommitTimerRef.current
-            ) {
-              scrollCommitTimerRef.current = setTimeout(() => {
-                scrollCommitTimerRef.current = null
-                const idx = pendingScrollCommitRef.current
-                if (idx != null) {
-                  pendingScrollCommitRef.current = null
-                  lastScrollCommitTimeRef.current = performance.now()
-                  commitArrayIdx(idx)
-                }
-              }, 0)
-            }
-          }
+        const centers = segmentCenterPxRef.current
+        let newIdx: number | null = null
+        if (
+          displayMode === 'formatted' &&
+          centers != null &&
+          centers.length > 0
+        ) {
+          const referencePx =
+            container.scrollTop +
+            container.clientHeight * REFERENCE_LINE_RATIO
+          const found = binarySearchLE(centers, referencePx)
+          if (found >= 0) newIdx = found
+        } else {
+          newIdx = detectArrayIdxFromScroll(container, displayMode)
         }
+        if (newIdx != null) liveArrIdxRef.current = newIdx
       }
 
       return true
@@ -683,8 +878,6 @@ export function usePlaybackController(
       detectArrayIdxFromScroll,
       gazeRef,
       getActiveScrollContainer,
-      commitArrayIdx,
-      getArrayIdx,
       dpr,
     ],
   )
@@ -733,6 +926,171 @@ export function usePlaybackController(
       if (arr != null) commitArrayIdx(arr, wordIndexRef.current)
     }
   }, [commitArrayIdx, getArrayIdx])
+
+  /** Dispose any live WAAPI animator and clear its cached state. Does not
+   *  touch scrollTop or transforms — callers are expected to have
+   *  already done the visual reconciliation if they need it. */
+  const disposeAnimator = useCallback(() => {
+    animatorRef.current?.cancel()
+    animatorRef.current = null
+    keyframesRef.current = null
+    segmentCenterPxRef.current = null
+    lastAppliedPlaybackRateRef.current = 1
+  }, [])
+
+  /** Build and install the WAAPI compositor animator for formatted
+   *  scroll/track playback. Called from play() once the profile has
+   *  been rebuilt. Silently no-ops if prerequisites are missing so the
+   *  legacy tick path remains the fallback. */
+  const tryBuildFormattedAnimator = useCallback(
+    (
+      handle: FormattedViewHandle,
+      container: HTMLDivElement,
+      chapterIdx: number,
+      mode: 'scroll' | 'track',
+    ) => {
+      disposeAnimator()
+
+      const column = handle.getAnimatedColumn()
+      if (!column) return
+
+      // Resolve the end-of-chapter scroll position. Prefer the section's
+      // bottom so we don't attempt to animate past the current chapter's
+      // content; fall back to the container's scrollable extent.
+      const sectionEl = handle.getSectionEl(chapterIdx)
+      const clientHeight = container.clientHeight
+      const baselineScrollTop = container.scrollTop
+      let endPx: number
+      if (sectionEl) {
+        const sectionRect = sectionEl.getBoundingClientRect()
+        const containerRect = container.getBoundingClientRect()
+        const sectionBottomInContainer =
+          sectionRect.bottom - containerRect.top + container.scrollTop
+        // We stop the animation when the reference line reaches the
+        // bottom of the section — past that, the next chapter should
+        // take over. That translates to:
+        //   maxScrollTop = sectionBottomInContainer - clientHeight * REFERENCE_LINE_RATIO
+        endPx =
+          sectionBottomInContainer - clientHeight * REFERENCE_LINE_RATIO
+      } else {
+        endPx = container.scrollHeight - clientHeight
+      }
+      // Clamp to usable range.
+      endPx = Math.max(endPx, baselineScrollTop + 1)
+
+      // Prefer the velocity profile; fall back to a constant-speed
+      // chapter-average model if the profile isn't ready, or if the
+      // user forced constant speed via the `waapiConstantSpeed` flag
+      // to A/B test whether profile-boundary slope discontinuities
+      // are the source of perceived choppiness.
+      const profile = velocityProfileRef.current
+      const forceConstant = waapiConstantSpeedForced()
+      let kf: PlaybackKeyframes | null = null
+      if (!forceConstant && profile && profile.entries.length > 0) {
+        kf = buildPlaybackKeyframes(
+          profile,
+          baselineScrollTop,
+          endPx,
+          DEFAULT_WPM,
+        )
+      }
+      if (!kf || kf.totalDistancePx <= 0 || kf.totalDurationMs <= 0) {
+        let totalWords = 0
+        for (const s of segmentsRef.current) {
+          const wc =
+            s.word_count ||
+            s.text.trim().split(/\s+/).filter(Boolean).length
+          totalWords += Math.max(wc, 0)
+        }
+        const distance = Math.max(0, endPx - baselineScrollTop)
+        if (distance <= 0 || totalWords <= 0) return
+        kf = buildConstantKeyframes(distance, totalWords, DEFAULT_WPM)
+      }
+      if (kf.totalDurationMs <= 0 || kf.totalDistancePx <= 0) return
+
+      // Precompute segment midpoints for the compositor tick's
+      // boundary-detection binary search.
+      const segmentCenterYs = handle.buildSegmentCenterYs(
+        chapterIdx,
+        segmentsRef.current,
+      )
+      if (!segmentCenterYs) {
+        // Section not ready — skip the WAAPI path this time; legacy
+        // tick will handle detection via DOM reads.
+        return
+      }
+
+      keyframesRef.current = kf
+      segmentCenterPxRef.current = segmentCenterYs
+      baselineScrollTopRef.current = baselineScrollTop
+      liveArrIdxRef.current = null
+
+      // Initial rate respects WPM scaling. Track-mode gaze multiplier
+      // starts at 1 (PLAY_GRACE_MS window suppresses any initial tilt).
+      const wpm = positionStore.getSnapshot().wpm
+      const initialRate = wpm / DEFAULT_WPM
+      lastAppliedPlaybackRateRef.current = initialRate
+
+      // Ensure any previous inline transform is cleared so the animation
+      // starts from identity (otherwise the new keyframe origin would
+      // composite on top of stale CSS).
+      column.style.transform = ''
+
+      try {
+        animatorRef.current = createPlaybackAnimator({
+          column,
+          keyframes: kf,
+          initialPlaybackRate: initialRate,
+          onFinished: () => {
+            // Animation hit its natural end. Reconcile scrollTop so
+            // the container reflects the final virtual position — the
+            // animation's `fill: 'forwards'` held the compositor at
+            // the end keyframe, but scrollTop is still pinned at the
+            // baseline. Without this, clearing the transform (or any
+            // later scroll event) would visually snap the reader back
+            // to the chapter's start.
+            const totalDistance = kf.totalDistancePx
+            const h = formattedViewRef.current
+            const cont = h?.getScrollContainer()
+            const col = h?.getAnimatedColumn()
+            if (cont && col) {
+              cont.scrollTop = Math.round(
+                baselineScrollTopRef.current + totalDistance,
+              )
+              col.style.transform = ''
+            }
+            // Flush the final segment index one last time so the
+            // end-of-chapter position persists. After this we clear
+            // all WAAPI refs.
+            const flushIdx = liveArrIdxRef.current
+            liveArrIdxRef.current = null
+            if (flushIdx != null && flushIdx !== getArrayIdx()) {
+              commitArrayIdx(flushIdx)
+            }
+            animatorRef.current?.cancel()
+            animatorRef.current = null
+            keyframesRef.current = null
+            segmentCenterPxRef.current = null
+            if (!onCompleteRef.current?.()) positionStore.setPlaying(false)
+          },
+        })
+      } catch {
+        // Animate() threw — give up on WAAPI for this play session.
+        animatorRef.current = null
+        keyframesRef.current = null
+        segmentCenterPxRef.current = null
+      }
+
+      void mode // reserved for future mode-specific tuning
+    },
+    [
+      commitArrayIdx,
+      disposeAnimator,
+      formattedViewRef,
+      getArrayIdx,
+      velocityProfileRef,
+    ],
+  )
 
   const play = useCallback(() => {
     if (segmentsRef.current.length === 0) return
@@ -785,22 +1143,35 @@ export function usePlaybackController(
       const handle = formattedViewRef.current
       if (handle) {
         const chapterIdx = positionStore.getSnapshot().chapterIdx
+        const startFormattedPlayback = () => {
+          handle.rebuildProfile()
+          const container = handle.getScrollContainer()
+          if (container) {
+            scrollPositionRef.current = container.scrollTop
+            baselineScrollTopRef.current = container.scrollTop
+          }
+          // Precompute the segment-midpoint table regardless of playback
+          // path. Both the native-scroll tick and the WAAPI tick look up
+          // the current segment via binary search on this array, avoiding
+          // per-frame getClientRects. Null result (section not ready)
+          // falls back to the DOM-reading detectArrayIdxFromScroll.
+          segmentCenterPxRef.current =
+            handle.buildSegmentCenterYs(chapterIdx, segmentsRef.current)
+          liveArrIdxRef.current = null
+
+          // Try the WAAPI compositor path. On failure (unsupported,
+          // profile unusable, column missing) we fall through to the
+          // legacy rAF+scrollTop tick; no harm done.
+          if (container && waapiPlaybackEnabled()) {
+            tryBuildFormattedAnimator(handle, container, chapterIdx, mode)
+          }
+          positionStore.setPlaying(true)
+          rafRef.current = requestAnimationFrame(tick)
+        }
         handle
           .settleImages(chapterIdx)
-          .then(() => {
-            handle.rebuildProfile()
-            const container = handle.getScrollContainer()
-            if (container) scrollPositionRef.current = container.scrollTop
-            positionStore.setPlaying(true)
-            rafRef.current = requestAnimationFrame(tick)
-          })
-          .catch(() => {
-            handle.rebuildProfile()
-            const container = handle.getScrollContainer()
-            if (container) scrollPositionRef.current = container.scrollTop
-            positionStore.setPlaying(true)
-            rafRef.current = requestAnimationFrame(tick)
-          })
+          .then(startFormattedPlayback)
+          .catch(startFormattedPlayback)
         return
       }
     }
@@ -813,7 +1184,7 @@ export function usePlaybackController(
 
     positionStore.setPlaying(true)
     rafRef.current = requestAnimationFrame(tick)
-  }, [formattedViewRef, getActiveScrollContainer, tick])
+  }, [formattedViewRef, getActiveScrollContainer, tick, tryBuildFormattedAnimator])
 
   /** Restart the rAF loop without touching isPlaying. Used after
    *  onComplete returned true and new segments are ready. Resets only
@@ -825,6 +1196,7 @@ export function usePlaybackController(
     elapsedRef.current = 0
 
     const mode = positionStore.getSnapshot().mode
+    const displayMode = positionStore.getSnapshot().displayMode
     if (mode === 'scroll' || mode === 'track') {
       speedMultiplierRef.current = 1.0
       segCheckCounterRef.current = 0
@@ -832,15 +1204,74 @@ export function usePlaybackController(
       pxPerSecPerWpmRef.current = 0
       const container = getActiveScrollContainer()
       if (container) scrollPositionRef.current = container.scrollTop
+
+      // If we were driving the old chapter's animator, it was already
+      // torn down by onFinished. Rebuild for the new chapter if the
+      // WAAPI path is available; otherwise the legacy tick takes over.
+      if (
+        displayMode === 'formatted' &&
+        waapiPlaybackEnabled() &&
+        container
+      ) {
+        const handle = formattedViewRef.current
+        if (handle) {
+          const chapterIdx = positionStore.getSnapshot().chapterIdx
+          tryBuildFormattedAnimator(handle, container, chapterIdx, mode)
+        }
+      }
     }
 
     rafRef.current = requestAnimationFrame(tick)
-  }, [getActiveScrollContainer, tick])
+  }, [formattedViewRef, getActiveScrollContainer, tick, tryBuildFormattedAnimator])
 
   const pause = useCallback(() => {
+    // WAAPI reconciliation first: freeze the animation as an inline
+    // transform, cancel it, then synchronously swap scrollTop to the
+    // virtual position and clear the transform. All three DOM writes
+    // happen in the same JS tick so the browser paints them together
+    // and the user sees no intermediate state. (Earlier we deferred
+    // to rAF; that caused a 1-frame flash because `stopRaf` below
+    // calls resetSubpixelScroll which clears the transform before the
+    // rAF fires.)
+    const animator = animatorRef.current
+    if (animator && animator.isActive()) {
+      // WAAPI path visual reconcile — freeze the animation as an inline
+      // transform, swap scrollTop to the virtual position, clear the
+      // transform. All three writes in one JS tick so the browser
+      // paints them atomically.
+      const formattedHandle = formattedViewRef.current
+      const container = formattedHandle?.getScrollContainer() ?? null
+      const column = formattedHandle?.getAnimatedColumn() ?? null
+      const result = animator.pause()
+      animatorRef.current = null
+      keyframesRef.current = null
+      if (container && column) {
+        const target = baselineScrollTopRef.current + result.virtualOffsetPx
+        container.scrollTop = Math.round(target)
+        column.style.transform = ''
+      }
+      // Pip refresh runs on next frame so the scroll-source transition
+      // from 'engine' to 'user' (flipped by setPlaying(false) below)
+      // has time to land before the pip scroll-listener re-engages.
+      requestAnimationFrame(() => {
+        formattedViewRef.current?.refreshPipPosition()
+      })
+    }
+
+    // Flush the locally-tracked segment idx once, regardless of which
+    // playback path was active. Playback never commits to positionStore
+    // during motion — this pause flush is the single persistence point.
+    const flushIdx = liveArrIdxRef.current
+    liveArrIdxRef.current = null
+    segmentCenterPxRef.current = null
+    if (flushIdx != null && flushIdx !== getArrayIdx()) {
+      commitArrayIdx(flushIdx)
+    }
+
     stopRaf()
-    // Flush any deferred scroll/track segment commit immediately so
-    // the saved position is accurate.
+    // Legacy-path deferred-commit cleanup. The native-scroll tick no
+    // longer schedules these, but the refs are kept around in case the
+    // WAAPI path is re-enabled mid-session via the feature flag.
     if (scrollCommitTimerRef.current) {
       clearTimeout(scrollCommitTimerRef.current)
       scrollCommitTimerRef.current = null
@@ -853,7 +1284,7 @@ export function usePlaybackController(
     flushLocalState()
     waitingForSegmentsRef.current = false
     positionStore.setPlaying(false)
-  }, [commitArrayIdx, flushLocalState, stopRaf])
+  }, [commitArrayIdx, flushLocalState, formattedViewRef, getArrayIdx, stopRaf])
 
   const togglePlayPause = useCallback(() => {
     if (positionStore.getSnapshot().isPlaying) pause()
@@ -956,6 +1387,15 @@ export function usePlaybackController(
     // External commit — reset elapsed and word index.
     elapsedRef.current = 0
     wordIndexRef.current = cursorWord
+    // If a WAAPI animator is live when an external seek lands (toc
+    // click, user scrub, chapter nav) the animator is now animating
+    // from a stale baseline. Rather than fight to rebuild it in place,
+    // we dispose it and let the legacy tick path take over from the
+    // new scrollTop. The user can pause/play to re-engage the
+    // compositor path at the new position.
+    if (animatorRef.current?.isActive()) {
+      disposeAnimator()
+    }
     // Don't touch lastTimestampRef — let the next tick set it fresh.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cursorRevision])
@@ -969,12 +1409,13 @@ export function usePlaybackController(
     return () => {
       flushLocalState()
       stopRaf()
+      disposeAnimator()
       if (scrollCommitTimerRef.current) {
         clearTimeout(scrollCommitTimerRef.current)
         scrollCommitTimerRef.current = null
       }
     }
-  }, [flushLocalState, stopRaf])
+  }, [disposeAnimator, flushLocalState, stopRaf])
 
   /* ---------------------------------------------------------------- */
   /*  Reset accumulators on chapter change                             */

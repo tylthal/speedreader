@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useTheme, type Theme } from '../hooks/useTheme';
 import { useDefaultDisplayMode } from '../hooks/useDefaultDisplayMode';
 import { useChapterFlow, type ChapterFlow } from '../hooks/useChapterFlow';
+import { useFrameBadgeEnabled } from '../hooks/useFrameBadgeEnabled';
 import { getPublications, type DisplayMode, type Publication } from '../db/localClient';
 import StorageStatus from '../components/StorageStatus';
 import Accordion from '../components/Accordion';
@@ -52,6 +53,7 @@ export default function SettingsPage() {
   const { theme, setTheme } = useTheme();
   const { defaultDisplayMode, setDefaultDisplayMode } = useDefaultDisplayMode();
   const { chapterFlow, setChapterFlow } = useChapterFlow();
+  const [frameBadgeEnabled, setFrameBadgeEnabled] = useFrameBadgeEnabled();
   const [bookCount, setBookCount] = useState<number | undefined>(undefined);
   const [firstPubId, setFirstPubId] = useState<number | null>(null);
   const [gazeSensitivity, setGazeSensitivityState] = useState<number>(() => getNumberPref('gazeSensitivity', 1.0));
@@ -201,6 +203,32 @@ export default function SettingsPage() {
           Books are stored locally on your device. No data is sent to any server.
         </p>
         <StorageStatus bookCount={bookCount} />
+      </Accordion>
+
+      <Accordion title="Diagnostics">
+        <p className="settings-section__description">
+          Show a small frame-time indicator in the top-right corner. Useful for spotting playback hitches; leave off for normal reading.
+        </p>
+        <div className="theme-grid theme-grid--compact" role="radiogroup" aria-label="Frame-time indicator">
+          <button
+            className={`theme-option${!frameBadgeEnabled ? ' theme-option--active' : ''}`}
+            onClick={() => setFrameBadgeEnabled(false)}
+            role="radio"
+            aria-checked={!frameBadgeEnabled}
+          >
+            <span className="theme-option__label">Off</span>
+            <span className="theme-option__desc">Hide indicator</span>
+          </button>
+          <button
+            className={`theme-option${frameBadgeEnabled ? ' theme-option--active' : ''}`}
+            onClick={() => setFrameBadgeEnabled(true)}
+            role="radio"
+            aria-checked={frameBadgeEnabled}
+          >
+            <span className="theme-option__label">On</span>
+            <span className="theme-option__desc">Show indicator</span>
+          </button>
+        </div>
       </Accordion>
 
       <Accordion title="About">

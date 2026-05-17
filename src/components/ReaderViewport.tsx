@@ -1202,8 +1202,6 @@ function ActiveReader({
           {!showFormattedView && (
           <GestureLayer
             onTap={isPlaying ? userPause : undefined}
-            onSwipeLeft={isPlaying ? handleNextChapter : undefined}
-            onSwipeRight={isPlaying ? handlePrevChapter : undefined}
             onSwipeUp={isPlaying ? () => controller.adjustWpm(1) : undefined}
             onSwipeDown={isPlaying ? () => controller.adjustWpm(-1) : undefined}
             enabled={isPlaying}
@@ -1323,8 +1321,6 @@ function ActiveReader({
         gazeVideoRef={gazeVideoRef}
         gazeLandmarksRef={gazeLandmarksRef}
         gazeRef={gazeRef}
-        onOpenToc={() => setTocOpen(true)}
-        onOpenBookmarks={() => setBookmarksOpen(true)}
       />
     </div>
   );

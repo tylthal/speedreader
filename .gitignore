@@ -70,6 +70,11 @@ android/capacitor-cordova-android-plugins/build/
 # Bundle analysis
 stats.html
 
+# Local dev artifacts
+testbook/
+screenshots/
+screenshot-*.png
+
 # MediaPipe assets fetched at build time by scripts/setup-mediapipe.mjs
 # (~15 MB WASM + face-landmarker model — kept out of git, restored on build)
 public/mediapipe/

@@ -460,22 +460,25 @@ html[data-playing] .reader-header {
    surface, unlike the plain-mode focus-scroll which has a separate
    GestureLayer handling taps outside the scroll container. */
 .formatted-view[data-playing="true"] {
-  will-change: transform, scroll-position;
   scroll-behavior: auto;
 }
 
 .formatted-view[data-playing="true"] .formatted-view__pip {
-  will-change: transform;
   transition: none;
 }
 
-/* During engine-driven playback the content column receives a per-frame
-   translate3d with the sub-pixel remainder of the virtual scroll position.
-   Promoting to its own compositor layer keeps those updates off the main
-   paint path. */
-.formatted-view[data-playing="true"] .formatted-view__column {
-  will-change: transform;
-}
+/* Intentionally no `will-change` or `transform` on the column.
+   Promoting the column to its own compositor layer is tempting for
+   per-frame transform writes, but the column is as tall as a full
+   chapter — on mobile Safari the compositor cannot rasterize a layer
+   that large ahead of movement, producing ~190ms hitches even when
+   the animation itself runs off-thread. Native scroll handles tall
+   scrollable containers by rasterizing only the visible tiles, which
+   is what we actually want. The playback engine writes integer
+   `scrollTop` from rAF and lets the browser's scroll pipeline do
+   the compositing work at the tile granularity. Text stays in
+   subpixel AA since nothing forces it onto a GPU layer, so there
+   is no "bold shimmer" transition at play/pause boundaries. */
 
 /* Hidden formatted view: removed from layout via display:none so the
    GestureLayer (a flex sibling that takes flex:1) gets the full
@@ -702,7 +705,7 @@ html[data-playing] .reader-header {
   font-size: 0.95rem;
   line-height: 1.5;
   color: var(--text-muted);
-  transition: color 0.2s ease, font-weight 0.2s ease;
+  transition: color 0.2s ease;
   overflow: hidden;
   text-overflow: ellipsis;
   display: -webkit-box;
@@ -893,7 +896,6 @@ html[data-playing] .reader-header {
   pointer-events: none;
   scroll-behavior: auto;
   contain: content;
-  will-change: scroll-position;
 }
 
 .focus-scroll--playing .focus-scroll__item {
@@ -929,6 +931,13 @@ html[data-playing] .reader-header {
   background: var(--controls-bg, var(--bg-surface));
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
+  /* Give the controls its own compositor layer so the blur result can be
+     cached. Without isolation, any paint in a sibling (e.g. reader text
+     scrolling in the region underneath) invalidates the backdrop and
+     forces a re-blur every frame — the dominant cause of choppy scroll
+     and "bold shimmer" text distortion on mobile during playback. */
+  isolation: isolate;
+  transform: translateZ(0);
   border-top: 1px solid var(--surface-border);
   padding: 6px 10px;
   padding-bottom: calc(6px + env(safe-area-inset-bottom));
@@ -939,35 +948,30 @@ html[data-playing] .reader-header {
   transition: background 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
 }
 
+/* During playback the reader scrolls continuously behind the controls.
+   backdrop-filter would re-sample and re-blur that region every frame,
+   dropping FPS on mobile GPUs and causing text passing under it to
+   re-rasterize (the "bold shimmer" symptom). Drop the blur while playing;
+   the solid background below is still opaque enough to read against. */
 .controls--playing {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  /* Force a fully-opaque background so the reader behind doesn't bleed
+     through and force per-frame compositing of this region. */
+  background: var(--bg-surface);
   border-top-color: var(--surface-border);
   padding: 0 0;
   padding-bottom: env(safe-area-inset-bottom);
   gap: 0;
 }
 
-.controls--playing.controls--expanded {
-  padding: 6px 10px;
-  padding-bottom: calc(6px + env(safe-area-inset-bottom));
-  gap: 6px;
-}
-
-/* ---------- Collapse elements during playback (unless expanded) ---------- */
-.controls__segment-group,
-.controls__speed-row,
-.controls__play-bar,
-.controls__advanced,
-.controls__track-row {
-  transition: transform 0.4s ease, opacity 0.4s ease, max-height 0.4s ease;
-  max-height: 120px;
-}
-
-.controls--playing:not(.controls--expanded) .controls__progress-wrap,
-.controls--playing:not(.controls--expanded) .controls__segment-group,
-.controls--playing:not(.controls--expanded) .controls__speed-row,
-.controls--playing:not(.controls--expanded) .controls__play-bar,
-.controls--playing:not(.controls--expanded) .controls__advanced,
-.controls--playing:not(.controls--expanded) .controls__track-row {
+/* ---------- Collapse elements during playback ---------- */
+.controls--playing .controls__progress-wrap,
+.controls--playing .controls__segment-group,
+.controls--playing .controls__speed-row,
+.controls--playing .controls__play-bar,
+.controls--playing .controls__advanced,
+.controls--playing .controls__track-row {
   display: none;
 }
 
@@ -1448,11 +1452,10 @@ html[data-playing] .reader-header {
   padding: 12px 16px 10px;
   width: 100%;
   position: relative;
-  cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
 
-.controls--playing:not(.controls--expanded) .controls__strip {
+.controls--playing .controls__strip {
   display: flex;
 }
 
@@ -1557,39 +1560,6 @@ html[data-playing] .reader-header {
 }
 
 .controls__strip-wpm--interactive:active {
-  background: var(--surface-hover);
-}
-
-/* ==========================================================================
-   Controls nav row (thumb-zone TOC + Bookmarks triggers)
-   ========================================================================== */
-
-.controls__nav-row {
-  display: flex;
-  gap: 0.5rem;
-  margin: 0.75rem 0 0.5rem;
-}
-
-.controls__nav-pill {
-  flex: 1;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.45rem;
-  min-height: 44px;
-  padding: 0.5rem 0.75rem;
-  background: var(--surface-subtle);
-  border: 1px solid var(--surface-border);
-  border-radius: var(--radius-md);
-  color: var(--text);
-  font-family: var(--font-ui);
-  font-size: 0.82rem;
-  font-weight: 600;
-  cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
-}
-
-.controls__nav-pill:active {
   background: var(--surface-hover);
 }
 

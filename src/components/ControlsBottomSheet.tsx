@@ -39,10 +39,6 @@ interface ControlsBottomSheetProps {
   gazeLandmarksRef?: React.RefObject<FaceLandmark[] | null>;
   /** Live ref for direction/intensity — HUD reads this at ~15Hz without re-rendering. */
   gazeRef?: React.RefObject<{ direction: GazeDirection; intensity: number }>;
-  /** Open the Table of Contents panel. */
-  onOpenToc?: () => void;
-  /** Open the Bookmarks panel. */
-  onOpenBookmarks?: () => void;
 }
 
 const MODE_META: Record<ReadingMode, { label: string; short: string; description: string }> = {
@@ -77,13 +73,10 @@ export default function ControlsBottomSheet({
   gazeVideoRef,
   gazeLandmarksRef,
   gazeRef,
-  onOpenToc,
-  onOpenBookmarks,
 }: ControlsBottomSheetProps) {
   const { announce } = useAnnounce();
   const haptics = useHaptics();
   const [showTrackOptions, setShowTrackOptions] = useState(false);
-  const [isStripExpanded, setIsStripExpanded] = useState(false);
   const [wpmPickerOpen, setWpmPickerOpen] = useState(false);
 
   // Scrubbing state
@@ -115,11 +108,6 @@ export default function ControlsBottomSheet({
       stripPulseTimerRef.current = setTimeout(() => setStripWpmChanged(false), 300);
     }
   }, [wpm]);
-
-  // Reset strip expanded when playback stops
-  useEffect(() => {
-    if (!isPlaying) setIsStripExpanded(false);
-  }, [isPlaying]);
 
   const activeMode = MODE_META[mode];
   const activeIndex = ALL_MODES.indexOf(mode);
@@ -201,18 +189,9 @@ export default function ControlsBottomSheet({
     speedCountRef.current = 0;
   }, []);
 
-  // ── Strip expand ──
-  const handleStripTap = useCallback((e: React.MouseEvent) => {
-    // Don't expand if tapping the pause button
-    if ((e.target as HTMLElement).closest('.controls__strip-pause')) return;
-    setIsStripExpanded(true);
-    haptics.tap();
-  }, [haptics]);
-
   const className = [
     'controls',
     isPlaying ? 'controls--playing' : '',
-    isStripExpanded ? 'controls--expanded' : '',
   ].filter(Boolean).join(' ');
 
   const controlsRef = useRef<HTMLDivElement>(null);
@@ -409,14 +388,7 @@ export default function ControlsBottomSheet({
       </div>
 
       {/* ── Playing-State Strip ── */}
-      <div
-        className="controls__strip"
-        onClick={handleStripTap}
-        role="button"
-        tabIndex={0}
-        aria-label="Expand controls"
-        aria-expanded={isStripExpanded}
-      >
+      <div className="controls__strip">
         <div className="controls__strip-progress">
           <div
             className="controls__strip-progress-fill"
@@ -470,46 +442,12 @@ export default function ControlsBottomSheet({
 
         <button
           className="controls__strip-pause"
-          onClick={(e) => { e.stopPropagation(); handleTogglePlay(); }}
+          onClick={handleTogglePlay}
           aria-label="Pause reading"
         >
           &#x2759;&#x2759;
         </button>
       </div>
-
-      {/* ── Thumb-zone Nav (TOC + Bookmarks) ── */}
-      {(onOpenToc || onOpenBookmarks) && (
-        <div className="controls__nav-row">
-          {onOpenToc && (
-            <button
-              type="button"
-              className="controls__nav-pill"
-              onClick={() => { onOpenToc(); haptics.tap(); }}
-              aria-label="Open table of contents"
-            >
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true">
-                <line x1="3" y1="4" x2="13" y2="4" />
-                <line x1="3" y1="8" x2="13" y2="8" />
-                <line x1="3" y1="12" x2="13" y2="12" />
-              </svg>
-              <span>Contents</span>
-            </button>
-          )}
-          {onOpenBookmarks && (
-            <button
-              type="button"
-              className="controls__nav-pill"
-              onClick={() => { onOpenBookmarks(); haptics.tap(); }}
-              aria-label="Open bookmarks"
-            >
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M4 2h8v12l-4-3-4 3z" />
-              </svg>
-              <span>Bookmarks</span>
-            </button>
-          )}
-        </div>
-      )}
 
       {/* ── Play/Pause Button ── */}
       <button

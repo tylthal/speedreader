@@ -472,3 +472,195 @@ function clamp01(t: number): number {
   if (t > 1) return 1
   return t
 }
+
+// ---------------------------------------------------------------------------
+// Playback keyframes (for the compositor-driven WAAPI scroll engine)
+// ---------------------------------------------------------------------------
+
+/**
+ * A single keyframe used to sample the virtual scroll position at any
+ * `animation.currentTime`. The WAAPI animation is built by mapping each
+ * entry to `{ transform: 'translate3d(0, Ypx px, 0)', offset: time/total }`.
+ */
+export interface PlaybackKeyframe {
+  /** Cumulative ms from play-start. */
+  timeMs: number
+  /** Cumulative virtual-scroll distance (px) from play-start. Grows
+   *  monotonically. The column's translate3d Y is `-virtualPx`. */
+  virtualPx: number
+}
+
+export interface PlaybackKeyframes {
+  keyframes: PlaybackKeyframe[]
+  /** Total virtual-scroll distance covered by this keyframe set. */
+  totalDistancePx: number
+  /** Total duration at `baselineWpm`. The animation then scales via
+   *  `animation.playbackRate = currentWpm / baselineWpm`. */
+  totalDurationMs: number
+  baselineWpm: number
+}
+
+/**
+ * Build a keyframe list from a velocity profile for the scroll range
+ * `[baselinePx, endPx]`. Each profile entry clipped to the range
+ * contributes one keyframe at the entry's far edge; linear interpolation
+ * between keyframes yields the constant per-block velocity the profile
+ * implies. Velocity changes at block boundaries are piecewise-linear
+ * (no smoothing across boundaries — the current getPxPerWeight smooths
+ * within ±BLEND_PX, which adds quadratic segments not representable in
+ * a linear WAAPI keyframe list; the visual effect of the abrupt boundary
+ * is minimal at reading speeds).
+ *
+ * Returns empty/degenerate output if the profile doesn't cover the range
+ * — caller should fall back to a constant-speed chapter-average build.
+ */
+export function buildPlaybackKeyframes(
+  profile: VelocityProfile,
+  baselinePx: number,
+  endPx: number,
+  baselineWpm: number,
+): PlaybackKeyframes {
+  const v_w = baselineWpm / 60 // words per second
+
+  const keyframes: PlaybackKeyframe[] = [
+    { timeMs: 0, virtualPx: 0 },
+  ]
+
+  let cumTimeMs = 0
+  let cumDistPx = 0
+
+  for (const entry of profile.entries) {
+    if (entry.bottomPx <= baselinePx) continue
+    if (entry.topPx >= endPx) break
+    const top = Math.max(entry.topPx, baselinePx)
+    const bottom = Math.min(entry.bottomPx, endPx)
+    const height = bottom - top
+    if (height <= 0) continue
+
+    // Proportional weight for the clipped portion of this entry.
+    const heightFrac = entry.heightPx > 0 ? height / entry.heightPx : 0
+    const weight = entry.weight * heightFrac
+    if (weight <= 0) continue
+    const durationMs = (weight / v_w) * 1000
+
+    cumTimeMs += durationMs
+    cumDistPx += height
+    keyframes.push({ timeMs: cumTimeMs, virtualPx: cumDistPx })
+  }
+
+  return {
+    keyframes,
+    totalDistancePx: cumDistPx,
+    totalDurationMs: cumTimeMs,
+    baselineWpm,
+  }
+}
+
+/**
+ * Build a fallback keyframe list when no velocity profile is available
+ * (plain mode, or formatted mode before first profile build). Uses a
+ * constant px/word ratio derived from the caller's total-word count.
+ *
+ * @param totalDistancePx  Full scroll distance to cover.
+ * @param totalWords       Total word count across the range.
+ * @param baselineWpm      Baseline WPM (matches profile builds).
+ */
+export function buildConstantKeyframes(
+  totalDistancePx: number,
+  totalWords: number,
+  baselineWpm: number,
+): PlaybackKeyframes {
+  const v_w = baselineWpm / 60
+  const totalDurationMs = totalWords > 0 ? (totalWords / v_w) * 1000 : 0
+  return {
+    keyframes: [
+      { timeMs: 0, virtualPx: 0 },
+      { timeMs: totalDurationMs, virtualPx: totalDistancePx },
+    ],
+    totalDistancePx,
+    totalDurationMs,
+    baselineWpm,
+  }
+}
+
+/**
+ * Sample the virtual scroll distance at a given `currentTime`. Used by
+ * the playback animator to produce `virtualOffset()` without reading
+ * computed styles. O(log n) via binary search, then linear interpolation.
+ */
+export function sampleVirtualPxAt(
+  kf: PlaybackKeyframes,
+  timeMs: number,
+): number {
+  const arr = kf.keyframes
+  const n = arr.length
+  if (n === 0) return 0
+  if (timeMs <= 0) return 0
+  if (timeMs >= kf.totalDurationMs) return kf.totalDistancePx
+
+  // Binary search for the greatest keyframe with timeMs <= query.
+  let lo = 0
+  let hi = n - 1
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >>> 1
+    if (arr[mid].timeMs <= timeMs) lo = mid
+    else hi = mid - 1
+  }
+  const a = arr[lo]
+  const b = arr[Math.min(lo + 1, n - 1)]
+  if (b === a || b.timeMs === a.timeMs) return a.virtualPx
+  const t = (timeMs - a.timeMs) / (b.timeMs - a.timeMs)
+  return a.virtualPx + (b.virtualPx - a.virtualPx) * t
+}
+
+/**
+ * Inverse of `sampleVirtualPxAt`: return the time at which the virtual
+ * scroll reaches `virtualPx`. Used for seeking by position (e.g. "jump
+ * to segment N") and for building the segmentCenter → time table.
+ */
+export function sampleTimeAtVirtualPx(
+  kf: PlaybackKeyframes,
+  virtualPx: number,
+): number {
+  const arr = kf.keyframes
+  const n = arr.length
+  if (n === 0) return 0
+  if (virtualPx <= 0) return 0
+  if (virtualPx >= kf.totalDistancePx) return kf.totalDurationMs
+
+  let lo = 0
+  let hi = n - 1
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >>> 1
+    if (arr[mid].virtualPx <= virtualPx) lo = mid
+    else hi = mid - 1
+  }
+  const a = arr[lo]
+  const b = arr[Math.min(lo + 1, n - 1)]
+  if (b === a || b.virtualPx === a.virtualPx) return a.timeMs
+  const t = (virtualPx - a.virtualPx) / (b.virtualPx - a.virtualPx)
+  return a.timeMs + (b.timeMs - a.timeMs) * t
+}
+
+/**
+ * Convert a `PlaybackKeyframes` value to the `{ transform, offset }[]`
+ * array accepted by `Element.prototype.animate`. The transform uses
+ * `translate3d` so the layer is guaranteed to be composited; `translateY`
+ * alone also composites on modern browsers but has a flaky history on
+ * mobile Safari. Empty / degenerate input returns an identity pair.
+ */
+export function toWebAnimationsKeyframes(
+  kf: PlaybackKeyframes,
+): Keyframe[] {
+  const total = kf.totalDurationMs
+  if (total <= 0 || kf.keyframes.length < 2) {
+    return [
+      { transform: 'translate3d(0, 0, 0)', offset: 0 },
+      { transform: 'translate3d(0, 0, 0)', offset: 1 },
+    ]
+  }
+  return kf.keyframes.map((k) => ({
+    transform: `translate3d(0, ${-k.virtualPx}px, 0)`,
+    offset: clamp01(k.timeMs / total),
+  }))
+}

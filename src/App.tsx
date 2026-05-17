@@ -8,6 +8,8 @@ import BottomNav from './components/BottomNav'
 import UpdateToast from './components/UpdateToast'
 import InstallNudgeBanner from './components/InstallNudgeBanner'
 import { A11yAnnouncerProvider } from './components/A11yAnnouncer'
+import { FrameTimeBadge } from './components/FrameTimeBadge'
+import { useFrameBadgeEnabled } from './hooks/useFrameBadgeEnabled'
 import { useTheme } from './hooks/useTheme'
 import { isNative } from './lib/platform'
 
@@ -26,6 +28,7 @@ const NAV_PATHS = ['/', '/archive', '/settings']
 
 export default function App() {
   useTheme();
+  const [frameBadgeEnabled] = useFrameBadgeEnabled();
   const location = useLocation();
   const showNav = NAV_PATHS.includes(location.pathname);
   // Web-only UI: no service worker to update on native; install banner
@@ -46,6 +49,7 @@ export default function App() {
           <PerfOverlay />
         </Suspense>
       )}
+      {frameBadgeEnabled && <FrameTimeBadge />}
       <div className={`app-shell${showNav ? ' app-shell--with-nav' : ''}`}>
         <Routes>
           <Route path="/" element={<LibraryPage />} />

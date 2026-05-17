@@ -226,11 +226,31 @@ export interface FormattedViewHandle {
    *  translate3d. Used by the playback engine to smooth over the integer-
    *  pixel snapping of `container.scrollTop` during track/scroll mode.
    *  Caller should pass negative values to move content upward (matches
-   *  the direction of scrollTop advancing). */
+   *  the direction of scrollTop advancing).
+   *  @deprecated Superseded by the WAAPI playback animator path
+   *  (see src/lib/playbackAnimator.ts). Still used by the legacy
+   *  rAF-scrollTop fallback when WAAPI is disabled. */
   applySubpixelScroll: (offsetPx: number) => void
   /** Reset the sub-pixel offset to zero. Called on pause/stop/programmatic
-   *  scroll so subsequent reads of getBoundingClientRect are unambiguous. */
+   *  scroll so subsequent reads of getBoundingClientRect are unambiguous.
+   *  @deprecated See applySubpixelScroll. */
   resetSubpixelScroll: () => void
+  /** The inner content column element — the target of the WAAPI playback
+   *  animator's transform keyframes. Exposed for the compositor-driven
+   *  scroll path; it is a direct child of the scroll container and has
+   *  `will-change: transform` so it lives on its own compositor layer. */
+  getAnimatedColumn: () => HTMLElement | null
+  /** Build a container-relative Y-coordinate for each segment's center.
+   *  Returns null if the section isn't ready. Used by the WAAPI playback
+   *  path at play-start to precompute a segment-boundary table; the
+   *  engine then resolves the "current segment" via binary search on
+   *  `virtualOffset()` rather than per-frame DOM reads. Call this BEFORE
+   *  starting the animation (while the column's transform is identity)
+   *  so the returned coordinates are the natural layout positions. */
+  buildSegmentCenterYs: (
+    sectionIdx: number,
+    segments: ReadonlyArray<HighlightSegment>,
+  ) => Float64Array | null
 }
 
 const OPFS_SRC_RE = /<img\s[^>]*?src=["']opfs:([^"']+)["']/gi
@@ -1119,6 +1139,7 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
         subpixelOffsetRef.current = 0
         if (el) el.style.transform = ''
       },
+      getAnimatedColumn: () => columnRef.current,
       getSectionEl: (idx) => sectionRefs.current.get(idx) ?? null,
       isSectionReady: (idx) => getReadySectionContext(idx) != null,
       areSectionsReadyThrough: (maxIdx) => {
@@ -1282,6 +1303,57 @@ const FormattedViewInner = forwardRef<FormattedViewHandle, FormattedViewProps>(f
         }
 
         return { sectionIdx, arrIdx: null }
+      },
+      buildSegmentCenterYs: (sectionIdx, segments) => {
+        const container = containerRef.current
+        if (!container) return null
+        const context = getReadySectionContext(sectionIdx)
+        if (!context) return null
+        const { sectionEl } = context
+
+        // Reuse or build the cached range index for this section.
+        let index = segmentIndexRef.current.get(sectionIdx)
+        if (index && index.length !== segments.length) {
+          segmentIndexRef.current.delete(sectionIdx)
+          index = undefined
+        }
+        if (!index) {
+          index = buildSegmentRangeIndex(sectionEl, segments)
+          segmentIndexRef.current.set(sectionIdx, index)
+        }
+
+        // Single getBoundingClientRect read on the container up front
+        // so all downstream rects are converted in one consistent frame.
+        const containerRect = container.getBoundingClientRect()
+        const scrollTop = container.scrollTop
+        const out = new Float64Array(index.length)
+        const doc = container.ownerDocument
+        const tempRange = doc.createRange()
+        // Walk segments in order; fall back to "same as previous" for
+        // segments whose range throws (rare — detached nodes after
+        // re-render). Monotonically non-decreasing output is required
+        // for the controller's binary search.
+        let lastCenterY = 0
+        for (let i = 0; i < index.length; i++) {
+          const sr = index[i]
+          if (!sr) {
+            out[i] = lastCenterY
+            continue
+          }
+          try {
+            tempRange.setStart(sr.startNode, sr.startOffset)
+            tempRange.setEnd(sr.endNode, sr.endOffset)
+            const rect = tempRange.getBoundingClientRect()
+            if (rect.height > 0) {
+              const centerViewportY = rect.top + rect.height / 2
+              lastCenterY = centerViewportY - containerRect.top + scrollTop
+            }
+          } catch {
+            /* keep previous */
+          }
+          out[i] = lastCenterY
+        }
+        return out
       },
       settleImages: async (sectionIdx) => {
         // Force every <img> in this section to fully decode before resolving.

@@ -2,6 +2,7 @@ import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { GazeProcessor, extractPitchFromMatrix, extractYawFromMatrix } from '../lib/gazeProcessor';
 import type { GazeDirection, CalibrationData } from '../lib/gazeProcessor';
 import { safeGetItem, safeSetItem, safeRemoveItem } from '../lib/safeStorage';
+import { positionStore } from '../state/position/positionStore';
 
 export type { GazeDirection } from '../lib/gazeProcessor';
 
@@ -38,6 +39,15 @@ export interface GazeActions {
 
 const CALIBRATION_KEY = 'speedreader_gaze_calibration';
 const FRAME_INTERVAL_MS = 66; // ~15 Hz
+/**
+ * During playback the MediaPipe face-landmarker inference runs on the
+ * main thread at 15 Hz and eats 10-25 ms per frame on mobile — enough
+ * to drop frames visibly. While the reader is actively playing we
+ * process every Nth frame instead, giving the compositor room to
+ * breathe. The gaze processor's own smoothing (tau 300-450 ms)
+ * absorbs the reduced sample rate without a noticeable lag.
+ */
+const PLAY_THROTTLE_DIVISOR = 3; // 15 Hz / 3 = 5 Hz during playback
 const BLINK_THRESHOLD_MS = 500;
 const RESUME_DELAY_MS = 2000; // must track face for 2s before resuming
 
@@ -71,6 +81,10 @@ export function useGazeTracker(): [GazeState, React.RefObject<{ direction: GazeD
   const frameIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const frameInFlightRef = useRef(false);
   const frameCountRef = useRef(0);
+  /** Counter used to throttle inference during playback. Advances every
+   *  invocation; when `isPlaying` is true we early-return unless it
+   *  wraps to zero (1-in-N samples kept). */
+  const playThrottleCounterRef = useRef(0);
   const enhanceCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const enhanceCtxRef = useRef<CanvasRenderingContext2D | null>(null);
   const landmarksRef = useRef<FaceLandmark[] | null>(null);
@@ -143,6 +157,19 @@ export function useGazeTracker(): [GazeState, React.RefObject<{ direction: GazeD
     const landmarker = landmarkerRef.current;
     if (!video || !landmarker || video.readyState < 2) return;
     if (frameInFlightRef.current) return;
+
+    // Throttle to 5 Hz during playback. MediaPipe inference at 15 Hz
+    // burns 10-25 ms of main-thread time per frame on mobile which
+    // competes with scroll paint work and produces visible hitches;
+    // at 5 Hz the cost is ~a third of that and the gaze processor's
+    // 300-450 ms lerp tau smooths over the longer sample interval.
+    if (positionStore.getSnapshot().isPlaying) {
+      playThrottleCounterRef.current =
+        (playThrottleCounterRef.current + 1) % PLAY_THROTTLE_DIVISOR;
+      if (playThrottleCounterRef.current !== 0) return;
+    } else {
+      playThrottleCounterRef.current = 0;
+    }
 
     frameInFlightRef.current = true;
     try {
