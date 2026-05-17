@@ -22,10 +22,12 @@ export default defineConfig({
         // Force new service worker to activate immediately
         skipWaiting: true,
         clientsClaim: true,
-        // Precache all built assets. MediaPipe WASM + model are vendored under
-        // public/mediapipe/ and served as same-origin static files, so no
-        // runtime CDN caching rules are needed.
-        globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
+        // Precache all built assets, including MediaPipe WASM (~9.4 MB) and
+        // the face_landmarker.task model. Without wasm/task here, eye tracking
+        // breaks the first time the app launches offline.
+        globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2,wasm,task}'],
+        // Default is 2 MiB — vision_wasm_internal.wasm is ~9.4 MB.
+        maximumFileSizeToCacheInBytes: 12 * 1024 * 1024,
       },
       manifest: {
         name: 'SpeedReader',
